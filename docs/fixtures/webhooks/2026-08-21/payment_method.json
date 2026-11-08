@@ -1,0 +1,83 @@
+[
+  {
+    "id": "evt_example_payment_method_created",
+    "name": "payment_method.created",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "mtd_example",
+        "type": "card",
+        "status": "CREATED"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_method_updated",
+    "name": "payment_method.updated",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "mtd_example",
+        "type": "card",
+        "status": "CREATED"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_method_attached",
+    "name": "payment_method.attached",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "mtd_example",
+        "type": "card",
+        "status": "CREATED",
+        "customer_id": "cus_example"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_method_detached",
+    "name": "payment_method.detached",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "mtd_example",
+        "type": "card",
+        "status": "CREATED"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_method_disabled",
+    "name": "payment_method.disabled",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "mtd_example",
+        "type": "card",
+        "status": "DISABLED"
+      }
+    }
+  }
+]

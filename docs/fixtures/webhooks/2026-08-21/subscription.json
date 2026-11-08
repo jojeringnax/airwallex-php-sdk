@@ -1,0 +1,186 @@
+[
+  {
+    "id": "evt_example_subscription_created",
+    "name": "subscription.created",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "sub_example",
+        "billing_customer_id": "bcus_example",
+        "currency": "USD",
+        "collection_method": "AUTO_CHARGE",
+        "payment_source_id": "psrc_example",
+        "linked_payment_account_id": "acct_example",
+        "recurring": {
+          "period": 1,
+          "period_unit": "MONTH"
+        },
+        "starts_at": "2026-11-08T10:00:00Z",
+        "status": "PENDING",
+        "cancel_at_period_end": false,
+        "days_until_due": 0,
+        "applied_discounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false
+      }
+    }
+  },
+  {
+    "id": "evt_example_subscription_in_trial",
+    "name": "subscription.in_trial",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "sub_example",
+        "billing_customer_id": "bcus_example",
+        "currency": "USD",
+        "collection_method": "AUTO_CHARGE",
+        "payment_source_id": "psrc_example",
+        "linked_payment_account_id": "acct_example",
+        "recurring": {
+          "period": 1,
+          "period_unit": "MONTH"
+        },
+        "starts_at": "2026-11-08T10:00:00Z",
+        "status": "IN_TRIAL",
+        "cancel_at_period_end": false,
+        "days_until_due": 0,
+        "applied_discounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false,
+        "trial_starts_at": "2026-11-08T10:00:00Z",
+        "trial_ends_at": "2026-11-15T10:00:00Z"
+      }
+    }
+  },
+  {
+    "id": "evt_example_subscription_active",
+    "name": "subscription.active",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "sub_example",
+        "billing_customer_id": "bcus_example",
+        "currency": "USD",
+        "collection_method": "AUTO_CHARGE",
+        "payment_source_id": "psrc_example",
+        "linked_payment_account_id": "acct_example",
+        "recurring": {
+          "period": 1,
+          "period_unit": "MONTH"
+        },
+        "starts_at": "2026-11-08T10:00:00Z",
+        "status": "ACTIVE",
+        "cancel_at_period_end": false,
+        "days_until_due": 0,
+        "applied_discounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false
+      }
+    }
+  },
+  {
+    "id": "evt_example_subscription_unpaid",
+    "name": "subscription.unpaid",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "sub_example",
+        "billing_customer_id": "bcus_example",
+        "currency": "USD",
+        "collection_method": "AUTO_CHARGE",
+        "payment_source_id": "psrc_example",
+        "linked_payment_account_id": "acct_example",
+        "recurring": {
+          "period": 1,
+          "period_unit": "MONTH"
+        },
+        "starts_at": "2026-11-08T10:00:00Z",
+        "status": "UNPAID",
+        "cancel_at_period_end": false,
+        "days_until_due": 0,
+        "applied_discounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false
+      }
+    }
+  },
+  {
+    "id": "evt_example_subscription_modified",
+    "name": "subscription.modified",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "sub_example",
+        "billing_customer_id": "bcus_example",
+        "currency": "USD",
+        "collection_method": "AUTO_CHARGE",
+        "payment_source_id": "psrc_example",
+        "linked_payment_account_id": "acct_example",
+        "recurring": {
+          "period": 1,
+          "period_unit": "MONTH"
+        },
+        "starts_at": "2026-11-08T10:00:00Z",
+        "status": "ACTIVE",
+        "cancel_at_period_end": true,
+        "days_until_due": 0,
+        "applied_discounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false,
+        "cancel_requested_at": "2026-11-08T10:00:00Z"
+      }
+    }
+  },
+  {
+    "id": "evt_example_subscription_cancelled",
+    "name": "subscription.cancelled",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "sub_example",
+        "billing_customer_id": "bcus_example",
+        "currency": "USD",
+        "collection_method": "AUTO_CHARGE",
+        "payment_source_id": "psrc_example",
+        "linked_payment_account_id": "acct_example",
+        "recurring": {
+          "period": 1,
+          "period_unit": "MONTH"
+        },
+        "starts_at": "2026-11-08T10:00:00Z",
+        "status": "CANCELLED",
+        "cancel_at_period_end": false,
+        "days_until_due": 0,
+        "applied_discounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false,
+        "ends_at": "2026-11-08T10:00:00Z"
+      }
+    }
+  }
+]
