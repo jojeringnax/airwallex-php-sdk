@@ -39,7 +39,7 @@ Keep runtime dependencies focused on these interfaces. Concrete transport/cache 
 
 Applications own webhook processing, reconciliation, storage and workers. They decide how observed billing state affects access and handle duplicate and out-of-order events. Airwallex remains the authority for remote financial state.
 
-API family authentication and connected-account ownership are tracked in [issue #3](https://github.com/jojeringnax/airwallex-php-sdk/issues/3) and [issue #4](https://github.com/jojeringnax/airwallex-php-sdk/issues/4).
+For API family authentication, consult the [API inventory](api-contracts.md). For connected-account authorization, resource ownership and outstanding eligibility evidence, consult [connected-account contracts](connected-account-contracts.md).
 
 ## Consumer walkthrough
 

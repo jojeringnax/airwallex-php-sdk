@@ -4,7 +4,8 @@
 
 - Develop a framework-independent PHP SDK for the accepted Billing and Payments scope.
 - Distribute the SDK through Composer.
-- Keep the SDK framework-independent, following the [package architecture](architecture.md).
+
+The [package architecture](architecture.md) defines runtime, dependencies and application-owned persistence.
 
 For public signatures, payload representation and representative workflows, consult [consumer interfaces](consumer-interfaces.md).
 
