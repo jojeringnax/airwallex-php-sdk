@@ -17,6 +17,31 @@ final class InvoiceAccessPolicy
         return is_string($value) && self::token($value, '/billing/invoices/pdf') !== null ? $value : null;
     }
 
+    /** Closed withholding reason only; this never changes admission or returns URL components. */
+    public static function pdfPolicy(#[SensitiveParameter] mixed $value): string
+    {
+        if (!is_string($value)) {
+            return $value === null ? 'absent_or_null' : 'wrong_type';
+        }
+        if (strlen($value) > 32768) {
+            return 'oversize';
+        }
+        if (preg_match('/[^\x21-\x7e]|[\\\\#]/', $value) === 1) {
+            return 'lexical';
+        }
+        if (!str_starts_with($value, self::ORIGIN . '/')) {
+            return 'origin';
+        }
+        $path = explode('?', substr($value, strlen(self::ORIGIN)), 2)[0];
+        if ($path !== '/billing/invoices/pdf') {
+            return 'path';
+        }
+        if (!str_starts_with($value, self::ORIGIN . $path . '?s=') || strpbrk($value, '&+') !== false) {
+            return 'query';
+        }
+        return self::pdf($value) === null ? 'capability' : 'admitted';
+    }
+
     public static function hostedToken(#[SensitiveParameter] mixed $value): ?string
     {
         return self::token($value, '/pay');

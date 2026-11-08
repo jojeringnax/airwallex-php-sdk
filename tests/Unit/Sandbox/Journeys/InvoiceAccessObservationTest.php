@@ -164,11 +164,17 @@ final class InvoiceAccessObservationTest extends TestCase
         self::assertSame('pass', $result['result']);
         self::assertTrue($result['owner_chain_verified']);
         self::assertTrue($result['pdf_prefix_matched']);
+        self::assertSame('admitted', $result['pdf_policy']);
         self::assertTrue($result['pdf_prefix_cut']);
         self::assertSame(1024, $result['pdf_prefix_bytes']);
         self::assertTrue($result['payer_invoice_matched']);
         self::assertTrue($result['payer_customer_indirect_anchor_matched']);
         self::assertFalse($result['payer_customer_direct_match_verified']);
+        foreach (['id', 'subscription_id', 'currency', 'collection_method', 'status'] as $label) {
+            foreach (['present', 'string', 'matched'] as $fact) {
+                self::assertTrue($result['payer_' . $label . '_' . $fact]);
+            }
+        }
         self::assertTrue($result['prior_ledger_unchanged']);
         self::assertSame($before, file_get_contents($this->prior));
         self::assertCount(5, $sdk->requests);
@@ -228,6 +234,7 @@ final class InvoiceAccessObservationTest extends TestCase
         $result = InvoiceAccessCommand::run($this->options(), $this->sdk($invoice), $links);
         self::assertSame('pending', $result['result']);
         self::assertSame('withheld', $result['pdf_outcome']);
+        self::assertSame('origin', $result['pdf_policy']);
         self::assertSame('withheld', $result['payer_outcome']);
         self::assertSame([], $links->requests);
         self::sanitized($result);
@@ -284,6 +291,72 @@ final class InvoiceAccessObservationTest extends TestCase
         self::assertSame('pending', $result['result']);
         self::assertFalse($result['payer_invoice_matched']);
         self::assertSame(200, $result['payer_http_status']);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    /** @return iterable<string,array{string,string,string,mixed}> */
+    public static function payerFieldFacts(): iterable
+    {
+        foreach (
+            ['id' => 'id', 'subscriptionId' => 'subscription_id', 'currency' => 'currency',
+            'collectionMethod' => 'collection_method', 'status' => 'status'] as $field => $label
+        ) {
+            foreach (
+                ['missing' => null, 'null' => null, 'number' => 123, 'boolean' => true,
+                'array' => ['PRIVATE_VALUE'], 'wrong_string' => 'PRIVATE_WRONG'] as $kind => $value
+            ) {
+                yield $field . ' ' . $kind => [$field, $label, $kind, $value];
+            }
+        }
+    }
+
+    #[DataProvider('payerFieldFacts')]
+    public function testEveryKnownPayerFieldIsIndependentlyObservedWithoutLooseningAggregateMatch(
+        string $field,
+        string $label,
+        string $kind,
+        mixed $value,
+    ): void {
+        $data = self::payer();
+        if ($kind === 'missing') {
+            unset($data['invoice'][$field]);
+        } else {
+            $data['invoice'][$field] = $value;
+        }
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([self::json($data)])]));
+        $result = InvoiceAccessCommand::run($this->options(false), $this->sdk(), $links);
+        self::assertSame('pending', $result['result']);
+        self::assertFalse($result['payer_invoice_matched']);
+        self::assertFalse($result['payer_customer_indirect_anchor_matched']);
+        self::assertSame($kind !== 'missing', $result['payer_' . $label . '_present']);
+        self::assertSame($kind === 'wrong_string', $result['payer_' . $label . '_string']);
+        self::assertFalse($result['payer_' . $label . '_matched']);
+        foreach (['id', 'subscription_id', 'currency', 'collection_method', 'status'] as $other) {
+            if ($other !== $label) {
+                foreach (['present', 'string', 'matched'] as $fact) {
+                    self::assertTrue($result['payer_' . $other . '_' . $fact]);
+                }
+            }
+        }
+        self::assertTrue($result['payer_payment_status_matched']);
+        self::assertArrayNotHasKey('pdf_policy', $result);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    public function testMalformedPayerJsonDoesNotManufactureFieldAbsenceObservations(): void
+    {
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(200, ['Content-Type' => 'application/json'], '{"invoice":{"id":'),
+        ])]));
+        $result = InvoiceAccessCommand::run($this->options(false), $this->sdk(), $links);
+        foreach (['id', 'subscription_id', 'currency', 'collection_method', 'status'] as $label) {
+            foreach (['present', 'string', 'matched'] as $fact) {
+                self::assertArrayNotHasKey('payer_' . $label . '_' . $fact, $result);
+            }
+        }
+        self::assertFalse($result['payer_invoice_matched']);
         self::assertCount(1, $links->requests);
         self::sanitized($result);
     }

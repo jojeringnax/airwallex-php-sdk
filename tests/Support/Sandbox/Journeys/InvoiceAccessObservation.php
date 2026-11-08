@@ -74,6 +74,7 @@ final class InvoiceAccessObservation
             }
             $http = new InvoiceAccessTransport($pdf, $token, $this->http, $this->clock);
             if ($this->readPdf) {
+                $safe['pdf_policy'] = InvoiceAccessPolicy::pdfPolicy($invoice['pdf_url'] ?? null);
                 $safe['pdf_outcome'] = 'withheld';
                 if ($pdf !== null) {
                     $safe['phase'] = 'pdf_read';
@@ -179,11 +180,21 @@ final class InvoiceAccessObservation
         if (!$data instanceof stdClass) {
             return array_replace($safe, ['payer_observed_outcome' => 'invalid_response']);
         }
-        $expected = ['id' => $invoice['id'], 'subscriptionId' => $invoice['subscription_id'],
-            'currency' => 'EUR', 'collectionMethod' => 'OUT_OF_BAND', 'status' => $invoice['status']];
+        $expected = ['id' => ['id', $invoice['id']],
+            'subscriptionId' => ['subscription_id', $invoice['subscription_id']],
+            'currency' => ['currency', 'EUR'], 'collectionMethod' => ['collection_method', 'OUT_OF_BAND'],
+            'status' => ['status', $invoice['status']]];
         $matched = true;
-        foreach ($expected as $field => $value) {
-            $matched = $matched && ($data->{$field} ?? null) === $value;
+        foreach ($expected as $field => [$label, $value]) {
+            $present = property_exists($data, $field);
+            $string = $present && is_string($data->{$field});
+            $fieldMatched = $string && $data->{$field} === $value;
+            $safe['payer_' . $label . '_present'] = $present;
+            $safe['payer_' . $label . '_string'] = $string;
+            $safe['payer_' . $label . '_matched'] = $fieldMatched;
+            if (!$fieldMatched) {
+                $matched = false;
+            }
         }
         $payment = in_array($invoice['payment_status'] ?? null, ['PAID', 'UNPAID'], true);
         $paymentMatched = $payment && ($data->paymentStatus ?? null) === $invoice['payment_status'];
