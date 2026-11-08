@@ -129,6 +129,7 @@ const renderCheckNames = Object.freeze([
   'customer_mismatch', 'intent_mismatch', 'qualified', 'document_redirect',
   'document_http_or_build_mismatch', 'fulfilled',
 ]);
+const deniedReadNames = Object.freeze(['method_config', 'country', 'customer', 'consent_list', 'checkout_status', 'other_pa']);
 const returnUrl = 'https://example.com/';
 
 function assetMatches(bytes, expected) {
@@ -158,11 +159,20 @@ class HostedPolicy {
   #frameClaimed = false;
   #frameReference = null;
   #controllerAttempted = false;
+  #observeConfig;
+  #frameDelivered = false;
+  #configAttempted = false;
+  #configMatched = false;
+  #deniedReads = Object.fromEntries(deniedReadNames.map(name => [name, 0]));
   #renderChecks = Object.fromEntries(renderCheckNames.map(name => [name, 0]));
-  constructor(initial, fixtureOrigin = null, expected = null, render = false) {
+  constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false) {
     if (typeof render !== 'boolean' || (render && expected === null)) {
       throw new Error('Invalid read-only render configuration.');
     }
+    if (typeof observeConfig !== 'boolean' || (observeConfig && !render)) {
+      throw new Error('Method observation requires explicit rendering.');
+    }
+    this.#observeConfig = observeConfig;
     this.#render = render;
     const url = parse(initial);
     if (!url) throw new Error('Invalid browser preflight configuration.');
@@ -332,6 +342,98 @@ class HostedPolicy {
     } catch { return this.noteRenderCheck('invalid_options'); }
   }
 
+  markRenderFrameDelivered() {
+    if (!this.#frameClaimed || !this.#payerDelivered || !this.renderEnabled()) {
+      throw new Error('The read-only frame is not bound.');
+    }
+    this.#frameDelivered = true;
+  }
+
+  claimMethodConfig(value, method, type, headers, body = null) {
+    const url = parse(value);
+    if (!this.#observeConfig || !this.renderEnabled() || !this.#payerDelivered || !this.#frameDelivered
+        || !this.#frameReference || this.#configAttempted || method !== 'GET'
+        || !['fetch', 'xhr'].includes(type) || body !== null || !url
+        || url.origin !== new URL(this.#initial).origin || url.pathname !== '/api/v1/pa/config/payment_method_types'
+        || url.hash || value !== url.origin + url.pathname + url.search) return null;
+    const query = url.searchParams;
+    const required = { page_num: '0', page_size: '200', active: 'true',
+      transaction_currency: this.#expected.currency, __verification_methods: 'true' };
+    const allowed = new Set([...Object.keys(required), 'country_code', 'payment_intent_id']);
+    if ([...query.keys()].some(key => !allowed.has(key) || query.getAll(key).length !== 1)
+        || Object.entries(required).some(([key, val]) => query.get(key) !== val)
+        || (query.has('country_code') && !/^[A-Z]{2}$/u.test(query.get('country_code')))
+        || (query.has('payment_intent_id') && (typeof this.#frameReference.intent !== 'string'
+          || query.get('payment_intent_id') !== this.#frameReference.intent))) return null;
+    if (headers['client-secret'] !== this.#frameReference.secret || headers['x-api-version'] !== '2024-06-14'
+        || !/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')
+        || headers['content-type'] !== 'application/json' || headers['x-client-ip-source'] !== 'awx-checkout'
+        || Object.keys(headers).some(key => key.startsWith('x-')
+          && !['x-api-version', 'x-client-ip-source', 'x-device-type', 'x-cloud-trace-context'].includes(key))
+        || ['authorization', 'x-auth-token', 'x-on-behalf-of', 'x-tax-region',
+          'x-tax-calculation-identifier', 'x-pan'].some(key => Object.hasOwn(headers, key))
+        || (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type']))
+        || (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'
+          || headers['awx-tracker'].length > 256 || /[^\x21-\x7e]/u.test(headers['awx-tracker'])))) return null;
+    this.#configAttempted = true; // Before any send: the browser helper's retry must remain denied.
+    const outbound = { accept: 'application/json, text/plain, */*', cookie: '', referer: '',
+      'client-secret': headers['client-secret'], 'content-type': 'application/json',
+      'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout',
+      'x-cloud-trace-context': headers['x-cloud-trace-context'] };
+    for (const key of ['awx-tracker', 'x-device-type']) if (Object.hasOwn(headers, key)) outbound[key] = headers[key];
+    return outbound;
+  }
+
+  observeMethodConfig(body) {
+    this.#configMatched = false;
+    try {
+      if (!Buffer.isBuffer(body) || body.length > 262144) throw new Error();
+      const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
+      const bounded = (node, depth) => depth <= 32 && (node === null || typeof node !== 'object'
+        || Object.values(node).every(value => bounded(value, depth + 1)));
+      if (!data || typeof data !== 'object' || Array.isArray(data) || !bounded(data, 0)
+          || !Array.isArray(data.items) || data.items.length > 200
+          || data.items.some(item => !item || typeof item !== 'object' || Array.isArray(item))
+          || (Object.hasOwn(data, 'has_more') && typeof data.has_more !== 'boolean')) throw new Error();
+      this.#configMatched = this.#configAttempted;
+      return { method_config_observation: 'matched', method_config_items: data.items.length,
+        method_config_pagination_known: typeof data.has_more === 'boolean',
+        method_config_has_more: data.has_more === true,
+        method_config_card_advertised: data.items.some(item => item.name === 'card') };
+    } catch { return { method_config_observation: 'invalid_response' }; }
+  }
+
+  mayDeliverMethodConfig() {
+    return this.#observeConfig && this.renderEnabled() && this.#frameDelivered && this.#configMatched;
+  }
+
+  noteDeniedRead(value, method, type) {
+    if (!this.#observeConfig || method !== 'GET' || !['xhr', 'fetch'].includes(type)) return;
+    const url = parse(value);
+    if (!url) return;
+    // The pinned helper rN maps this read to www.sandbox, not the same-origin PA gateway.
+    // Classification grants no route or proxy authority; that origin remains blocked.
+    const countryOrigin = this.#fixture ?? 'https://www.sandbox.airwallex.com';
+    if (url.origin === countryOrigin && url.pathname === '/country' && !url.search && !url.hash
+        && value === url.origin + url.pathname) {
+      this.#deniedReads.country = Math.min(1000000, this.#deniedReads.country + 1);
+      return;
+    }
+    if (url.origin !== new URL(this.#initial).origin) return;
+    const pathname = url.pathname;
+    const family = pathname === '/api/v1/pa/config/payment_method_types' ? 'method_config'
+      : /^\/api\/v1\/pa\/customers\/[^/]+$/u.test(pathname) ? 'customer'
+      : pathname === '/api/v1/pa/payment_consents' ? 'consent_list'
+      : pathname === '/billing/payer-web-api/checkout/status' ? 'checkout_status'
+      : pathname.startsWith('/api/v1/pa/') ? 'other_pa' : null;
+    if (family) this.#deniedReads[family] = Math.min(1000000, this.#deniedReads[family] + 1);
+  }
+
+  methodEvidence() {
+    return this.#observeConfig ? { method_config_requested: true, method_config_get_attempted: this.#configAttempted,
+      denied_read_families: { ...this.#deniedReads } } : {};
+  }
+
   decide(value, method, type) {
     const url = parse(value);
     if (!url) return 'block';
@@ -484,4 +586,4 @@ async function egressProxy(policy) {
   };
 }
 
-module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, controllerAsset, renderCheckNames, assetMatches };
+module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, controllerAsset, renderCheckNames, deniedReadNames, assetMatches };
