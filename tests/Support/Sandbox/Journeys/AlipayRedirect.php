@@ -144,6 +144,12 @@ final class AlipayRedirect
                     'location_category' => self::location($locations[0] ?? null),
                     'form_present' => false, 'form_action_present' => false, 'post_form_present' => false,
                 ];
+                foreach (self::diagnose($locations[0] ?? null) as $key => $value) {
+                    $safe['location_uri_' . $key] = $value;
+                }
+                // The guide shows this shape as simulation request-body data, never customer-GET permission.
+                $safe['location_documented_sg_simulation_shape'] = self::simulationShape($locations[0] ?? null);
+                $safe['location_follow_allowed'] = false;
                 if ($html && $body !== '') {
                     $safe = array_replace($safe, self::forms($body));
                 }
@@ -154,6 +160,21 @@ final class AlipayRedirect
         } catch (\Throwable) {
             throw new RuntimeException('The single customer redirect read could not be safely observed.');
         }
+    }
+
+    private static function simulationShape(#[SensitiveParameter] ?string $value): bool
+    {
+        $diagnostic = self::diagnose($value);
+        if (
+            !$diagnostic['lexically_valid'] || !$diagnostic['https'] || !$diagnostic['sandbox_host_matches']
+            || !$diagnostic['userinfo_absent'] || !$diagnostic['explicit_port_absent']
+            || !$diagnostic['fragment_absent'] || !$diagnostic['exact_uri_preserved']
+        ) {
+            return false;
+        }
+        $parts = parse_url($value ?? '');
+        return is_array($parts)
+            && preg_match('~^/pa/sandbox/sg/mck_[A-Za-z0-9_-]+$~D', $parts['path'] ?? '') === 1;
     }
 
     private static function location(#[SensitiveParameter] ?string $value): string

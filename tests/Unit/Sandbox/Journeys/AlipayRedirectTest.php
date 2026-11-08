@@ -147,6 +147,32 @@ final class AlipayRedirectTest extends TestCase
         self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
     }
 
+    /** @return iterable<string,array{string,bool}> */
+    public static function simulationLocations(): iterable
+    {
+        $url = 'https://api.sandbox.airwallex.com/pa/sandbox/sg/mck_PRIVATE_ID?checksum=PRIVATE_VALUE';
+        yield 'documented shape only' => [$url, true];
+        yield 'HK not documented by simulation example' => [str_replace('/sg/', '/hk/', $url), false];
+        yield 'missing mock prefix' => [str_replace('mck_', '', $url), false];
+        yield 'wrong host' => [str_replace('api.sandbox.', 'private.', $url), false];
+        yield 'userinfo' => [str_replace('https://', 'https://PRIVATE_USER@', $url), false];
+        yield 'port' => [str_replace('.com/', '.com:443/', $url), false];
+        yield 'fragment' => [$url . '#PRIVATE_FRAGMENT', false];
+        yield 'encoded identifier' => [str_replace('mck_PRIVATE_ID', 'mck_%41', $url), false];
+    }
+
+    #[DataProvider('simulationLocations')]
+    public function testLocationShapeIsDiagnosticOnly(string $location, bool $shape): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => $location])]);
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(self::URL);
+        self::assertSame($shape, $safe['location_documented_sg_simulation_shape']);
+        self::assertFalse($safe['location_follow_allowed']);
+        self::assertFalse($safe['location_uri_eligible']);
+        self::assertSame(0, $mock->count());
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
     /** @return iterable<string,array{string}> */
     public static function blockedUrls(): iterable
     {
