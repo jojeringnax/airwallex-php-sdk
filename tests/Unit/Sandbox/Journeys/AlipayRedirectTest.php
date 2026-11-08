@@ -340,6 +340,78 @@ final class AlipayRedirectTest extends TestCase
         self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
     }
 
+    #[DataProvider('readableMockQueries')]
+    public function testVerifiedMockDataCallbackNeverBecomesAnotherCustomerGet(string $location): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => $location]), new Response(200)]);
+        $seen = 0;
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+            self::URL,
+            withVerifiedMock: static function (string $url) use ($location, &$seen): void {
+                self::assertSame($location, $url);
+                ++$seen;
+            }
+        );
+        self::assertSame(1, $seen);
+        self::assertSame(1, $mock->count());
+        self::assertTrue($safe['mock_action_invoked']);
+        self::assertFalse($safe['mock_read_attempted']);
+        self::assertFalse($safe['location_follow_allowed']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    #[DataProvider('unverifiedMockTargets')]
+    public function testUnverifiedTargetCannotReachThePrivateActionCallback(string $url): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => $url]), new Response(200)]);
+        $seen = false;
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+            self::URL,
+            withVerifiedMock: static function () use (&$seen): void {
+                $seen = true;
+            }
+        );
+        self::assertFalse($seen);
+        self::assertFalse($safe['mock_action_invoked']);
+        self::assertSame(1, $mock->count());
+    }
+
+    #[DataProvider('not302')]
+    public function testActionCallbackNeedsTheExactFirst302(int $status): void
+    {
+        $mock = new MockHandler([new Response($status, ['Location' => self::MOCK]), new Response(200)]);
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+            self::URL,
+            withVerifiedMock: static function (): void {
+                throw new RuntimeException('PRIVATE_UNREACHABLE');
+            }
+        );
+        self::assertFalse($safe['mock_action_invoked']);
+        self::assertSame(1, $mock->count());
+    }
+
+    public function testActionCallbackFailureIsPrivateAndCannotFallThroughToNavigation(): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => self::MOCK]), new Response(200)]);
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+            self::URL,
+            withVerifiedMock: static function (): void {
+                throw new RuntimeException('PRIVATE_ACTION_FAILURE');
+            }
+        );
+        self::assertTrue($safe['mock_action_callback_failed']);
+        self::assertFalse($safe['mock_read_attempted']);
+        self::assertSame(1, $mock->count());
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+        $reader = new AlipayRedirect(new Client(['handler' => $mock]));
+        try {
+            $reader->inspect(self::URL, static fn () => null, static fn () => null);
+            self::fail('Mutually exclusive callbacks must reject before transport.');
+        } catch (RuntimeException) {
+            self::assertSame(1, $mock->count());
+        }
+    }
+
     public function testDefaultKeepsTheExactMockLocationDiagnosticOnly(): void
     {
         $mock = new MockHandler([new Response(302, ['Location' => self::MOCK]), new Response(200)]);

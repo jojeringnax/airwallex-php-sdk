@@ -24,7 +24,7 @@ final class AlipayRedirectCommand
             'result' => 'fail', 'stage' => 'configuration'];
         try {
             $allowed = ['environment', 'credentials-file', 'state-dir', 'create-one-alipay-hk',
-                'read-one-sandbox-mock'];
+                'read-one-sandbox-mock', 'simulate-one-returned-sandbox-mock'];
             $path = $options['credentials-file'] ?? null;
             $directory = $options['state-dir'] ?? null;
             if (
@@ -32,8 +32,15 @@ final class AlipayRedirectCommand
                 || ($options['create-one-alipay-hk'] ?? null) !== true || !is_string($path) || $path === ''
                 || !is_string($directory) || $directory === ''
                 || (array_key_exists('read-one-sandbox-mock', $options) && !is_bool($options['read-one-sandbox-mock']))
+                || (array_key_exists('simulate-one-returned-sandbox-mock', $options)
+                    && !is_bool($options['simulate-one-returned-sandbox-mock']))
+                || (($options['read-one-sandbox-mock'] ?? false) === true
+                    && ($options['simulate-one-returned-sandbox-mock'] ?? false) === true)
             ) {
                 return $safe;
+            }
+            if (($options['simulate-one-returned-sandbox-mock'] ?? false) === true) {
+                SimulationTransport::assertAvailable();
             }
             $safe['source'] = SourceEvidence::capture();
             $config = Configuration::load('sandbox', $path);
@@ -43,7 +50,8 @@ final class AlipayRedirectCommand
                 $session,
                 $ledger,
                 new AlipayRedirect($redirectHttp),
-                readOneSandboxMock: ($options['read-one-sandbox-mock'] ?? false) === true
+                readOneSandboxMock: ($options['read-one-sandbox-mock'] ?? false) === true,
+                simulateReturnedSandboxMock: ($options['simulate-one-returned-sandbox-mock'] ?? false) === true
             );
         } catch (\Throwable) {
             return $safe;

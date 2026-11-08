@@ -549,7 +549,10 @@ final class AlipayRedirectPreflightTest extends TestCase
         foreach (
             [['--create-one-alipay-hk=false'], ['--sdk-root=/PRIVATE_ROOT'],
             ['--create-one-alipay-hk', '--create-one-alipay-hk'], ['--environment=production'],
-            ['--read-one-sandbox-mock=false'], ['--read-one-sandbox-mock', '--read-one-sandbox-mock']] as $extra
+            ['--read-one-sandbox-mock=false'], ['--read-one-sandbox-mock', '--read-one-sandbox-mock'],
+            ['--simulate-one-returned-sandbox-mock=false'],
+            ['--simulate-one-returned-sandbox-mock', '--simulate-one-returned-sandbox-mock'],
+            ['--create-one-alipay-hk', '--read-one-sandbox-mock', '--simulate-one-returned-sandbox-mock']] as $extra
         ) {
             $this->assertCliRejected($extra);
         }
