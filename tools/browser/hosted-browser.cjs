@@ -6,6 +6,9 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { HostedPolicy, egressProxy, assetMatches } = require('./hosted-policy.cjs');
+const { ParentCountryObserver } = require('./hosted-parent-country.cjs');
+const { RiskJournalClient } = require('./hosted-risk-journal.cjs');
+const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
 
 // Contains only evidence constructed from fixed local labels/counts, never a caught Error.
 class PreflightFailure extends Error {
@@ -15,8 +18,9 @@ class PreflightFailure extends Error {
 }
 let startupPhase = 'configuration';
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false) {
-  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal);
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false) {
+  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal, undefined, observeParentCountry);
+  if (riskJournal !== null && !observeNormal) throw new Error('Risk observation requires explicit normal reads.');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
   await fs.chmod(directory, 0o700);
   let proxy;
@@ -89,12 +93,15 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       })]);
     } finally { clearTimeout(timer); }
   };
+  const caseDeadline = performance.now() + (render ? 40000 : 20000);
+  const parentCountry = new ParentCountryObserver(policy, observeParentCountry, playwright, caseDeadline);
+  const risk = new HostedRiskObserver(policy, riskJournal, playwright, riskFixture, caseDeadline);
   const watchdog = setTimeout(() => {
     markFailure('watchdog');
     shuttingDown = true;
     if (context) { browserContextCloseStarted = true; void track(() => context.close()); }
     if (browser) void track(() => browser.close());
-  }, render ? 40000 : 20000);
+  }, Math.max(1, caseDeadline - performance.now()));
   watchdog.unref();
   const counts = { blocked_requests: 0, blocked_websockets: 0, returns_intercepted: 0,
     verified_static_assets: 0, integrity_rejections: 0, verified_render_assets: 0, bound_render_frames: 0,
@@ -108,7 +115,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let payer = { payer_observation: 'not_observed', payer_response_observed: false,
     payer_mode_matches: false, payer_currency_matches: false };
   try {
-    proxy = await step('proxy_start', () => egressProxy(policy));
+    proxy = await step('proxy_start', () => egressProxy({
+      allowsAuthority: (host, port) => policy.allowsAuthority(host, port) || risk.authority(host, port),
+      allowsHttp: value => policy.allowsHttp(value),
+    }));
+    risk.start(proxy.server);
+    parentCountry.start(proxy.server);
     browser = await step('browser_launch', () => playwright.chromium.launch({
       channel: 'chrome', headless: true, timeout: 15000,
       proxy: { server: proxy.server, bypass: '' },
@@ -132,12 +144,18 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await context.route('**/*', route => track(async () => {
       if (shuttingDown) throw new Error('Browser preflight is shutting down.');
       const request = route.request();
+      if (observeParentCountry && request.resourceType() === 'document' && request.frame() === mainPage?.mainFrame()) {
+        policy.noteParentMainDocument(request.url());
+      }
       if (normalAdmissionClosed) {
         counts.blocked_requests++;
         policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
         await route.abort('blockedbyclient');
         return;
       }
+      if (await parentCountry.handle(route, mainPage?.mainFrame(), () => shuttingDown, () => normalAdmissionClosed)) return;
+      if (await risk.handle(route, context, mainPage?.mainFrame(), boundFrame,
+        () => shuttingDown, () => normalAdmissionClosed)) return;
       // Script admission and integrity share one immutable, non-null expected hash.
       const script = request.resourceType() === 'script';
       const expectedHash = script ? policy.assetHash(request.url(), request.method(), request.resourceType()) : null;
@@ -452,6 +470,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
               policy.markRenderFrameDelivered();
               boundFrame = request.frame();
             }
+            if (response.status() === 200 && request.resourceType() === 'document'
+                && request.url() === initial && request.frame() === mainPage.mainFrame()) policy.startParentCountryWindow();
             if (controller) {
               const publicHeaders = Object.fromEntries(Object.entries(response.headers())
                 .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
@@ -466,6 +486,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       } else {
         counts.blocked_requests++;
         policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
+        risk.noteDenied(request.url());
         await route.abort('blockedbyclient');
       }
     }));
@@ -544,7 +565,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       normal.normal_read_inspection_completed = readiness.card_readiness_observed === true
         && policy.normalWindowRemaining() > 500;
       normalAdmissionClosed = true; // No new request or late context-construction send after the fixed snapshot.
-      await drainSentNormalReads(); // Only already sent reads retain the original <=8s delivery window.
+      await Promise.all([drainSentNormalReads(), parentCountry.drainSent()]); // Already sent reads only.
       policy.closeNormalWindow();
     }
     const visible = await step('visible_label', () =>
@@ -556,7 +577,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       navigation_passed: true, test_mode_visible: visible,
       sandbox_origin_verified: false, card_entry_enabled: false,
       ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
-      ...policy.bindingEvidence(), ...payer, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
+      ...policy.bindingEvidence(), ...parentCountry.evidence(), ...payer, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
       browser_version: /^[0-9]+(?:\.[0-9]+){1,3}$/u.test(browser.version()) ? browser.version() : 'unclassified',
       ...counts, proxy_rejections: proxy.counts.rejected,
       proxy_connections: proxy.counts.connected,
@@ -565,11 +586,15 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   } catch {
     markFailure('unclassified');
   } finally {
-    if (observeNormal) { normalAdmissionClosed = true; await drainSentNormalReads(); }
+    if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads(), parentCountry.drainSent()]); }
     shuttingDown = true;
     policy.closeNormalWindow();
     clearTimeout(normalWindowTimer);
     clearTimeout(watchdog);
+    if (!await parentCountry.close() || parentCountry.failed()) markFailure('parent_country_read');
+    await track(async () => {
+      if (!await risk.close()) throw new Error('Risk relay did not close safely.');
+    }, 'risk_shutdown');
     if (context) { browserContextCloseStarted = true; await track(() => context.close(), 'shutdown_browser_context'); }
     if (browser) await track(() => browser.close(), 'shutdown_browser');
     for (const promise of [publicClientPromise, methodClientPromise, ...normalClientPromises]) if (promise) await track(async () => {
@@ -587,11 +612,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false,
     browser_failure_phase: firstFailure ?? 'unclassified', ...counts,
     ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
-    ...policy.bindingEvidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
+    ...policy.bindingEvidence(), ...parentCountry.evidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
     ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}),
     ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
+    ...risk.evidence(),
   });
-  return { ...result, ...counts, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...risk.evidence(), ...parentCountry.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
@@ -607,7 +633,10 @@ async function main() {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url'].includes(Object.keys(input).sort().join(','))
+      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url', 'expected,observeConfig,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url'].includes(Object.keys(input).sort().join(','))
+      || (Object.hasOwn(input, 'observeRisk') && input.observeRisk !== true)
+      || (input.observeRisk === true && input.observeNormal !== true)
+      || (Object.hasOwn(input, 'observeParentCountry') && (typeof input.observeParentCountry !== 'boolean' || (input.observeParentCountry && input.observeNormal !== true)))
       || (Object.hasOwn(input, 'observeNormal') && typeof input.observeNormal !== 'boolean')
       || (Object.hasOwn(input, 'observeConfig') && typeof input.observeConfig !== 'boolean')
       || (Object.hasOwn(input, 'render') && typeof input.render !== 'boolean') || typeof input.url !== 'string'
@@ -615,11 +644,12 @@ async function main() {
     throw new Error('Invalid private browser input.');
   }
   // Reject non-provider input before requiring any browser module or launching Chrome.
-  new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false);
+  new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, undefined, input.observeParentCountry ?? false);
   startupPhase = 'tooling_load';
   const playwright = require(process.argv[2]);
   startupPhase = 'browser_startup';
-  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false);
+  const journal = input.observeRisk === true ? RiskJournalClient.fromDescriptors(input.riskJournal) : null;
+  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal, null, input.observeParentCountry ?? false);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
