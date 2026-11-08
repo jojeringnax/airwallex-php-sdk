@@ -108,6 +108,82 @@ The next step is a separately reviewed read-only payer-data request bound to the
 
 Official sources: [Hosted Billing Checkout](https://www.airwallex.com/docs/billing/billing-components/checkout/hosted-billing-checkout) describes SETUP collection; [Sandbox settings](https://www.airwallex.com/docs/developer-tools/sandbox-environment/sandbox-settings) distinguishes Hosted collection from Native API PCI enablement; the [Payments quickstart](https://www.airwallex.com/docs/payments/get-started/quickstart) publishes the static SDK script; [Playwright browser contexts](https://playwright.dev/docs/api/class-browsercontext) documents isolation, request/WebSocket routing and service-worker interception limits. API baseline remains `2026-08-21`; no new SDK endpoint or browser-completion support is claimed.
 
+## Manual Billing lifecycle
+
+Run the separate organization scenario with the same external configuration and private state-directory rules:
+
+```sh
+composer test:sandbox -- --environment=sandbox --credentials-file=/absolute/private/path/.env --scenario=billing-lifecycle --context=organization --state-dir=/absolute/private/run-state-directory
+```
+
+This journey creates a fresh synthetic Customer, Product and two active EUR monthly `PER_UNIT`, `IN_ADVANCE` Prices, then a Subscription with `collection_method=OUT_OF_BAND`. The [collection-method guide](https://www.airwallex.com/docs/billing/subscriptions/get-started-with-subscription-management#subscription-payment-collection-methods) identifies this as manual external collection. It supplies no instrument or linked collection account and performs no invoice creation, finalization, payment, mark-paid or void operation. Required scopes cover the Customer/Product/Price reads and writes, `billing.subscription:read/write` and `billing.invoice:read`, plus the supporting account-configuration lookup described above.
+
+The [selected Subscription contract](https://www.airwallex.com/docs/api/billing/subscriptions/create), API `2026-08-21`, supplies the future start and later trial end. The scenario observes `PENDING`, then uses separate recorded updates with `starts_at=NOW` and `trial_ends_at=NOW` to observe `IN_TRIAL` and `ACTIVE`. It uses the schema's one-month total `duration` as a finite lifetime; the [documented guide discrepancy](billing-resources.md#conflicts-and-remaining-evidence) remains explicit.
+
+Fresh initial/quantity observations require one returned owned item with the expected Price/EUR/exact quantity. Quantity change explicitly selects `PRORATED` with `DEFER_CHARGE_AND_KEEP_CYCLE`. The later request submits deletion of that newly observed item plus addition of the second Price with `NONE` and the same billing action. The [product guide's proration table](https://www.airwallex.com/docs/billing/subscriptions/subscriptions-via-api) describes `NONE` changes taking effect next cycle, and the selected enum defers the new fee to that cycle. The harness therefore observes scheduling, not immediate replacement.
+
+The `scheduled_replacement_listed` checkpoint requires one unique owned target entry with the second Price/EUR/exact quantity and permits only that entry and the exact known prior entry in the returned bounded page. Unknown entries, duplicate identities, ambiguous targets, mismatched ownership/value or a nonterminal bookmark cannot pass. It records `old_entry_present`, whether an explicit terminal page marker was supplied, and `effective_replacement_unverified=true`; an absent old entry is not proof of removal, and a missing bookmark is not complete-inventory evidence. The selected item schema has no active/ended/deleted/effective-date indicator. Its `current_period_*` timestamps describe periods already invoiced, so they are not used to invent lifecycle classifications. Target/prior IDs remain private in the ledger.
+
+After a valid scheduling observation, the scenario continues independent cycle-anchor, ending-flag, invoice and cleanup checks. Overall effectiveness evidence remains `pending` with `scheduled_replacement_effectiveness_requires_next_cycle_evidence`, even if those checkpoints pass. Cleanup cancels this owned Subscription before its next cycle, so this journey intentionally cannot establish that later effect; a separate authorized cycle-boundary scenario or provider confirmation is needed. No next-cycle accounting, immediate-charge/reset effect or provider proration calculation is established by this run.
+
+Quantity observations require one current item for the recorded Subscription and expected Price/EUR/exact quantity. Item ID retention is measured, not assumed: the ledger privately persists the initial and post-quantity item identities, and the safe envelope records only `quantity_item_identity_retained`. The next plan replacement uses the freshly observed current item ID. These checkpoints establish behavior in a new run; the earlier run did not retain its initial item ID, so its later read cannot establish whether that identity changed.
+
+On the still-active Subscription, the scenario requests `cancel_at_period_end=true`, then a separate update with `false`, requiring the corresponding ACTIVE readback at each checkpoint. The finite duration remains; a passed round trip would establish only that flag case, not universal schedule clearing or actual renewal.
+
+A [fresh no-trial Sandbox run](https://github.com/jojeringnax/airwallex-php-sdk/issues/42#issuecomment-6722981620) passed future start/activation, quantity change with an unchanged anchor, scheduled target listing, plan-anchor retention and the true ending flag. The subsequent false flag was not observed within the read bound, so the result stayed pending. Its own Subscription cancellation and two Price/Product archives passed. This run proves neither reversal nor next-cycle replacement effectiveness; isolated schedule/lifetime cases remain under #26 and #42.
+
+Each asynchronous state/item/cycle checkpoint and missing-invoice discovery permits seven explicit GETs by default, with 1/2/4/8/8/7-second delays totaling 30 seconds; individual HTTP timeouts still apply. The test-only attempt bound is configurable from one to seven, and unit fixtures use fake waits. An unfinished transition remains `pending` with its exact observation step; it establishes neither product ineligibility nor successful completion. Invoice reads use the verified Subscription reference or both Customer/Subscription list filters, validate ownership, currency, collection method and exact decimal text, and read one bounded line-item page. The safe result records known invoice/payment statuses and separate document-field presence/nonempty flags; URLs remain private, and their usability is not tested. Missing, null and expired-link observations do not trigger a download or renewal request.
+
+Every mutation has a distinct durably recorded request identity and is sent once. Any failed sent mutation is conservatively treated as ambiguous: subsequent writes, including cleanup, stop. The retained private ledger supports reconciliation. After acknowledged outcomes, cleanup first retrieves only recorded own Subscriptions, cancels a known non-cancelled state once with `proration_behavior=NONE`, and confirms `CANCELLED` within the read bound. A Subscription already observed as `CANCELLED` is not cancelled again. Terminal checks retain exact identity, Customer/entity/currency, collection method and run marker, without requiring mutable schedule fields such as the original lifetime duration. Unconfirmed cancellation or an ownership mismatch stops archive writes. Only afterward are this run's returned Price/Product IDs archived. Customer, Subscription and invoice history remain. Deterministic fixtures cover the scenario and failure gates; an actual run is separate evidence, and this manual journey does not validate instrument collection, recovery, webhook delivery or either cross-account Billing model.
+
+### Separate manual lifecycle without a trial
+
+Run `--scenario=billing-lifecycle-no-trial --context=organization` through `tools/sandbox.php`, or retain the narrow diagnostic output with:
+
+```sh
+php tools/billing-diagnostic.php --environment=sandbox --credentials-file=/absolute/private/path/.env --state-dir=/absolute/private/run-state-directory --scenario=billing-lifecycle-no-trial
+```
+
+This is a new run with its own Customer, catalogue, action identities and ledger. It omits the optional `trial_ends_at` field entirely, observes the requested future `PENDING` start, updates `starts_at=NOW`, and requires an observed `ACTIVE` state with valid cycle timestamps. It then performs the same quantity/proration, scheduled-Price listing observation, period-end flag reversal, invoice reads and owned cancellation/archive checks. Its result is labeled `billing-lifecycle-no-trial` with `trial_requested=false`; it never sends a trial-ending update or records trial-started/trial-ended checkpoints. Pending or rejected activation remains unfinished evidence under the same bounded GET/no-replay rules; the scheduled change's next-cycle effectiveness also remains pending.
+
+The original `billing-lifecycle` and default diagnostic path still submit the future start plus later trial, require `IN_TRIAL`, and explicitly end that trial before requiring `ACTIVE`. The trial scenario remains unvalidated against the provider: the observed fresh-create rejection identified only the lexical field term `trial_ends_at`, which establishes neither universal lack of support nor its precise conditional requirement. Passing the separate no-trial path cannot satisfy trial acceptance or alter the prior uncertain action.
+
+### Archive a failed run's recorded catalogue
+
+The separate development tool handles the retained catalogue from one rejected lifecycle create at a time:
+
+```sh
+php tools/billing-catalogue-cleanup.php --environment=sandbox --credentials-file=/absolute/private/path/.env --prior-ledger=/absolute/private/previous-run/ledger.json --state-dir=/absolute/private/cleanup-state-directory
+```
+
+Its organization context and checkout root are fixed. It validates the original ledger's API version, private permissions and organization/credential fingerprint before authentication. The supported catalogue is exactly one recorded Customer, one Product and two Prices from a lifecycle create. Default `catalogue-only` mode rejects a ledger containing any returned Subscription ID before authentication. The original ledger is opened read-only and retains its original action records. Before any mutation, the tool retrieves all four recorded catalogue objects and verifies IDs/run markers, each Price's Product relationship and its EUR monthly per-unit configuration, including exact amounts 1.23 and 2.34 without floats. Missing or mismatched evidence stops cleanup.
+
+For an earlier run with recorded Subscriptions, the explicit `--mode=verify-cancelled-subscriptions` option additionally retrieves every recorded Subscription and requires the exact stored ID, original Customer, run marker and `CANCELLED` state before any catalogue write. An active, unknown, missing or mismatched state, or a failed GET, prevents all catalogue mutations. Cancellation can clear schedule fields, so this terminal-state ownership check does not require the original lifetime duration. This mode sends only recorded-ID Subscription GETs; it neither discovers nor cancels Subscriptions and cannot turn an active run into a cleanup candidate.
+
+Only those recorded Prices, then their Product, receive `active=false` updates; the [selected Price contract](https://www.airwallex.com/docs/api/billing/prices) defines this field as availability for new purchases. Already inactive resources need no write. Each distinct cleanup request identity is durably persisted in a new private ledger before its update. The intent hash binds the original run marker, original ledger SHA-256, resource kind/ID and target state; only `active` and the fresh `request_id` go onto the wire. Each acknowledgement and subsequent own-resource readback must show the expected archived state. Failed persistence prevents that update; any failure after sending an update is conservatively ambiguous and stops every later write, preserving partial counts for reconciliation. The tool does not automatically retry or resume a prior cleanup invocation.
+
+The safe envelope contains version/source/context evidence, a hash identifying the original run, the new cleanup run marker, selected mode, fixed operation labels, counts/booleans and the tool's SHA-256. It emits no resource IDs, private paths, credentials, raw provider fields or bodies. Customer/history and all uncertain Subscription state remain: default mode makes no Subscription API calls, the explicit mode adds only the recorded-ID reads described above, and neither mode discovers resources, mutates Subscriptions or replays the failed create. `subscription_reconciliation_complete` remains false even when catalogue archival passes. The lifecycle command itself never cleans an earlier ledger. Synthetic failure tests and independent review establish this tool's behavior; actual cleanup evidence requires a separate operator run.
+
+### Reconcile an uncertain Subscription create
+
+An operator can run the separate read-only probe against a private ledger; the agent preparing this helper does not read actual credentials or run state:
+
+```sh
+php tools/billing-reconcile.php --environment=sandbox --credentials-file=/absolute/private/path/.env --ledger-file=/absolute/private/run/ledger.json
+```
+
+The probe verifies API version, private file/directory permissions and the credential/environment/organization fingerprint before authentication. It lists Subscriptions filtered to that ledger's sole recorded Customer, retaining the filter through at most ten explicit pages of 100. Output contains only the fixed phase/version/result, counts and booleans for Customer-reference consistency, terminal-page evidence and correlations to the stored `create_future_trial` request ID/run marker. It emits no resource IDs, marker, bookmark, body or credentials and sends no resource mutation. The selected Subscription response schema does not promise `request_id`; separate presence counts keep absent correlation fields distinguishable from mismatches. Even an empty complete listing is a point-in-time observation, not permission to replay the original action.
+
+For a separately authorized fresh run, use the fixed-root development entry point:
+
+```sh
+php tools/billing-diagnostic.php --environment=sandbox --credentials-file=/absolute/private/path/.env --state-dir=/absolute/private/run-state-directory
+```
+
+The command fixes organization context, accepts no prior ledger or alternate SDK root, and starts the existing Billing lifecycle with a new durable run ledger. It appends only the passive inspector's evidence and the diagnostic tool's SHA-256 to normal safe source/context/outcome evidence. It removes the lifecycle's generic provider-code/source fields so error details come only from the explicit allowlist. `SubscriptionErrorTransport` wraps the same guarded sandbox transport before constructing `SandboxSession`. It passively inspects only errors from the fixed Subscription-create route, snapshots at most 256 KiB from a seekable stream and restores its position. `SubscriptionErrorEvidence` returns only exact error-code literals from the [selected create contract](https://www.airwallex.com/docs/api/billing/subscriptions/create), fixed known field terms and a fixed phase. Field mentions are lexical diagnostic evidence, not declarations that a field caused the rejection. Raw messages, details, IDs and body values are neither returned nor retained. Unreadable/nonseekable bodies produce no body evidence.
+
+A controlled reproduction uses a new private run ledger, new Customer/Product/Prices, a new action UUID and marker, and the same documented `OUT_OF_BAND`, currency, legal entity, `days_until_due`, lifetime `duration`, future start and later trial fields. Their presence in the selected schema does not establish which field or provider rule caused an earlier rejection. Preserve the uncertain original run and inspect the fresh allowlisted evidence before changing fields or declaring an external eligibility blocker.
+
 ## Payments lifecycle writes
 
 Run this scenario with explicit account login after the account authentication check:

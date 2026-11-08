@@ -61,20 +61,37 @@ final class ConsumerRecipesTest extends HttpTestCase
         self::assertSame('', $http->requests[1]->getHeaderLine('x-on-behalf-of'));
     }
 
-    public function testQuantityAndReplacementExamplesRetainItemIdentityAndExplicitFinancialControls(): void
+    public function testQuantityAndReplacementExamplesRefreshOwnedItemIdentityAndKeepExplicitFinancialControls(): void
     {
-        $http = $this->scenario([[201, self::LOGIN], [200, '{}'], [200, '{}']]);
+        $http = $this->scenario([
+            [201, self::LOGIN], [200, '{}'],
+            [200, '{"items":[{"id":"refreshed-item","subscription_id":"sub",'
+                . '"price":{"id":"current-price","currency":"EUR"},"quantity":3}],"page_after":null}'],
+            [200, '{}'],
+        ]);
         $client = $this->client($http);
         $change = $this->recipe('billing-lifecycle.php', 'change_quantity');
         $change($client, 'sub', 'old-item', 3, 'persisted-quantity');
+        // This fixture has one candidate matching the known action/owner/Price/quantity; ambiguous lists must stop.
+        $page = $client->billing()->subscriptions()->listItems('sub', ['page_size' => 20]);
+        self::assertIsArray($page['items']);
+        self::assertCount(1, $page['items']);
+        $item = $page['items'][0];
+        self::assertIsArray($item);
+        self::assertSame('sub', $item['subscription_id']);
+        self::assertSame(['id' => 'current-price', 'currency' => 'EUR'], $item['price']);
+        self::assertSame('3', $item['quantity']);
+        self::assertIsString($item['id']);
         $replace = $this->recipe('billing-lifecycle.php', 'replace_price');
-        $replace($client, 'sub', 'old-item', 'new-price', 2, 'persisted-plan');
+        $replace($client, 'sub', $item['id'], 'new-price', 2, 'persisted-plan');
         self::assertStringContainsString(
             '"items":[{"id":"old-item","quantity":3}]',
             (string) $http->requests[1]->getBody()
         );
-        $wire = (string) $http->requests[2]->getBody();
-        self::assertStringContainsString('"id":"old-item","deleted":true', $wire);
+        self::assertSame('GET', $http->requests[2]->getMethod());
+        $wire = (string) $http->requests[3]->getBody();
+        self::assertStringContainsString('"id":"refreshed-item","deleted":true', $wire);
+        self::assertStringNotContainsString('old-item', $wire);
         self::assertStringContainsString('"price_id":"new-price","quantity":2', $wire);
         self::assertStringContainsString('"default_proration_mode":"NONE"', $wire);
         self::assertStringContainsString('"billing_action":"DEFER_CHARGE_AND_KEEP_CYCLE"', $wire);

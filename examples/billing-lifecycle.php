@@ -7,6 +7,8 @@ use Jojeringnax\Airwallex\Client;
 // Application recipes: load the stored buyer/organization/collector mapping and authorize each action first.
 // Choose one named recipe for the intended action; these are alternatives, not an automatic sequence.
 // Every request ID must already be durably associated with that action in application storage.
+// Item IDs are observed provider references. Refresh/reconcile items before a later mutation;
+// select the intended owned item unambiguously instead of assuming its previous ID stayed stable.
 return [
     'start_trial' => static function (
         Client $billing,
@@ -53,6 +55,8 @@ return [
         int $quantity,
         string $requestId,
     ): array {
+        // oldItemId must be freshly selected for this action. NONE schedules the fee change for the next cycle;
+        // a subsequent list may still contain the prior entry and does not identify active/ended items.
         return $billing->billing()->subscriptions()->update($subscriptionId, [
             'request_id' => $requestId,
             'items' => [
