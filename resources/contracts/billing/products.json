@@ -1,0 +1,409 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/products",
+  "reviewed": "2026-11-08",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "f3dcbacb0453ce7a4808b6e97305dac6",
+  "endpoints": {
+    "createProduct": {
+      "apiPath": "/api/v1/billing/products/create",
+      "method": "post",
+      "description": "Creates a new Product object.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "name",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "`true` if the product is available for new purchases, `false` otherwise. Defaults to `true`."
+                },
+                "description": {
+                  "maxLength": 500,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Product description. Used for internal classification and identification."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Product name."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                },
+                "tax_code": {
+                  "type": "string",
+                  "description": "The tax category of the product. Select the category that best describes this product to ensure accurate tax calculation. [Learn more about tax categories](/docs/billing/airwallex-tax/tax-categories)."
+                },
+                "unit": {
+                  "maxLength": 30,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Product unit."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductResponse"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.product:write",
+          "group": "Billing",
+          "resource_name": "Products",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrieveProduct": {
+      "apiPath": "/api/v1/billing/products/{id}",
+      "method": "get",
+      "description": "Retrieves the product details by the ID.",
+      "parameters": [
+        {
+          "description": "ID of the Product object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductResponse"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.product:read",
+          "group": "Billing",
+          "resource_name": "Products",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listProducts": {
+      "apiPath": "/api/v1/billing/products",
+      "method": "get",
+      "description": "Retrieves a list of Products based on the query parameters.",
+      "parameters": [
+        {
+          "description": "`true` if the product is available for new purchases, `false` otherwise.",
+          "in": "query",
+          "name": "active",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of Products per page. Defaults to `20`.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseProduct"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.product:read",
+          "group": "Billing",
+          "resource_name": "Products",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "updateProduct": {
+      "apiPath": "/api/v1/billing/products/{id}/update",
+      "method": "post",
+      "description": "Updates a Product. Only fields provided in the request are updated, while omitted fields remain unchanged. Array fields are fully replaced if included. Set a field to null or an empty string (for strings) to clear its value.",
+      "parameters": [
+        {
+          "description": "ID of the Product object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "`true` if the product is available for new purchases, `false` otherwise."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Product description. Used for internal classification and identification."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Product name."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                },
+                "tax_code": {
+                  "type": "string",
+                  "description": "The tax category of the product."
+                },
+                "unit": {
+                  "type": "string",
+                  "description": "Product unit."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductResponse"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.product:write",
+          "group": "Billing",
+          "resource_name": "Products",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": true,
+      "sdkPagination": false
+    }
+  },
+  "schemas": {
+    "ProductResponse": {
+      "required": [
+        "active",
+        "created_at",
+        "id",
+        "name",
+        "unit",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean",
+          "description": "`true` if the product is available for new purchases, `false` otherwise."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when this product was created."
+        },
+        "description": {
+          "type": "string",
+          "description": "Product description."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Product object."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "name": {
+          "type": "string",
+          "description": "Product name."
+        },
+        "tax_code": {
+          "type": "string",
+          "description": "The tax category of the product."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Product unit."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when this product was last updated."
+        }
+      },
+      "description": "Details of the [Product](/docs/api/billing/products) object this price is associated with."
+    },
+    "CursorPaginationClientApiResponseProduct": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/ProductResponse"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  }
+}

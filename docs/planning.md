@@ -43,3 +43,7 @@ For platform requests and Billing–Payments ownership, consult [connected-accou
 Both Billing models are included to cover platform service subscriptions and merchants’ customer billing. API-key authentication provides the initial credential path; OAuth authorization and refresh support require a separate scope decision.
 
 For invoice documents, self-service, checkout UI modes, trials and cancellation/grace boundaries, consult [Billing capability boundaries](billing-capabilities.md).
+
+## Provisional Price-model boundary
+
+Initial Price creation currently implements `FLAT` and `PER_UNIT`, following the selected work in [#19](https://github.com/jojeringnax/airwallex-php-sdk/issues/19). The coordinator provisionally retains this subset while [decision review #64](https://github.com/jojeringnax/airwallex-php-sdk/issues/64) determines whether non-metered `VOLUME`/`GRADUATED` pricing belongs in the initial release. This is not a human-approved reduction of broader capability scope, and those models are not automatically classified as deferred usage billing. The review issue records rationale, alternatives, compatibility and reversal options. [Billing resources](billing-resources.md) documents the implemented boundary and validation.

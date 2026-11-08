@@ -1,0 +1,683 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/prices",
+  "reviewed": "2026-11-08",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "f3dcbacb0453ce7a4808b6e97305dac6",
+  "endpoints": {
+    "createPrice": {
+      "apiPath": "/api/v1/billing/prices/create",
+      "method": "post",
+      "description": "Create a new Price object.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "currency",
+                "product_id",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "`true` if the price is available for new purchases, `false` otherwise. Defaults to `true`."
+                },
+                "billing_type": {
+                  "type": "string",
+                  "description": "Indicates when should the price be billed, one of \n- `IN_ADVANCE`: billed at the beginning of the billing cycle.\n- `IN_ARREARS`: billed at the end of the billing cycle.\n\nDefaults to `IN_ADVANCE`."
+                },
+                "currency": {
+                  "type": "string",
+                  "description": "Currency of the price (in 3-letter ISO-4217 format)."
+                },
+                "description": {
+                  "maxLength": 500,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Price description. Used for internal classification and identification."
+                },
+                "flat_amount": {
+                  "maximum": 9999999999,
+                  "minimum": 0,
+                  "type": "number",
+                  "description": "The fixed amount to be charged. Only required when the pricing model is `FLAT`."
+                },
+                "lot": {
+                  "required": [
+                    "rounding_mode",
+                    "size"
+                  ],
+                  "type": "object",
+                  "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT` price.",
+                  "properties": {
+                    "rounding_mode": {
+                      "pattern": "^UP$",
+                      "type": "string",
+                      "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+                    },
+                    "size": {
+                      "minimum": 2,
+                      "type": "integer",
+                      "description": "The amount of quantity that constitutes a single billable lot.",
+                      "format": "int32"
+                    }
+                  }
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "meter_id": {
+                  "type": "string",
+                  "description": "ID of the Meter object specifying how to calculate the usage for this price."
+                },
+                "metered": {
+                  "type": "boolean",
+                  "description": "Specify how to determine the quantity of the product used in each billing cycle for subscription payments. `true` if the quantity is dynamically determined during the billing cycle. The merchant should call the Ingest Usage Events API to submit usage data when the product is used. `false` if the quantity is determined when creating a subscription."
+                },
+                "pricing_model": {
+                  "type": "string",
+                  "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `FLAT`: a fixed price.\n- `PER_UNIT`: a fixed price per unit quantity.\n- `VOLUME`: the unit price is based on which tier the total quantity falls in.\n- `GRADUATED`: the unit price changes as the quantity increases.\n\nDefaults to `PER_UNIT`."
+                },
+                "product_id": {
+                  "type": "string",
+                  "description": "ID of the [Product](/docs/api/billing/products) object this price is associated with."
+                },
+                "recurring": {
+                  "required": [
+                    "period_unit"
+                  ],
+                  "type": "object",
+                  "description": "The frequency at which the price is charged. null for one-time charge.",
+                  "properties": {
+                    "period": {
+                      "type": "integer",
+                      "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `period=2` and `period_unit=MONTH`. Defaults to `1`.",
+                      "format": "int32"
+                    },
+                    "period_unit": {
+                      "type": "string",
+                      "description": "Specifies billing frequency. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+                    }
+                  },
+                  "nullable": true
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                },
+                "tax_included": {
+                  "type": "boolean",
+                  "description": "Whether the price includes tax. Defaults to `false`."
+                },
+                "tiers": {
+                  "type": "array",
+                  "description": "List of quantity-based pricing tiers for this price. Required when the pricing model is `VOLUME` or `GRADUATED`.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "flat_amount": {
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`."
+                      },
+                      "lot": {
+                        "required": [
+                          "rounding_mode",
+                          "size"
+                        ],
+                        "type": "object",
+                        "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `VOLUME` and `GRADUATED` prices.",
+                        "properties": {
+                          "rounding_mode": {
+                            "pattern": "^UP$",
+                            "type": "string",
+                            "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+                          },
+                          "size": {
+                            "minimum": 2,
+                            "type": "integer",
+                            "description": "The amount of quantity that constitutes a single billable lot.",
+                            "format": "int32"
+                          }
+                        }
+                      },
+                      "unit_amount": {
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`."
+                      },
+                      "unit_description": {
+                        "type": "string",
+                        "description": "Description of the billable unit for the tier."
+                      },
+                      "upper_bound": {
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "The upper quantity limit of this tier. This tier is applicable when the quantity does not exceed the upper bound of this tier, and is greater than the upper bound of the tier below it(or `0` if this is the first tier). For the last tier, the upper bound must be left empty."
+                      }
+                    }
+                  }
+                },
+                "unit_amount": {
+                  "maximum": 9999999999,
+                  "minimum": 0,
+                  "type": "number",
+                  "description": "The amount to be charged per product unit. Only required when the pricing model is `PER_UNIT`."
+                },
+                "unit_description": {
+                  "type": "string",
+                  "description": "Description of the billable unit for the price."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Price"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `resource_not_found`(invalid `product_id`), `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:write",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrievePrice": {
+      "apiPath": "/api/v1/billing/prices/{id}",
+      "method": "get",
+      "description": "Retrieves the details of a Price object by the ID.",
+      "parameters": [
+        {
+          "description": "ID of the Price object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Price"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listPrices": {
+      "apiPath": "/api/v1/billing/prices",
+      "method": "get",
+      "description": "Retrieves a list of Prices based on the query parameters.",
+      "parameters": [
+        {
+          "description": "ID of the [Product](/docs/api/billing/products) object this price is associated with.",
+          "in": "query",
+          "name": "product_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "`true` if the price is available for new purchases, `false` otherwise.",
+          "in": "query",
+          "name": "active",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "description": "The currency of the Price in 3-letter ISO-4217 format.",
+          "in": "query",
+          "name": "currency",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `recurring_period=2` and `recurring_period_unit=MONTH`.",
+          "in": "query",
+          "name": "recurring_period",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "description": "Specifies billing frequency.",
+          "in": "query",
+          "name": "recurring_period_unit",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "DAY",
+              "WEEK",
+              "MONTH",
+              "YEAR"
+            ]
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of Prices to be listed per page. Defaults to `20`.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponsePrice"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "updatePrice": {
+      "apiPath": "/api/v1/billing/prices/{id}/update",
+      "method": "post",
+      "description": "Updates a Price by setting the values of the request parameters. Any parameters not provided will be left unchanged. Only fields provided in the request are updated, while omitted fields remain unchanged. Array fields are fully replaced if included. Set a field to null or an empty string (for strings) to clear its value.",
+      "parameters": [
+        {
+          "description": "ID of the Price object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "`true` if the price is available for new purchases, `false` otherwise."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Price description. Used for internal classification and identification."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Price"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:write",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": true,
+      "sdkPagination": false
+    }
+  },
+  "schemas": {
+    "Price": {
+      "required": [
+        "active",
+        "created_at",
+        "currency",
+        "id",
+        "metered",
+        "pricing_model",
+        "product_id",
+        "tax_included",
+        "type",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean",
+          "description": "`true` if the price is available for new purchases, `false` otherwise."
+        },
+        "billing_type": {
+          "type": "string",
+          "description": "Indicates when should the price be billed, one of \n- `IN_ADVANCE`: billed at the beginning of the billing cycle.\n- `IN_ARREARS`: billed at the end of the billing cycle."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when the price was created."
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency of the price (in 3-letter ISO-4217 format)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Price description."
+        },
+        "flat_amount": {
+          "type": "number",
+          "description": "The fixed amount to be charged. Only required when the pricing model is `FLAT`."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Price object."
+        },
+        "lot": {
+          "$ref": "#/components/schemas/PriceLot",
+          "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT` price."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "meter_id": {
+          "type": "string",
+          "description": "ID of the Meter object specifying how to calculate the usage for this price."
+        },
+        "metered": {
+          "type": "boolean",
+          "description": "Specify how to determine the quantity of the product used in each billing cycle for subscription payments. `true` if the quantity is dynamically determined during the billing cycle. The merchant should call the Ingest Usage Events API to submit usage data when the product is used. `false` if the quantity is determined when creating a subscription."
+        },
+        "pricing_model": {
+          "type": "string",
+          "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `FLAT`: a fixed price.\n- `PER_UNIT`: a fixed price per unit quantity.\n- `VOLUME`: the unit price is based on which tier the total quantity falls in.\n- `GRADUATED`: the unit price changes as the quantity increases."
+        },
+        "product_id": {
+          "type": "string",
+          "description": "ID of the [Product](/docs/api/billing/products) object this price is associated with."
+        },
+        "recurring": {
+          "$ref": "#/components/schemas/PriceRecurring",
+          "description": "The frequency at which the price is charged. null for one-time charge."
+        },
+        "tax_included": {
+          "type": "boolean",
+          "description": "Whether the price includes tax."
+        },
+        "tiers": {
+          "type": "array",
+          "description": "List of quantity-based pricing tiers for this price. Required when the pricing model is `VOLUME` or `GRADUATED`.",
+          "items": {
+            "$ref": "#/components/schemas/PriceTier"
+          }
+        },
+        "type": {
+          "type": "string",
+          "description": "One of `ONE_OFF` or `RECURRING` depending on whether the price is for a one-off purchase or a recurring (subscription) purchase."
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The amount to be charged per product unit. Only required when the pricing model is `PER_UNIT`."
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for the price."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when the price was last updated."
+        }
+      },
+      "description": "Price subscribed by the customer."
+    },
+    "PriceLot": {
+      "required": [
+        "rounding_mode",
+        "size"
+      ],
+      "type": "object",
+      "properties": {
+        "rounding_mode": {
+          "pattern": "^UP$",
+          "type": "string",
+          "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+        },
+        "size": {
+          "minimum": 2,
+          "type": "integer",
+          "description": "The amount of quantity that constitutes a single billable lot.",
+          "format": "int32"
+        }
+      },
+      "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT` price."
+    },
+    "PriceRecurring": {
+      "required": [
+        "period",
+        "period_unit"
+      ],
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `period=2` and `period_unit=MONTH`.",
+          "format": "int32"
+        },
+        "period_unit": {
+          "type": "string",
+          "description": "Specifies billing frequency. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+        }
+      },
+      "description": "The frequency at which the price is charged. null for one-time charge."
+    },
+    "PriceTier": {
+      "required": [
+        "level"
+      ],
+      "type": "object",
+      "properties": {
+        "flat_amount": {
+          "type": "number",
+          "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "level": {
+          "type": "integer",
+          "description": "The sequential position of the tier within the price definition. Starts from 1.",
+          "format": "int32"
+        },
+        "lot": {
+          "$ref": "#/components/schemas/PriceLot",
+          "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `VOLUME` and `GRADUATED` prices."
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for the tier."
+        },
+        "upper_bound": {
+          "type": "number",
+          "description": "The upper quantity limit of this tier. This tier is applicable when the quantity does not exceed the upper bound of this tier, and is greater than the upper bound of the tier below it(or `0` if this is the first tier). For the last tier, the upper bound must be left empty.",
+          "minimum": 0
+        }
+      }
+    },
+    "CursorPaginationClientApiResponsePrice": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/Price"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  }
+}

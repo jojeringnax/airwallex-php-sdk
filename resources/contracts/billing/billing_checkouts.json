@@ -1,0 +1,1163 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/billing_checkouts",
+  "reviewed": "2026-11-08",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "f3dcbacb0453ce7a4808b6e97305dac6",
+  "endpoints": {
+    "createBillingCheckout": {
+      "apiPath": "/api/v1/billing/billing_checkouts/create",
+      "method": "post",
+      "description": "Creates a Billing Checkout object.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "mode",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "back_url": {
+                  "type": "string",
+                  "description": "If set, the hosted checkout page displays a back button which allows customers to cancel the flow and be directed to this URL."
+                },
+                "billing_customer_id": {
+                  "type": "string",
+                  "description": "ID of the billing customer to reference the Billing Checkout. The customer's profile will be used to prefill the email, name, billing address and tax identification number during the checkout process. If provided, the customer can either choose a saved payment source for this checkout, or checkout a new payment method.  \nRequired in `SETUP` mode."
+                },
+                "currency": {
+                  "type": "string",
+                  "description": "The checkout currency in 3-letter ISO-4217 format. Required in `SETUP` mode."
+                },
+                "customer_data": {
+                  "type": "object",
+                  "description": "The prefilled information of the customer. Only applicable when `billing_customer_id` is not provided.  \nNot applicable in `SETUP` mode.",
+                  "properties": {
+                    "email": {
+                      "maxLength": 200,
+                      "minLength": 0,
+                      "type": "string",
+                      "description": "The prefilled email of the customer.\nIf this field or a `billing_customer_id` with an email on file is provided, the email will be prefilled and will not be editable during checkout.\nIf neither is provided, Billing Checkout will prompt the customer to enter their email during the checkout process."
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "minLength": 0,
+                      "type": "string",
+                      "description": "The prefilled name of the customer.\nIf this field or a `billing_customer_id` with a name on file is provided, the name will be prefilled and will not be editable during checkout.\nIf neither is provided, Billing Checkout will prompt the customer to enter their name during checkout."
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Type of the billing customer, one of `BUSINESS` or `INDIVIDUAL`.\nIf not provided, an \"I am purchasing as a business\" checkbox will be displayed during checkout for the customer to self-select."
+                    }
+                  }
+                },
+                "customer_data_collection": {
+                  "type": "object",
+                  "description": "Provides configuration for the Billing Checkout to collect information from customers.",
+                  "properties": {
+                    "billing_address": {
+                      "pattern": "^(AUTO|REQUIRED)$",
+                      "type": "string",
+                      "description": "Controls whether the billing address will be collected during checkout.\n- `AUTO`: Billing address will only be collected when necessary. Specifically, when automatic tax is enabled, or tax_id is collected.\n- `REQUIRED`: Billing address will always be collected.\nDefaults to `AUTO`."
+                    },
+                    "tax_id": {
+                      "pattern": "^(DISABLED|OPTIONAL_IF_SUPPORTED|REQUIRED_IF_SUPPORTED)$",
+                      "type": "string",
+                      "description": "Controls whether the tax ID will be collected for business customer during checkout. One of `OPTIONAL_IF_SUPPORTED`, `DISABLED`, `REQUIRED_IF_SUPPORTED`.\n- `DISABLED`: Tax id will not be collected.\n- `OPTIONAL_IF_SUPPORTED`: Tax id will be optionally collected in the supported countries, by displaying a checkbox \"I am purchasing as business\".\n- `REQUIRED_IF_SUPPORTED`: Tax id will always be collected if the country is in the supported list.\nDefaults to `OPTIONAL_IF_SUPPORTED`."
+                    }
+                  }
+                },
+                "discounts": {
+                  "maxItems": 1,
+                  "minItems": 0,
+                  "type": "array",
+                  "description": "List of discounts to be applied to the subscription. Discounts of subscription items are applied before subscription discounts. Currently, only one element is supported.",
+                  "items": {
+                    "required": [
+                      "coupon",
+                      "type"
+                    ],
+                    "type": "object",
+                    "properties": {
+                      "coupon": {
+                        "required": [
+                          "id"
+                        ],
+                        "type": "object",
+                        "description": "Coupon to redeem into a discount for this resource. Only required when `type` = `COUPON`.",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Id of the Coupon object."
+                          }
+                        }
+                      },
+                      "type": {
+                        "pattern": "^(COUPON)$",
+                        "type": "string",
+                        "description": "Specifies how to obtain the discount. One of: `COUPON`."
+                      }
+                    }
+                  }
+                },
+                "enable_automatic_tax": {
+                  "type": "boolean",
+                  "description": "Whether automatic tax is enabled for this checkout. When enabled, the system attempts to calculate taxes for this checkout's invoice automatically. Defaults to `false`."
+                },
+                "hosted_completion_page": {
+                  "required": [
+                    "display"
+                  ],
+                  "type": "object",
+                  "description": "Configuration for the Airwallex-hosted completion page. Only applicable when `ui_mode` is `HOSTED`.",
+                  "properties": {
+                    "display": {
+                      "type": "boolean",
+                      "description": "Whether to display the Airwallex-hosted completion page after checkout is completed and before the customer is redirected to `success_url`."
+                    }
+                  }
+                },
+                "invoice_data": {
+                  "type": "object",
+                  "description": "The settings of invoice to be passed to the invoice creation upon completion of the Billing Checkout in `PAYMENT` mode.",
+                  "properties": {
+                    "days_until_due": {
+                      "type": "integer",
+                      "description": "Number of days from invoice finalization until payment is due.",
+                      "format": "int32"
+                    },
+                    "default_tax_percent": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "number",
+                      "description": "The tax rate between 0 and 100(%) to be applied to invoices to be generated. The tax will be exclusive. Defaults to 0."
+                    },
+                    "due_at": {
+                      "type": "string",
+                      "description": "Due date set by the merchant for this invoice, if any. Only one of `days_until_due` and `due_at` should be passed."
+                    },
+                    "memo": {
+                      "maxLength": 200,
+                      "minLength": 0,
+                      "type": "string",
+                      "description": "String used for merchants to share a custom message to their customers. Referenced as memo or invoice note in Webapp."
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                      },
+                      "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                    }
+                  }
+                },
+                "legal_entity_id": {
+                  "type": "string",
+                  "description": "ID of the legal entity to be used as billing entity. You can find this ID in the Airwallex web app > Settings. Required if you have more than 1 entity in your organisation."
+                },
+                "line_items": {
+                  "type": "array",
+                  "description": "A list of items the customer is purchasing. Required when the mode is `SUBSCRIPTION` or `PAYMENT`. Not applicable when the mode is `SETUP`.  \nFor `SUBSCRIPTION` mode, all the line items must have a recurring Price or Rate Card Version.  \nFor `PAYMENT` mode, all the line items must have a non-recurring Price.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "discounts": {
+                        "maxItems": 1,
+                        "minItems": 0,
+                        "type": "array",
+                        "description": "List of discounts to be applied to the line items. Discounts of line items are applied before subscription or invoice discounts. Currently, only one element is supported.",
+                        "items": {
+                          "required": [
+                            "coupon",
+                            "type"
+                          ],
+                          "type": "object",
+                          "properties": {
+                            "coupon": {
+                              "required": [
+                                "id"
+                              ],
+                              "type": "object",
+                              "description": "Coupon to redeem into a discount for this resource. Only required when `type` = `COUPON`.",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "description": "Id of the Coupon object."
+                                }
+                              }
+                            },
+                            "type": {
+                              "pattern": "^(COUPON)$",
+                              "type": "string",
+                              "description": "Specifies how to obtain the discount. One of: `COUPON`."
+                            }
+                          }
+                        }
+                      },
+                      "price": {
+                        "required": [
+                          "currency"
+                        ],
+                        "type": "object",
+                        "description": "One-time price definition following the same schema as the [Price](/docs/api/billing/prices) resource. Exactly one of `price_id` or `price` is required.\nOnly applicable to `PAYMENT` mode.",
+                        "properties": {
+                          "currency": {
+                            "type": "string",
+                            "description": "Currency of the price (in 3-letter ISO-4217 format)."
+                          },
+                          "description": {
+                            "maxLength": 500,
+                            "minLength": 0,
+                            "type": "string",
+                            "description": "Price description. Used for internal classification and identification."
+                          },
+                          "flat_amount": {
+                            "maximum": 9999999999,
+                            "minimum": 0,
+                            "type": "number",
+                            "description": "The fixed amount to be charged. Only required when the pricing model is `FLAT`."
+                          },
+                          "metadata": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string",
+                              "description": "Custom key-value pairs attached to the price."
+                            },
+                            "description": "Custom key-value pairs attached to the price."
+                          },
+                          "pricing_model": {
+                            "type": "string",
+                            "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `FLAT`: a fixed price.\n- `PER_UNIT`: a fixed price per unit quantity.\nDefaults to `PER_UNIT`."
+                          },
+                          "product": {
+                            "required": [
+                              "name"
+                            ],
+                            "type": "object",
+                            "description": "One-time product definition following the same schema as the [Product](/docs/api/billing/products). Exactly one of `product_id` or `product` is required.",
+                            "properties": {
+                              "description": {
+                                "maxLength": 500,
+                                "minLength": 0,
+                                "type": "string",
+                                "description": "Product description. Used for internal classification and identification."
+                              },
+                              "metadata": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                                },
+                                "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                              },
+                              "name": {
+                                "maxLength": 200,
+                                "minLength": 0,
+                                "type": "string",
+                                "description": "Product name."
+                              },
+                              "tax_code": {
+                                "type": "string",
+                                "description": "The tax category of the product."
+                              },
+                              "unit": {
+                                "maxLength": 30,
+                                "minLength": 0,
+                                "type": "string",
+                                "description": "Product unit."
+                              }
+                            }
+                          },
+                          "product_id": {
+                            "type": "string",
+                            "description": "ID of the [Product](/docs/api/billing/products) object. Exactly one of `product_id` or `product` is required."
+                          },
+                          "tax_included": {
+                            "type": "boolean",
+                            "description": "Whether the price includes tax. Defaults to `false`."
+                          },
+                          "unit_amount": {
+                            "maximum": 9999999999,
+                            "minimum": 0,
+                            "type": "number",
+                            "description": "The amount to be charged per product unit. Only required when the pricing model is `PER_UNIT`."
+                          }
+                        }
+                      },
+                      "price_id": {
+                        "type": "string",
+                        "description": "ID of the [Price](/docs/api/billing/prices) object. Exactly one of `price_id`, `price`, or `rate_card_id` is required."
+                      },
+                      "quantity": {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "The quantity of the line item being purchased. Defaults to `1`.",
+                        "format": "int32"
+                      },
+                      "rate_card_id": {
+                        "type": "string",
+                        "description": "ID of the [Rate Card](/docs/api/billing/rate_cards) object. Exactly one of `price_id`, `price`, or `rate_card_id` is required. Only applicable to `SUBSCRIPTION` mode."
+                      },
+                      "rate_card_version": {
+                        "type": "integer",
+                        "description": "Pinned Rate Card version number. Required when `rate_card_id` is set.",
+                        "format": "int32"
+                      },
+                      "tax_percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "The effective tax percent of this line item."
+                      }
+                    }
+                  }
+                },
+                "linked_payment_account_id": {
+                  "type": "string",
+                  "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section. Required if you have more than 1 payment account in your organisation."
+                },
+                "locale": {
+                  "type": "string",
+                  "description": "A code, in IETF language format, that determines the language and formatting displayed to customers on the checkout UI, and can be one of: `AUTO`, `EN`, `ZH`.  \nIf set to `AUTO` the customer's browser locale is used."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "mode": {
+                  "pattern": "^(SUBSCRIPTION|PAYMENT|SETUP)$",
+                  "type": "string",
+                  "description": "The mode of the Billing Checkout object, can be one of:  \n`SUBSCRIPTION`: Set up subscriptions.  \n`PAYMENT`: Accept one-off payments.  \n`SETUP`: Collect payment details to charge your customers later."
+                },
+                "payment_options": {
+                  "type": "object",
+                  "description": "Payment settings of this Billing Checkout.",
+                  "properties": {
+                    "pay_by_invoice_enabled": {
+                      "type": "boolean",
+                      "description": "Enables the option to \"Request an invoice\" for payment. After the customer confirms to pay with this option, the status of Billing Checkout will transit to COMPLETED, and an invoice will be generated. The invoice will inherit the payment_options of this Billing Checkout, and other configurations in invoice_data. Only applicable when mode is `PAYMENT`, and the type of the customer is `BUSINESS`."
+                    },
+                    "payment_method_save": {
+                      "type": "object",
+                      "description": "Settings for saving this payment method for future use.",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "description": "Controls whether the payment method can be saved for future use. Possible values: `ENABLED`, `DISABLED`, or `COLLECT_CONSENT`.  \n`ENABLED`: The payment method will be saved for future use.  \n`DISABLED`: The payment method will not be saved.  \n`COLLECT_CONSENT`: The checkout UI asks the customer whether they want to save the payment method. Only applicable to cards."
+                        },
+                        "next_triggered_by": {
+                          "type": "string",
+                          "description": "Indicates who will use the saved payment source to trigger future payments. One of `MERCHANT` or `CUSTOMER`.  \nIf `MERCHANT`, a Payment Source is created for future use. If `CUSTOMER`, the payment method is saved only with the payment provider."
+                        }
+                      }
+                    },
+                    "payment_method_types": {
+                      "type": "array",
+                      "description": "Specify which payment methods to display on the hosted checkout page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the hosted checkout page.  \nPossible enum values when mode is `SUBSCRIPTION`: `card`, `applepay`, `googlepay`, `alipaycn`, `alipayhk`, `dana`, `gcash`, `kakaopay`, `klarna`, `rabbit_line_pay`, `tng`, `truemoney`.  \nPossible enum values when mode is `PAYMENT`: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`.  \nPossible enum values when mode is `SETUP`: `card`.",
+                      "items": {
+                        "type": "string",
+                        "description": "Specify which payment methods to display on the hosted checkout page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the hosted checkout page.  \nPossible enum values when mode is `SUBSCRIPTION`: `card`, `applepay`, `googlepay`, `alipaycn`, `alipayhk`, `dana`, `gcash`, `kakaopay`, `klarna`, `rabbit_line_pay`, `tng`, `truemoney`.  \nPossible enum values when mode is `PAYMENT`: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`.  \nPossible enum values when mode is `SETUP`: `card`."
+                      }
+                    }
+                  }
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                },
+                "return_url": {
+                  "type": "string",
+                  "description": "URL to redirect your customer to after they authenticate or cancel their payment on the payment method's app or website. Returning to this URL does not confirm the payment status."
+                },
+                "subscription_data": {
+                  "type": "object",
+                  "description": "The settings of subscription to be passed to the subscription creation upon completion of the Billing Checkout in `SUBSCRIPTION` mode.",
+                  "properties": {
+                    "days_until_due": {
+                      "type": "integer",
+                      "description": "Number of days from invoice finalization until payment is due. Defaults to `0`.",
+                      "format": "int32"
+                    },
+                    "default_invoice_template": {
+                      "type": "object",
+                      "description": "Invoices for the Subscription will be created using the specified settings.",
+                      "properties": {
+                        "invoice_memo": {
+                          "maxLength": 500,
+                          "minLength": 0,
+                          "type": "string",
+                          "description": "Memo to be used for the invoices that are generated by this Subscription."
+                        }
+                      }
+                    },
+                    "default_tax_percent": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "number",
+                      "description": "The tax rate between 0 and 100(%) to be applied to invoices to be generated. The tax will be exclusive. Defaults to 0."
+                    },
+                    "duration": {
+                      "required": [
+                        "period",
+                        "period_unit"
+                      ],
+                      "type": "object",
+                      "description": "The total duration of the subscription.",
+                      "properties": {
+                        "period": {
+                          "minimum": 1,
+                          "type": "integer",
+                          "description": "The number of period units.",
+                          "format": "int32"
+                        },
+                        "period_unit": {
+                          "type": "string",
+                          "description": "Specifies billing duration. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+                        }
+                      }
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                      },
+                      "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                    },
+                    "starts_at": {
+                      "type": "string",
+                      "description": "Time when the subscription started or scheduled to start. Defaults to start immediately after creation."
+                    },
+                    "trial_ends_at": {
+                      "type": "string",
+                      "description": "The end time of the trial if applicable."
+                    }
+                  }
+                },
+                "success_url": {
+                  "type": "string",
+                  "description": "The URL the customer will be directed to after the checkout completion."
+                },
+                "ui_options": {
+                  "type": "object",
+                  "description": "UI configuration for the hosted checkout page.",
+                  "properties": {
+                    "theme_id": {
+                      "type": "string",
+                      "description": "ID of the theme to apply to this billing checkout, overriding the theme configured for its legal entity. You can find the theme ID in the Airwallex web app under Settings > Themes."
+                    }
+                  }
+                },
+                "ui_mode": {
+                  "pattern": "^(HOSTED|EMBEDDED|ELEMENTS)$",
+                  "type": "string",
+                  "description": "The UI mode of the Billing Checkout, can be one of:  \n`HOSTED`: Customers complete the checkout on an Airwallex-hosted page.  \n`EMBEDDED`: Embed the checkout UI directly in your website or app.  \n`ELEMENTS`: Build a custom checkout UI using Airwallex Elements.  \nDefaults to `HOSTED` if not specified."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Checkout"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.checkout:write",
+          "group": "Billing",
+          "resource_name": "Billing Checkouts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrieveBillingCheckout": {
+      "apiPath": "/api/v1/billing/billing_checkouts/{id}",
+      "method": "get",
+      "description": "Retrieves a Billing Checkout.",
+      "parameters": [
+        {
+          "description": "ID of the Billing Checkout object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Checkout"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.checkout:read",
+          "group": "Billing",
+          "resource_name": "Billing Checkouts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "updateBillingCheckout": {
+      "apiPath": "/api/v1/billing/billing_checkouts/{id}/update",
+      "method": "post",
+      "description": "Updates a Billing Checkout object.",
+      "parameters": [
+        {
+          "description": "ID of the Billing Checkout.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Checkout"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.checkout:write",
+          "group": "Billing",
+          "resource_name": "Billing Checkouts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "billingCheckouts_cancel": {
+      "apiPath": "/api/v1/billing/billing_checkouts/{id}/cancel",
+      "method": "post",
+      "description": "A Billing Checkout in ACTIVE status can be cancelled. Once cancelled, the customer will no longer be able to complete the checkout and will see an error message when attempting to load it.",
+      "parameters": [
+        {
+          "description": "ID of the Billing Checkout.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Checkout"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.checkout:write",
+          "group": "Billing",
+          "resource_name": "Billing Checkouts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    }
+  },
+  "schemas": {
+    "Checkout": {
+      "required": [
+        "automatic_tax_status",
+        "created_at",
+        "discounts",
+        "enable_automatic_tax",
+        "expires_at",
+        "id",
+        "line_items",
+        "linked_payment_account_id",
+        "mode",
+        "status",
+        "ui_mode",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "automatic_tax_status": {
+          "type": "string",
+          "description": "The automatic tax status of this checkout.",
+          "enum": [
+            "APPLIED",
+            "LOCATION_NOT_SUPPORTED",
+            "LOCATION_NOT_REGISTERED_BY_MERCHANT",
+            "ADDRESS_INCOMPLETE",
+            "DISABLED"
+          ],
+          "x-enumDescriptions": {
+            "APPLIED": "The automatic tax is applied.",
+            "LOCATION_NOT_SUPPORTED": "Automatic tax calculation isn't supported in the customer's location.",
+            "LOCATION_NOT_REGISTERED_BY_MERCHANT": "The merchant isn't registered to collect tax in the customer's location.",
+            "ADDRESS_INCOMPLETE": "The customer address was insufficient or invalid to determine the correct tax.",
+            "DISABLED": "The automatic tax is disabled."
+          }
+        },
+        "back_url": {
+          "type": "string",
+          "description": "If set, the hosted checkout page displays a back button which allows customers to cancel the flow and be directed to this URL."
+        },
+        "billing_customer_id": {
+          "type": "string",
+          "description": "ID of the associated billing customer. Billing Checkout will create a new Billing Customer based on information provided during the process, unless an existing billing customer ID was provided when the Billing Checkout was created."
+        },
+        "cancelled_at": {
+          "type": "string",
+          "description": "Time when the Billing Checkout was cancelled."
+        },
+        "client_secret": {
+          "type": "string",
+          "description": "The client secret used to initialize the Billing Checkout in `EMBEDDED` or `ELEMENTS` `ui_mode`. Only present when `ui_mode` is `EMBEDDED` or `ELEMENTS`."
+        },
+        "completed_at": {
+          "type": "string",
+          "description": "Time when the Billing Checkout was completed."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when the Billing Checkout was created."
+        },
+        "currency": {
+          "type": "string",
+          "description": "The checkout currency in 3-letter ISO-4217 format."
+        },
+        "customer_data": {
+          "$ref": "#/components/schemas/Billing_PrefilledCustomerData",
+          "description": "The prefilled information of the customer. Only applicable when `billing_customer_id` is not provided.  \nNot applicable in `SETUP` mode."
+        },
+        "customer_data_collection": {
+          "$ref": "#/components/schemas/Billing_CustomerDataCollection",
+          "description": "Provides configuration for the Billing Checkout to collect information from customers."
+        },
+        "discounts": {
+          "type": "array",
+          "description": "List of discounts to be applied to the subscription. Discounts of subscription items are applied before subscription discounts. Currently, only one element is supported.",
+          "items": {
+            "$ref": "#/components/schemas/DiscountInstruction"
+          }
+        },
+        "enable_automatic_tax": {
+          "type": "boolean",
+          "description": "Whether automatic tax is enabled for this checkout. When enabled, the system attempts to calculate taxes for this checkout's invoice automatically."
+        },
+        "expires_at": {
+          "type": "string",
+          "description": "Time when the Billing Checkout expires."
+        },
+        "hosted_completion_page": {
+          "$ref": "#/components/schemas/Billing_HostedCompletionPage",
+          "description": "Configuration for the Airwallex-hosted completion page. Only applicable when `ui_mode` is `HOSTED`."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Billing Checkout object."
+        },
+        "invoice_data": {
+          "$ref": "#/components/schemas/Billing_InvoiceDataResponse",
+          "description": "The settings of invoice to be passed to the invoice creation upon completion of the Billing Checkout in `PAYMENT` mode."
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "ID of the invoice for the Billing Checkout in `PAYMENT` mode. Only applicable when the Billing Checkout is in `COMPLETED` status."
+        },
+        "legal_entity_id": {
+          "type": "string",
+          "description": "ID of the legal entity to be used as billing entity, which can be retrieved from the `legal_entity_id` field in the [Retrieve account details API](/docs/api/scale/accounts/retrieve) response."
+        },
+        "line_items": {
+          "type": "array",
+          "description": "A list of items the customer is purchasing.",
+          "items": {
+            "$ref": "#/components/schemas/CheckoutLineItem"
+          }
+        },
+        "linked_payment_account_id": {
+          "type": "string",
+          "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section."
+        },
+        "locale": {
+          "type": "string",
+          "description": "A code, in IETF language format, that determines the language and formatting displayed to customers on the checkout UI, and can be one of: `AUTO`, `EN`, `ZH`.  \nIf set to `AUTO` the customer's browser locale is used."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "mode": {
+          "type": "string",
+          "description": "The mode of the Billing Checkout object, can be one of:  \n`SUBSCRIPTION`: Set up subscriptions.  \n`PAYMENT`: Accept one-off payments.`SETUP`: Collect payment details to charge your customers later."
+        },
+        "payment_options": {
+          "$ref": "#/components/schemas/CheckoutPaymentOptionsResponse",
+          "description": "Payment settings of this Billing Checkout."
+        },
+        "payment_source_id": {
+          "type": "string",
+          "description": "ID of the Payment Source created when the Billing Checkout is completed."
+        },
+        "return_url": {
+          "type": "string",
+          "description": "The URL to redirect your customer back to after they authenticate or cancel their payment on the payment method's app or site, with payment status not confirmed."
+        },
+        "status": {
+          "type": "string",
+          "description": "The status of the Billing Checkout object, can be one of:  \n`ACTIVE`: The Billing Checkout is available for the customer to complete a purchase.  \n`COMPLETED`: The Billing Checkout has been completed.  \n`CANCELLED`: The Billing Checkout has been cancelled.  \n`EXPIRED`: The Billing Checkout has expired.  \nThe status automatically changes from `ACTIVE` to `EXPIRED` after 1 hour if purchase has not been completed."
+        },
+        "subscription_data": {
+          "$ref": "#/components/schemas/SubscriptionData",
+          "description": "The settings of subscription to be passed to the subscription creation upon completion of the Billing Checkout in `SUBSCRIPTION` mode."
+        },
+        "subscription_id": {
+          "type": "string",
+          "description": "ID of the subscription for the Billing Checkout in `SUBSCRIPTION` mode. Only applicable when the Billing Checkout is in `COMPLETED` status."
+        },
+        "success_url": {
+          "type": "string",
+          "description": "The URL the customer will be directed to after the checkout completion."
+        },
+        "ui_options": {
+          "type": "object",
+          "description": "UI configuration for the hosted checkout page.",
+          "properties": {
+            "theme_id": {
+              "type": "string",
+              "description": "ID of the theme to apply to this billing checkout, overriding the theme configured for its legal entity."
+            }
+          }
+        },
+        "ui_mode": {
+          "type": "string",
+          "description": "The UI mode of the Billing Checkout, can be one of:  \n`HOSTED`: Customers complete the checkout on an Airwallex-hosted page.  \n`EMBEDDED`: Embed the checkout UI directly in your website or app.  \n`ELEMENTS`: Build a custom checkout UI using Airwallex Elements."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when the Billing Checkout was last updated."
+        },
+        "url": {
+          "type": "string",
+          "description": "The URL to the Billing Checkout. The value is only present when the status is `ACTIVE`."
+        }
+      }
+    },
+    "Billing_PrefilledCustomerData": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "maxLength": 200,
+          "minLength": 0,
+          "type": "string",
+          "description": "The prefilled email of the customer.\nIf this field or a `billing_customer_id` with an email on file is provided, the email will be prefilled and will not be editable during checkout.\nIf neither is provided, Billing Checkout will prompt the customer to enter their email during the checkout process."
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 0,
+          "type": "string",
+          "description": "The prefilled name of the customer.\nIf this field or a `billing_customer_id` with a name on file is provided, the name will be prefilled and will not be editable during checkout.\nIf neither is provided, Billing Checkout will prompt the customer to enter their name during checkout."
+        },
+        "type": {
+          "type": "string",
+          "description": "Type of the billing customer, one of `BUSINESS` or `INDIVIDUAL`.\nIf not provided, an \"I am purchasing as a business\" checkbox will be displayed during checkout for the customer to self-select."
+        }
+      },
+      "description": "The prefilled information of the customer. Only applicable when `billing_customer_id` is not provided.  \nNot applicable in `SETUP` mode."
+    },
+    "Billing_CustomerDataCollection": {
+      "type": "object",
+      "properties": {
+        "billing_address": {
+          "pattern": "^(AUTO|REQUIRED)$",
+          "type": "string",
+          "description": "Controls whether the billing address will be collected during checkout.\n- `AUTO`: Billing address will only be collected when necessary. Specifically, when automatic tax is enabled, or tax_id is collected.\n- `REQUIRED`: Billing address will always be collected.\nDefaults to `AUTO`."
+        },
+        "tax_id": {
+          "pattern": "^(DISABLED|OPTIONAL_IF_SUPPORTED|REQUIRED_IF_SUPPORTED)$",
+          "type": "string",
+          "description": "Controls whether the tax ID will be collected for business customer during checkout. One of `OPTIONAL_IF_SUPPORTED`, `DISABLED`, `REQUIRED_IF_SUPPORTED`.\n- `DISABLED`: Tax id will not be collected.\n- `OPTIONAL_IF_SUPPORTED`: Tax id will be optionally collected in the supported countries, by displaying a checkbox \"I am purchasing as business\".\n- `REQUIRED_IF_SUPPORTED`: Tax id will always be collected if the country is in the supported list.\nDefaults to `OPTIONAL_IF_SUPPORTED`."
+        }
+      },
+      "description": "Provides configuration for the Billing Checkout to collect information from customers."
+    },
+    "DiscountInstruction": {
+      "required": [
+        "type"
+      ],
+      "type": "object",
+      "properties": {
+        "coupon": {
+          "$ref": "#/components/schemas/CouponDiscountDataRequest"
+        },
+        "type": {
+          "type": "string",
+          "description": "Specifies how to obtain the discount. One of: `COUPON`."
+        }
+      }
+    },
+    "CouponDiscountDataRequest": {
+      "required": [
+        "id"
+      ],
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "id of the Coupon object."
+        }
+      },
+      "description": "Coupon to redeem into a discount for this resource. Only required when `type` = `COUPON`."
+    },
+    "Billing_HostedCompletionPage": {
+      "required": [
+        "display"
+      ],
+      "type": "object",
+      "properties": {
+        "display": {
+          "type": "boolean",
+          "description": "Whether to display the Airwallex-hosted completion page after checkout is completed and before the customer is redirected to `success_url`."
+        }
+      },
+      "description": "Configuration for the Airwallex-hosted completion page. Only applicable when `ui_mode` is `HOSTED`."
+    },
+    "Billing_InvoiceDataResponse": {
+      "type": "object",
+      "properties": {
+        "days_until_due": {
+          "type": "integer",
+          "description": "Number of days from invoice finalization until payment is due.",
+          "format": "int32"
+        },
+        "default_tax_percent": {
+          "type": "number",
+          "description": "The tax rate between 0 and 100(%) to be applied to invoices to be generated. The tax will be exclusive. Defaults to 0.",
+          "maximum": 100,
+          "minimum": 0
+        },
+        "due_at": {
+          "type": "string",
+          "description": "Due date set by the merchant for this invoice, if any."
+        },
+        "memo": {
+          "type": "string",
+          "description": "String used for merchants to share a custom message to their customers. Referenced as memo or invoice note in Webapp.",
+          "maxLength": 200,
+          "minLength": 0
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+        }
+      },
+      "description": "The settings of invoice to be passed to the invoice creation upon completion of the Billing Checkout in `PAYMENT` mode."
+    },
+    "CheckoutLineItem": {
+      "required": [
+        "discounts"
+      ],
+      "type": "object",
+      "properties": {
+        "discounts": {
+          "type": "array",
+          "description": "List of discounts to be applied to the line items. Discounts of line items are applied before subscription or invoice discounts. Currently, only one element is supported.",
+          "items": {
+            "$ref": "#/components/schemas/DiscountInstruction"
+          },
+          "maxItems": 1,
+          "minItems": 0
+        },
+        "price_id": {
+          "type": "string",
+          "description": "ID of the [Price](/docs/api/billing/prices) object. Mutually exclusive with `rate_card_id`."
+        },
+        "quantity": {
+          "type": "integer",
+          "description": "The quantity of the line item being purchased.",
+          "format": "int32",
+          "minimum": 1
+        },
+        "rate_card_id": {
+          "type": "string",
+          "description": "ID of the [Rate Card](/docs/api/billing/rate_cards) object. Mutually exclusive with `price_id`."
+        },
+        "rate_card_version": {
+          "type": "integer",
+          "description": "Pinned Rate Card version number. Present when `rate_card_id` is set.",
+          "format": "int32"
+        },
+        "tax_percent": {
+          "type": "number",
+          "description": "The effective tax percent of this line item.",
+          "maximum": 100,
+          "minimum": 0
+        }
+      }
+    },
+    "CheckoutPaymentOptionsResponse": {
+      "type": "object",
+      "properties": {
+        "pay_by_invoice_enabled": {
+          "type": "boolean",
+          "description": "Enables the option to \"Request an invoice\" for payment. After the customer confirms to pay with this option, the status of Billing Checkout will transit to COMPLETED, and an invoice will be generated. The invoice will inherit the payment_options of this Billing Checkout, and other configurations in invoice_data. Only applicable when mode is `PAYMENT`, and the type of the customer is `BUSINESS`."
+        },
+        "payment_method_save": {
+          "$ref": "#/components/schemas/CheckoutPaymentMethodSave",
+          "description": "Settings for saving this payment method for future use."
+        },
+        "payment_method_types": {
+          "type": "array",
+          "description": "Specify which payment methods to display on the hosted checkout page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the hosted checkout page.  \nPossible enum values when mode is `SUBSCRIPTION`: `card`, `applepay`, `googlepay`, `alipaycn`, `alipayhk`, `dana`, `gcash`, `kakaopay`, `klarna`, `rabbit_line_pay`, `tng`, `truemoney`.  \nPossible enum values when mode is `PAYMENT`: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`.  \nPossible enum values when mode is `SETUP`: `card`.",
+          "items": {
+            "type": "string",
+            "description": "Specify which payment methods to display on the hosted checkout page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the hosted checkout page.  \nPossible enum values when mode is `SUBSCRIPTION`: `card`, `applepay`, `googlepay`, `alipaycn`, `alipayhk`, `dana`, `gcash`, `kakaopay`, `klarna`, `rabbit_line_pay`, `tng`, `truemoney`.  \nPossible enum values when mode is `PAYMENT`: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`.  \nPossible enum values when mode is `SETUP`: `card`."
+          }
+        }
+      },
+      "description": "Payment settings of this Billing Checkout."
+    },
+    "CheckoutPaymentMethodSave": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "Controls whether the payment method can be saved for future use. Possible values: `ENABLED`, `DISABLED`, or `COLLECT_CONSENT`.  \n`ENABLED`: The payment method will be saved for future use.  \n`DISABLED`: The payment method will not be saved.  \n`COLLECT_CONSENT`: The checkout UI asks the customer whether they want to save the payment method."
+        },
+        "next_triggered_by": {
+          "type": "string",
+          "description": "Indicates who will use the saved payment source to trigger future payments. One of `MERCHANT` or `CUSTOMER`.  \nIf `MERCHANT`, a Payment Source is created for future use. If `CUSTOMER`, the payment method is saved only with the payment provider."
+        }
+      },
+      "description": "Settings for saving this payment method for future use."
+    },
+    "SubscriptionData": {
+      "required": [
+        "days_until_due",
+        "recurring"
+      ],
+      "type": "object",
+      "properties": {
+        "days_until_due": {
+          "type": "integer",
+          "description": "Number of days from invoice finalization until payment is due. Defaults to `0`.",
+          "format": "int32"
+        },
+        "default_invoice_template": {
+          "$ref": "#/components/schemas/SubscriptionDefaultInvoiceTemplate",
+          "description": "Invoices for the Subscription will be created using the specified settings."
+        },
+        "default_tax_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number",
+          "description": "The tax rate between 0 and 100(%) to be applied to invoices to be generated. The tax will be exclusive. Defaults to 0."
+        },
+        "duration": {
+          "$ref": "#/components/schemas/SubscriptionDuration",
+          "description": "The total duration of the subscription."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "recurring": {
+          "$ref": "#/components/schemas/SubscriptionRecurring",
+          "description": "The billing cycle for recurring charges."
+        },
+        "starts_at": {
+          "type": "string",
+          "description": "Time when the subscription started or scheduled to start. Defaults to start immediately after creation."
+        },
+        "trial_ends_at": {
+          "type": "string",
+          "description": "The end time of the trial if applicable."
+        }
+      },
+      "description": "The settings of subscription to be passed to the subscription creation upon completion of the Billing Checkout in `SUBSCRIPTION` mode."
+    },
+    "SubscriptionDefaultInvoiceTemplate": {
+      "type": "object",
+      "properties": {
+        "invoice_memo": {
+          "type": "string",
+          "description": "Memo to be used for the invoices that are generated by this Subscription."
+        }
+      },
+      "description": "Invoices for the Subscription will be created using the specified settings."
+    },
+    "SubscriptionDuration": {
+      "required": [
+        "period",
+        "period_unit"
+      ],
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "The number of period units.",
+          "format": "int32",
+          "minimum": 1
+        },
+        "period_unit": {
+          "type": "string",
+          "description": "Specifies billing duration. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+        }
+      },
+      "description": "The total duration of the subscription."
+    },
+    "SubscriptionRecurring": {
+      "required": [
+        "period",
+        "period_unit"
+      ],
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `period=2` and `period_unit=MONTH`.",
+          "format": "int32"
+        },
+        "period_unit": {
+          "type": "string",
+          "description": "Specifies billing frequency. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+        }
+      },
+      "description": "The billing cycle for recurring charges."
+    }
+  }
+}
