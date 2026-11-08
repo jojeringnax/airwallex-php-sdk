@@ -63,13 +63,32 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       const request = route.request();
       let action = policy.decide(request.url(), request.method(), request.resourceType());
       let renderFrame = false;
-      if (render && request.method() === 'GET' && request.resourceType() === 'document'
-          && request.url() === new URL(fixtureOrigin === null ? '/' : '/render-frame', initial).href
-          && mainPage && request.frame().parentFrame() === mainPage.mainFrame()) {
-        const element = await request.frame().frameElement();
-        try { renderFrame = policy.claimRenderFrame(await element.getAttribute('src')); }
-        finally { await element.dispose(); }
-        action = renderFrame ? 'allow' : 'block';
+      if (render && request.resourceType() === 'document' && action === 'block') {
+        policy.noteRenderCheck('document_candidates');
+        if (request.method() !== 'GET') {
+          policy.noteRenderCheck('method_mismatch');
+        } else {
+          let frame, parent;
+          try { frame = request.frame(); parent = frame.parentFrame(); }
+          catch { frame = null; policy.noteRenderCheck('frame_unavailable'); }
+          if (frame) {
+            if (!mainPage || parent !== mainPage.mainFrame()) {
+              policy.noteRenderCheck('parent_mismatch');
+            } else if (policy.renderRequestTarget(request.url())) {
+              let element;
+              try { element = await frame.frameElement(); }
+              catch { policy.noteRenderCheck('source_unavailable'); }
+              if (element) {
+                let source;
+                try { source = await element.getAttribute('src'); }
+                catch { policy.noteRenderCheck('source_unavailable'); }
+                finally { await element.dispose(); }
+                if (source !== undefined) renderFrame = policy.claimRenderFrame(source);
+              }
+              action = renderFrame ? 'allow' : 'block';
+            }
+          }
+        }
       }
       let payerFromMainPage = false;
       if (mainPage && ['xhr', 'fetch'].includes(request.resourceType())
@@ -127,6 +146,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         try {
           if (response.status() >= 300 && response.status() < 400) {
             counts.blocked_requests++;
+            if (renderFrame) policy.noteRenderCheck('document_redirect');
             await route.abort('blockedbyclient');
           } else {
             const body = await response.body();
@@ -135,6 +155,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
                 || (fixtureOrigin === null && (!body.includes('window.checkoutVersion="v2.56.0"')
                   || !body.includes('/static/js/vendor.61207a66.js')
                   || !body.includes('/static/js/checkout.d2f9eaef.js'))))) {
+              policy.noteRenderCheck('document_http_or_build_mismatch');
               throw new Error('The reviewed read-only frame document was not observed.');
             }
             const expected = policy.assetHash(request.url(), request.method(), request.resourceType());
@@ -148,7 +169,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
               else counts.verified_static_assets++;
             }
             await route.fulfill({ response, body });
-            if (renderFrame) counts.bound_render_frames++;
+            if (renderFrame) {
+              counts.bound_render_frames++;
+              policy.noteRenderCheck('fulfilled');
+            }
           }
         } finally { await response.dispose(); }
       } else {
@@ -202,7 +226,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await track(() => fs.rm(directory, { recursive: true, force: true }));
   }
   if (failed || result === undefined) throw new Error('Browser preflight failed safely.');
-  return { ...result, ...counts, proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...policy.renderEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 

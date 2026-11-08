@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { HostedPolicy, egressProxy, staticAssets, renderAssets, assetMatches } = require('./hosted-policy.cjs');
+const { HostedPolicy, egressProxy, staticAssets, renderAssets, renderCheckNames, assetMatches } = require('./hosted-policy.cjs');
 const { createHash } = require('node:crypto');
 const initial = 'https://checkout.airwallex.com/pay?s=SYNTHETIC_SECRET';
 
@@ -193,15 +193,24 @@ function fixtureModule(fault) {
         getByText() { return { first() { return { async isVisible() { return false; } }; } }; },
         async goto(url) {
           const payer = fault.startsWith('payer_');
-          const target = payer ? 'https://checkout.sandbox.airwallex.com/billing/payer-web-api/checkout?ts=1794130000000' : fault === 'abort' ? 'https://unknown.invalid/SYNTHETIC_PRIVATE_URL'
+          const target = fault.startsWith('render_')
+            ? 'https://checkout.airwallex.com/' + (fault === 'render_target' ? '?PRIVATE' : '') : payer ? 'https://checkout.sandbox.airwallex.com/billing/payer-web-api/checkout?ts=1794130000000' : fault === 'abort' ? 'https://unknown.invalid/SYNTHETIC_PRIVATE_URL'
             : fault === 'asset_integrity' ? 'https://checkout.airwallex.com/pay/static/v2.286.0/js/main.ddc4fcf3b752ddbd5f14.js' : url;
           await routeHandler({
-            request() { return { url: () => target, method: () => 'GET', frame: () => mainFrame,
+            request() { return { url: () => target, method: () => 'GET', frame: () => {
+                if (fault === 'render_frame_unavailable') fail();
+                if (!fault.startsWith('render_')) return mainFrame;
+                return { parentFrame: () => fault === 'render_parent' ? {} : mainFrame, async frameElement() {
+                  if (fault === 'render_source_unavailable') fail();
+                  return { async getAttribute() { if (fault === 'render_attribute_unavailable') fail(); return 'PRIVATE_SRC'; },
+                    async dispose() { if (fault === 'render_dispose') fail(); } };
+                } };
+              },
               resourceType: () => payer ? 'fetch' : fault === 'asset_integrity' ? 'script' : 'document',
               headers: () => ({ referer: 'SYNTHETIC_PRIVATE_URL', authorization: 'Bearer ' + new URL(url).searchParams.get('s') }), postData: () => null }; },
             async abort() { if (fault === 'abort' || fault === 'payer_abort') fail(); },
             async fetch(options) {
-              if (fault === 'fetch' || fault === 'payer_fetch' || options.maxRedirects !== 0 || options.maxRetries !== 0
+              if (fault === 'fetch' || fault === 'payer_fetch' || fault.startsWith('render_') || options.maxRedirects !== 0 || options.maxRetries !== 0
                   || 'referer' in options.headers || (payer && options.headers.cookie !== '')) fail();
               return { status: () => fault.startsWith('payer_http_') ? Number(fault.slice(11)) : 200, body: async () => { if (fault === 'payer_body') fail(); return Buffer.from(fault === 'payer_render_fulfill'
                   ? JSON.stringify({ mode: 'SETUP', currency: 'EUR' }) : '<!doctype html>'); },
@@ -232,7 +241,9 @@ function fixtureModule(fault) {
 }
 
 for (const fault of ['none', 'abort', 'fetch', 'fulfill', 'dispose', 'websocket', 'dialog', 'context_close',
-  'browser_close', 'asset_integrity', 'payer_fetch', 'payer_body', 'payer_dispose', 'payer_abort', 'payer_http_401', 'payer_http_403', 'payer_http_404', 'payer_http_503', 'payer_render_fulfill']) {
+  'browser_close', 'asset_integrity', 'payer_fetch', 'payer_body', 'payer_dispose', 'payer_abort', 'payer_http_401', 'payer_http_403', 'payer_http_404', 'payer_http_503', 'payer_render_fulfill',
+  'render_frame_unavailable', 'render_parent', 'render_target', 'render_source_unavailable',
+  'render_attribute_unavailable', 'render_dispose']) {
   test(`async actions and cleanup have a fixed private failure boundary: ${fault}`, () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-browser-module-fixture-'));
     try {
@@ -240,12 +251,21 @@ for (const fault of ['none', 'abort', 'fetch', 'fulfill', 'dispose', 'websocket'
       const child = spawnSync(process.execPath, [path.join(__dirname, 'hosted-browser.cjs'), directory],
         { input: JSON.stringify({ url: fault.startsWith('payer_')
           ? 'https://checkout.sandbox.airwallex.com/pay?s=' + sessionToken() : initial,
-          render: fault === 'payer_render_fulfill', expected: { checkout_id: 'SYNTHETIC_CHECKOUT', mode: 'SETUP', currency: 'EUR' } }), encoding: 'utf8', timeout: 4000 });
+          render: fault === 'payer_render_fulfill' || fault.startsWith('render_'), expected: { checkout_id: 'SYNTHETIC_CHECKOUT', mode: 'SETUP', currency: 'EUR' } }), encoding: 'utf8', timeout: 4000 });
       assert.equal(child.stderr, '');
       assert.doesNotMatch(child.stdout, /SYNTHETIC_PRIVATE_URL|SYNTHETIC_SECRET/u);
       const output = JSON.parse(child.stdout);
       assert.equal(output.card_entry_enabled, false);
-      if (fault === 'none' || fault.startsWith('payer_http_')) {
+      if (fault === 'none' || fault.startsWith('payer_http_') || (fault.startsWith('render_') && fault !== 'render_dispose')) {
+        if (fault.startsWith('render_')) {
+          const label = { render_frame_unavailable: 'frame_unavailable', render_parent: 'parent_mismatch',
+            render_target: 'request_path_or_query_mismatch', render_source_unavailable: 'source_unavailable',
+            render_attribute_unavailable: 'source_unavailable' }[fault];
+          assert.equal(output.render_frame_checks.document_candidates, 1);
+          assert.equal(output.render_frame_checks[label], 1);
+          assert.equal(output.render_frame_checks.qualified, 0);
+          assert.equal(output.blocked_requests, 1);
+        }
         assert.equal(child.status, 0);
         if (fault.startsWith('payer_http_')) {
           assert.equal(output.payer_http_status, Number(fault.slice(11)));
@@ -441,4 +461,70 @@ test('render scripts are a closed byte-pinned Sandbox graph with only the source
     '/static/js/unknown.chunk.js', '/assets/unknown.js']) {
     for (const method of ['GET', 'POST']) assert.equal(policy.decide('https://checkout.sandbox.airwallex.com' + pathname, method, 'fetch'), 'block');
   }
+});
+
+
+test('frame diagnostics identify fixed local rejections without keeping source/options/identity values', () => {
+  const cases = [
+    [null, 'invalid_source_url'],
+    [privateFrame().replace('checkout.sandbox.', 'checkout.'), 'source_origin_mismatch'],
+    [privateFrame().replace('/#/elements/dropin', '/pay#/elements/dropin'), 'source_path_or_query_mismatch'],
+    [privateFrame().replace('/#/elements/dropin', '/?PRIVATE=SECRET#/elements/dropin'), 'source_path_or_query_mismatch'],
+    [privateFrame().replace('/#/elements/dropin', '/#/elements/PRIVATE'), 'fragment_route_mismatch'],
+    [privateFrame() + '&PRIVATE=SECRET', 'fragment_keys_mismatch'],
+    [privateFrame().replace('v2.56.0', 'PRIVATE_BUILD'), 'build_mismatch'],
+    [privateFrame().replace('lang=en', 'lang=PRIVATE_LANG'), 'language_mismatch'],
+    [privateFrame().replace(/options=[^&]*/u, 'options=%7BPRIVATE'), 'invalid_options'],
+    [privateFrame({ mode: 'PRIVATE_MODE' }), 'mode_mismatch'],
+    [privateFrame({ currency: 'PRIVATE_CURRENCY' }), 'currency_mismatch'],
+    [privateFrame({ client_secret: 'PRIVATE_OTHER_SECRET' }), 'secret_mismatch'],
+    [privateFrame({ customer_id: 'PRIVATE_OTHER_CUSTOMER' }), 'customer_mismatch'],
+    [privateFrame({ intent_id: 'PRIVATE_OTHER_INTENT' }), 'intent_mismatch'],
+  ];
+  for (const [source, reason] of cases) {
+    const policy = renderingPolicy(); policy.markPayerDelivered();
+    assert.equal(policy.claimRenderFrame(source), false);
+    const checks = policy.renderEvidence().render_frame_checks;
+    assert.deepEqual(Object.keys(checks), renderCheckNames);
+    assert.deepEqual(Object.entries(checks).filter(([, n]) => n !== 0), [[reason, 1]]);
+    assert.doesNotMatch(JSON.stringify(checks), /PRIVATE/u);
+    assert.equal(policy.decide('https://checkout.sandbox.airwallex.com/billing/payer-web-api/checkout/collect', 'POST', 'fetch'), 'block');
+  }
+});
+
+test('frame evidence distinguishes unmet prerequisites, unavailable observations and one-time qualification', () => {
+  assert.deepEqual(boundPolicy().renderEvidence(), {});
+  const policy = renderingPolicy();
+  assert.equal(policy.claimRenderFrame(privateFrame()), false);
+  assert.equal(policy.renderEvidence().render_frame_checks.payer_not_delivered, 1);
+  policy.markPayerDelivered();
+  assert.equal(policy.renderRequestTarget('https://unknown.invalid/PRIVATE'), false);
+  assert.equal(policy.renderRequestTarget('https://checkout.sandbox.airwallex.com/?PRIVATE'), false);
+  assert.equal(policy.renderRequestTarget('https://checkout.sandbox.airwallex.com/'), true);
+  policy.noteRenderCheck('frame_unavailable'); policy.noteRenderCheck('parent_mismatch');
+  policy.noteRenderCheck('source_unavailable'); policy.noteRenderCheck('PRIVATE_LABEL');
+  assert.equal(policy.claimRenderFrame(privateFrame()), true);
+  assert.equal(policy.claimRenderFrame(privateFrame()), false);
+  const checks = policy.renderEvidence().render_frame_checks;
+  for (const key of ['request_origin_mismatch', 'request_path_or_query_mismatch', 'frame_unavailable',
+    'parent_mismatch', 'source_unavailable', 'qualified', 'limit_reached']) assert.equal(checks[key], 1);
+  assert.equal(Object.hasOwn(checks, 'PRIVATE_LABEL'), false);
+  checks.customer_mismatch = 'PRIVATE_VALUE';
+  assert.equal(policy.renderEvidence().render_frame_checks.customer_mismatch, 0); // Detached safe snapshot.
+  const missing = renderingPolicy();
+  missing.observePayer(Buffer.from('{"mode":"SETUP","currency":"EUR"}')); missing.markPayerDelivered();
+  assert.equal(missing.claimRenderFrame(privateFrame()), false);
+  assert.equal(missing.renderEvidence().render_frame_checks.reference_unavailable, 1);
+  const shared = boundPolicy('https://checkout.airwallex.com', undefined, undefined, true);
+  assert.equal(shared.claimRenderFrame(privateFrame()), false);
+  assert.equal(shared.renderEvidence().render_frame_checks.scope_unverified, 1);
+});
+
+
+test('fixed frame diagnostic counters saturate without accepting arbitrary labels or changing authority', () => {
+  const policy = renderingPolicy();
+  for (let n = 0; n < 1000005; n++) policy.noteRenderCheck('parent_mismatch');
+  assert.equal(policy.renderEvidence().render_frame_checks.parent_mismatch, 1000000);
+  assert.equal(policy.allowsAuthority('api.airwallex.com', 443), false);
+  assert.equal(policy.decide('https://checkout.sandbox.airwallex.com/api/v1/pa/PRIVATE', 'GET', 'fetch'), 'block');
 });
