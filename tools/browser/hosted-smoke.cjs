@@ -5,9 +5,11 @@ const path = require('node:path');
 const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
-  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0 };
+  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0 };
   let tamper = false;
   let payerReply = 'matched';
+  let tamperController = false;
+  let redirectController = false;
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
       case '/page':
@@ -26,9 +28,20 @@ async function smoke(playwright) {
           const headers = { Authorization: 'Bearer ' + new URL(location.href).searchParams.get('s') };
           const getter = '/billing/payer-web-api/checkout?ts=' + Date.now();
           window.payerDelivered = false;
-          fetch(getter, { headers }).then(r => r.json()).then(data => {
+          const bootstrap = new URL(location.href).searchParams.has('render') ? new Promise((resolve, reject) => {
+            const preload = document.createElement('link'); preload.rel = 'modulepreload';
+            preload.href = 'https://static.airwallex.com/widgets/sdk-controller/sdk/v1/index.js?ts=' + Date.now();
+            document.head.append(preload); // The public loader's production performance hint remains blocked.
+            const module = document.createElement('script'); module.type = 'module';
+            module.src = '/controller-sdk.js?ts=' + Date.now();
+            module.onload = resolve; module.onerror = reject; document.head.append(module);
+          }) : Promise.resolve();
+          bootstrap.catch(() => {});
+          fetch(getter, { headers }).then(r => r.json()).then(async data => {
             window.payerDelivered = true;
             if (new URL(location.href).searchParams.get('render')) {
+              await bootstrap;
+              if (window.fixtureControllerReady !== true) throw new Error('Fixture bootstrap missing.');
               const options = { mode: 'recurring', currency: data.currency,
                 customer_id: data.setupModeDetails.billingCustomerExternalId,
                 client_secret: data.setupModeDetails.externalCustomerClientSecret };
@@ -67,6 +80,19 @@ async function smoke(playwright) {
               currency: payerReply === 'wrong_currency' ? 'USD' : 'EUR',
               setupModeDetails: { billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER',
                 externalCustomerClientSecret: 'PRIVATE_CLIENT_SECRET' } }));
+        }
+        break;
+      case '/controller-sdk.js':
+        hits.controller++;
+        if (request.method !== 'GET' || !/^\?ts=[0-9]{13}$/u.test(new URL(request.url, 'http://fixture.test').search)
+            || request.headers.authorization || request.headers.referer || request.headers.cookie) {
+          hits.forbidden++; response.writeHead(500).end();
+        } else if (redirectController) {
+          response.writeHead(302, { Location: '/forbidden?PRIVATE' }).end();
+        } else {
+          response.writeHead(200, { 'Content-Type': 'application/javascript', 'Access-Control-Allow-Origin': '*',
+            'Set-Cookie': 'synthetic_controller=PRIVATE_CONTROLLER_COOKIE; Path=/' }).end(tamperController
+            ? 'window.fixtureControllerReady = "PRIVATE_ALTERED";' : 'window.fixtureControllerReady = true;');
         }
         break;
       case '/render-frame':
@@ -191,10 +217,20 @@ async function smoke(playwright) {
     }
     payerReply = 'matched';
     const renderHits = hits.render;
-    const rendered = await inspect(origin + '/payer-page?s=' + token + '&render=1', playwright, origin, async page => {
+    const rendered = await inspect(origin + '/payer-page?s=' + token + '&render=1', playwright, origin, async (page, context) => {
       if (await page.evaluate(() => window.payerDelivered) !== true) throw new Error('Local render delivery failed.');
+      if ((await context.cookies()).some(cookie => cookie.name === 'synthetic_controller')) {
+        throw new Error('Local public module cookie was retained.');
+      }
       const frame = page.frames().find(candidate => candidate !== page.mainFrame());
       if (!frame || await frame.evaluate(() => window.fixtureRendered) !== true) throw new Error('Local render frame failed.');
+      await page.evaluate(async () => {
+        await new Promise(resolve => {
+          const repeated = document.createElement('script'); repeated.type = 'module';
+          repeated.src = '/controller-sdk.js?ts=' + Date.now();
+          repeated.onload = () => resolve(); repeated.onerror = () => resolve(); document.head.append(repeated);
+        });
+      });
       await frame.evaluate(async () => {
         await Promise.all([
           fetch('/api/v1/pa/payment_consents/create', { method: 'POST' }).catch(() => {}),
@@ -203,6 +239,9 @@ async function smoke(playwright) {
         ]);
       });
     }, expected, true);
+    if (rendered.controller_asset_requests !== 1 || rendered.verified_controller_assets !== 1
+        || rendered.controller_http_status !== 200 || rendered.controller_replays_blocked !== 1
+        || hits.controller !== 1) throw new Error('Local public controller boundary failed.');
     if (!rendered.payer_payload_delivered || rendered.bound_render_frames !== 1 || rendered.verified_render_assets !== 1
         || rendered.financial_routing_verified || hits.render !== renderHits + 1 || hits.forbidden !== 0
         || rendered.proxy_external_connections !== 0 || rendered.render_frame_checks.qualified !== 1
@@ -214,9 +253,24 @@ async function smoke(playwright) {
         || wrongFrame.render_frame_checks.customer_mismatch !== 1 || wrongFrame.render_frame_checks.qualified !== 0) {
       throw new Error('Local mismatched render frame escaped.');
     }
+    // Both failure probes keep the payer mismatched, so no private body or frame can be delivered.
+    payerReply = 'wrong_mode'; tamperController = true;
+    let controllerRejected = false;
+    try { await inspect(origin + '/payer-page?s=' + token + '&render=1', playwright, origin, null, expected, true); }
+    catch (error) { controllerRejected = error.message === 'Browser preflight failed safely.'; }
+    if (!controllerRejected || hits.forbidden !== 0) throw new Error('Local altered controller executed.');
+    tamperController = false; redirectController = true;
+    const redirect = await inspect(origin + '/payer-page?s=' + token + '&render=1',
+      playwright, origin, null, expected, true);
+    if (redirect.controller_asset_requests !== 1 || redirect.verified_controller_assets !== 0
+        || redirect.controller_http_status !== 302
+        || redirect.bound_render_frames !== 0 || redirect.payer_payload_delivered || hits.forbidden !== 0
+        || redirect.proxy_external_connections !== 0) throw new Error('Local controller redirect escaped.');
     return { ...result, deny_before_send: true, fixture_forbidden_hits: 0, fixture_websocket_hits: 0,
       altered_script_blocked: true, payer_binding_checks: payerChecks, payer_payloads_delivered: 0,
-      payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true };
+      payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true,
+      public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
+      altered_controller_blocked: true, production_preload_denied: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

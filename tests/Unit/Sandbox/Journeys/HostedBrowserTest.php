@@ -229,6 +229,26 @@ final class HostedBrowserTest extends TestCase
         HostedBrowser::sanitize($evidence);
     }
 
+    public function testPublicControllerEvidenceIsOnlyBoundedCounts(): void
+    {
+        $base = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false];
+        $safe = HostedBrowser::sanitize($base + ['controller_asset_requests' => 1,
+            'verified_controller_assets' => 1, 'controller_replays_blocked' => 2,
+            'controller_http_status' => 200, 'controller_url' => 'PRIVATE_URL']);
+        self::assertSame(1, $safe['controller_asset_requests']);
+        self::assertSame(1, $safe['verified_controller_assets']);
+        self::assertSame(2, $safe['controller_replays_blocked']);
+        self::assertSame(200, $safe['controller_http_status']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+        foreach ([-1, 1000001, 'PRIVATE_VALUE', 1.0] as $invalid) {
+            $safe = HostedBrowser::sanitize($base + ['verified_controller_assets' => $invalid,
+                'controller_http_status' => $invalid]);
+            self::assertArrayNotHasKey('verified_controller_assets', $safe);
+            self::assertArrayNotHasKey('controller_http_status', $safe);
+        }
+    }
+
     public function testRenderDiagnosticsRetainOnlyFixedBoundedCountsWithoutPrivateKeysOrValues(): void
     {
         $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',

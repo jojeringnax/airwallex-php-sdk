@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { HostedPolicy, egressProxy, staticAssets, renderAssets, renderCheckNames, assetMatches } = require('./hosted-policy.cjs');
+const { HostedPolicy, egressProxy, staticAssets, renderAssets, controllerAsset, renderCheckNames, assetMatches } = require('./hosted-policy.cjs');
 const { createHash } = require('node:crypto');
 const initial = 'https://checkout.airwallex.com/pay?s=SYNTHETIC_SECRET';
 
@@ -183,7 +183,30 @@ function fixtureModule(fault) {
     'use strict';
     const fault = ${JSON.stringify(fault)};
     const fail = () => { throw new Error('SYNTHETIC_PRIVATE_URL'); };
-    module.exports = { chromium: { async launch(options) {
+    if (fault.startsWith('controller_')) {
+      const timeout = globalThis.setTimeout;
+      globalThis.setTimeout = (callback, delay, ...args) => timeout(callback, delay === 5000 ? 1 : delay, ...args);
+    }
+    const fixture = { created: false, disposed: false, gets: 0 };
+    module.exports = { fixture, request: { async newContext(options) {
+      if (fault === 'controller_context' || options.ignoreHTTPSErrors !== false || !options.proxy) fail();
+      if (fault === 'controller_delayed_construction') await new Promise(resolve => setTimeout(resolve, 30));
+      fixture.created = true;
+      let calls = 0;
+      return { async get(url, options) {
+        fixture.gets++;
+        if (++calls !== 1 || !url.startsWith('http://127.0.0.1:54321/controller-sdk.js?ts=')
+          || JSON.stringify(options.headers) !== JSON.stringify({ accept: '*/*', cookie: '', referer: '' })
+          || options.maxRedirects !== 0 || options.maxRetries !== 0 || fault === 'controller_get') fail();
+        return { status: () => fault === 'controller_redirect' ? 302 : fault === 'controller_http_rejected' ? 503 : 200,
+          async body() { if (fault === 'controller_body') fail();
+            if (fault === 'controller_expired_integrity') Date.now = () => 4070908800001;
+            return Buffer.from(['controller_integrity', 'controller_expired_integrity'].includes(fault) ? 'SYNTHETIC_PRIVATE_BODY' : 'window.fixtureControllerReady = true;'); },
+          headers() { if (fault === 'controller_headers') fail(); return { 'content-type': 'application/javascript',
+            'access-control-allow-origin': '*', 'Set-Cookie': 'SYNTHETIC_PRIVATE_COOKIE' }; },
+          async dispose() { if (fault === 'controller_response_dispose') fail(); } };
+      }, async dispose() { fixture.disposed = true; if (fault === 'controller_context_dispose') fail(); } };
+    } }, chromium: { async launch(options) {
       if (!options.headless || !options.proxy || !options.args.includes('--disable-quic')) fail();
       let routeHandler, websocketHandler, pageHandler, dialogHandler;
       const mainFrame = {};
@@ -193,10 +216,10 @@ function fixtureModule(fault) {
         getByText() { return { first() { return { async isVisible() { return false; } }; } }; },
         async goto(url) {
           const payer = fault.startsWith('payer_');
-          const target = fault.startsWith('render_')
+          const target = fault.startsWith('controller_') ? new URL('/controller-sdk.js?ts=1794130000000', url).href : fault.startsWith('render_')
             ? 'https://checkout.airwallex.com/' + (fault === 'render_target' ? '?PRIVATE' : '') : payer ? 'https://checkout.sandbox.airwallex.com/billing/payer-web-api/checkout?ts=1794130000000' : fault === 'abort' ? 'https://unknown.invalid/SYNTHETIC_PRIVATE_URL'
             : fault === 'asset_integrity' ? 'https://checkout.airwallex.com/pay/static/v2.286.0/js/main.ddc4fcf3b752ddbd5f14.js' : url;
-          await routeHandler({
+          const routed = routeHandler({
             request() { return { url: () => target, method: () => 'GET', frame: () => {
                 if (fault === 'render_frame_unavailable') fail();
                 if (!fault.startsWith('render_')) return mainFrame;
@@ -206,7 +229,7 @@ function fixtureModule(fault) {
                     async dispose() { if (fault === 'render_dispose') fail(); } };
                 } };
               },
-              resourceType: () => payer ? 'fetch' : fault === 'asset_integrity' ? 'script' : 'document',
+              resourceType: () => fault.startsWith('controller_') ? 'script' : payer ? 'fetch' : fault === 'asset_integrity' ? 'script' : 'document',
               headers: () => ({ referer: 'SYNTHETIC_PRIVATE_URL', authorization: 'Bearer ' + new URL(url).searchParams.get('s') }), postData: () => null }; },
             async abort() { if (fault === 'abort' || fault === 'payer_abort') fail(); },
             async fetch(options) {
@@ -216,8 +239,14 @@ function fixtureModule(fault) {
                   ? JSON.stringify({ mode: 'SETUP', currency: 'EUR' }) : '<!doctype html>'); },
                 async dispose() { if (fault === 'dispose' || fault === 'payer_dispose') fail(); } };
             },
-            async fulfill() { if (fault === 'fulfill' || fault === 'payer_render_fulfill') fail(); },
+            async fulfill(options) {
+              if (fault === 'fulfill' || fault === 'payer_render_fulfill' || fault === 'controller_fulfill') fail();
+              if (fault.startsWith('controller_') && (Object.keys(options.headers).some(key => key.toLowerCase() === 'set-cookie')
+                  || options.headers['access-control-allow-origin'] !== '*')) fail();
+            },
           });
+          if (fault === 'controller_delayed_construction') { await Promise.resolve(); fail(); }
+          await routed;
           if (fault === 'websocket') await websocketHandler({ async close() { fail(); } });
           if (fault === 'dialog') dialogHandler({ async dismiss() { fail(); } });
         },
@@ -528,3 +557,88 @@ test('fixed frame diagnostic counters saturate without accepting arbitrary label
   assert.equal(policy.allowsAuthority('api.airwallex.com', 443), false);
   assert.equal(policy.decide('https://checkout.sandbox.airwallex.com/api/v1/pa/PRIVATE', 'GET', 'fetch'), 'block');
 });
+
+
+test('public controller bootstrap is pinned and available before private payer delivery only for explicit Sandbox render', () => {
+  const target = controllerAsset.origin + controllerAsset.pathname + '?ts=1794130000000';
+  const policy = boundPolicy(undefined, undefined, undefined, true);
+  assert.equal(policy.bindingEvidence().payer_payload_delivered, false);
+  assert.equal(policy.bindingEvidence().payer_get_attempted, false);
+  assert.equal(policy.assetHash(target, 'GET', 'script'), controllerAsset.sha256);
+  assert.equal(policy.decide(target, 'GET', 'script'), 'allow');
+  assert.equal(policy.allowsAuthority('static.sandbox.airwallex.com', 443), true);
+  assert.equal(policy.claimControllerRequest(target, 'GET', 'script'), true);
+  assert.equal(policy.claimControllerRequest(target.replace('0000000', '0000001'), 'GET', 'script'), false);
+  assert.equal(policy.mayDeliverPayer(), false);
+  assert.equal(policy.claimRenderFrame(privateFrame()), false);
+  assert.equal(policy.bindingEvidence().financial_routing_verified, false);
+  for (const denied of [boundPolicy(), boundPolicy('https://checkout.airwallex.com', undefined, undefined, true),
+    boundPolicy(undefined, sessionToken({ resource_id: 'checkout:OTHER' }), undefined, true), boundPolicy(undefined, sessionToken({ exp: 1 }), undefined, true)]) {
+    assert.equal(denied.assetHash(target, 'GET', 'script'), null);
+    assert.equal(denied.claimControllerRequest(target, 'GET', 'script'), false);
+    assert.equal(denied.allowsAuthority('static.sandbox.airwallex.com', 443), false);
+  }
+});
+
+test('controller URI permission never authorizes another widget, origin, query, method or resource kind', () => {
+  const policy = boundPolicy(undefined, undefined, undefined, true);
+  const target = controllerAsset.origin + controllerAsset.pathname;
+  const good = target + '?ts=1794130000000';
+  for (const value of [target, good + '#', good + '&ts=1794130000001', good + '&PRIVATE=VALUE',
+    target + '?ts=123', good.replace('/sdk/v1/', '/sdk/v2/'), good.replace('sdk-controller', 'checkout'),
+    good.replace('static.sandbox.', 'static.'), good.replace('static.sandbox.', 'static-demo.'),
+    good.replace('static.sandbox.airwallex.com', 'static.sandbox.airwallex.com.evil.invalid'),
+    good.replace('https:', 'http:'), good.replace('.com/', '.com:443/'), good.replace('https://', 'https://PRIVATE@')]) {
+    assert.equal(policy.decide(value, 'GET', 'script'), 'block');
+    assert.equal(policy.controllerHash(value, 'GET', 'script'), null);
+  }
+  assert.equal(policy.decide(good, 'POST', 'script'), 'block');
+  for (const kind of ['fetch', 'xhr', 'document', 'stylesheet', 'other']) assert.equal(policy.decide(good, 'GET', kind), 'block');
+  for (const pathname of ['/api/v1/pa/config', '/widget/auth/exchangeToken', '/billing/payer-web-api/checkout']) {
+    for (const method of ['GET', 'POST']) assert.equal(policy.decide(controllerAsset.origin + pathname, method, 'fetch'), 'block');
+  }
+  for (const host of ['static.airwallex.com', 'static-demo.airwallex.com', 'o11y.sandbox.airwallex.com', 'api.sandbox.airwallex.com']) {
+    assert.equal(policy.allowsAuthority(host, 443), false);
+  }
+  assert.equal(policy.allowsAuthority('static.sandbox.airwallex.com', 444), false);
+});
+
+
+for (const fault of ['controller_success', 'controller_redirect', 'controller_http_rejected', 'controller_context', 'controller_get',
+  'controller_body', 'controller_headers', 'controller_integrity', 'controller_fulfill',
+  'controller_response_dispose', 'controller_context_dispose', 'controller_delayed_construction', 'controller_expired_integrity']) {
+  test(`isolated public controller headers/hash/cleanup retain the private failure boundary: ${fault}`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-controller-module-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, fixtureModule(fault));
+      const browserPath = path.join(__dirname, 'hosted-browser.cjs');
+      const driver = `const { inspect } = require(${JSON.stringify(browserPath)});
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', require(${JSON.stringify(modulePath)}),
+          'http://127.0.0.1:54321', null, ${JSON.stringify(expectedCheckout)}, true)
+          .then(result => process.stdout.write(JSON.stringify(result)))
+          .catch(() => {
+            const state = require(${JSON.stringify(modulePath)}).fixture;
+            const cleanupFailed = ${JSON.stringify(fault)} === 'controller_delayed_construction'
+              && (!state.created || !state.disposed || state.gets !== 0);
+            process.stdout.write(JSON.stringify({ result: cleanupFailed ? 'fixture_cleanup_failed' : 'fail',
+              reason: 'browser_preflight_failed', card_entry_enabled: false })); process.exitCode = 1; });`;
+      const child = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /SYNTHETIC_PRIVATE/u);
+      const result = JSON.parse(child.stdout);
+      if (['controller_success', 'controller_redirect', 'controller_http_rejected'].includes(fault)) {
+        assert.equal(child.status, 0);
+        assert.equal(result.controller_asset_requests, 1);
+        assert.equal(result.controller_http_status, fault === 'controller_success' ? 200 : fault === 'controller_redirect' ? 302 : 503);
+        assert.equal(result.verified_controller_assets, fault === 'controller_success' ? 1 : 0);
+        assert.equal(result.payer_payload_delivered, false);
+        assert.equal(result.bound_render_frames, 0);
+        assert.equal(result.proxy_external_connections, 0);
+      } else {
+        assert.equal(child.status, 1);
+        assert.deepEqual(result, { result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false });
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
