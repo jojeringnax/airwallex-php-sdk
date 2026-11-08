@@ -6,7 +6,7 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\BillingCatalogueCleanup
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-$options = getopt('', ['environment:', 'credentials-file:', 'prior-ledger:', 'state-dir:']);
+$options = getopt('', ['environment:', 'credentials-file:', 'prior-ledger:', 'state-dir:', 'mode:']);
 $result = BillingCatalogueCleanupCommand::run($options === false ? [] : $options);
 $result['cleanup_tool_sha256'] = hash_file('sha256', __FILE__);
 echo json_encode($result, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES) . "\n";

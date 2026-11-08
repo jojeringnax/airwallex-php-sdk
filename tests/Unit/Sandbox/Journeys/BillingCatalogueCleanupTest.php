@@ -353,4 +353,98 @@ final class BillingCatalogueCleanupTest extends TestCase
             self::assertStringNotContainsString('private-', json_encode($result, JSON_THROW_ON_ERROR));
         }
     }
+
+    private function recordSubscriptions(): void
+    {
+        $state = json_decode((string) file_get_contents($this->prior), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($state);
+        self::assertIsArray($state['resources']);
+        $state['resources']['subscriptions'] = ['fixture-subscription-0', 'fixture-subscription-1'];
+        file_put_contents($this->prior, json_encode($state, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return array<string,mixed> */
+    private function cancelledSubscription(int $index): array
+    {
+        return [
+            'id' => 'fixture-subscription-' . $index, 'billing_customer_id' => 'fixture-customer',
+            'metadata' => ['sdk_validation_run' => $this->marker], 'status' => 'CANCELLED', 'duration' => null,
+        ];
+    }
+
+    /** @return list<Response> */
+    private function cancelledResponses(): array
+    {
+        $base = $this->responses();
+        return [
+            $base[0], $base[1], self::response($this->cancelledSubscription(0)),
+            self::response($this->cancelledSubscription(1)), ...array_slice($base, 2),
+        ];
+    }
+
+    public function testExplicitModeReadsEveryRecordedCancelledSubscriptionBeforeAnyCatalogueWrite(): void
+    {
+        $this->recordSubscriptions();
+        [, $http] = $this->session($this->cancelledResponses());
+        $before = file_get_contents($this->prior);
+        $result = BillingCatalogueCleanupCommand::run([
+            'environment' => 'sandbox', 'credentials-file' => $this->directory . '/credentials',
+            'prior-ledger' => $this->prior, 'state-dir' => $this->directory,
+            'mode' => 'verify-cancelled-subscriptions',
+        ], $http);
+        self::assertSame('pass', $result['result']);
+        self::assertSame('verify-cancelled-subscriptions', $result['cleanup_mode']);
+        self::assertSame(2, $result['cancelled_subscriptions_verified']);
+        self::assertFalse($result['subscription_mutation_sent']);
+        self::assertFalse($result['subscription_reconciliation_complete']);
+        self::assertSame($before, file_get_contents($this->prior));
+        self::assertCount(13, $http->requests);
+        foreach (array_slice($http->requests, 1, 6) as $request) {
+            self::assertSame('GET', $request->getMethod());
+        }
+        foreach ($http->requests as $request) {
+            if (str_contains($request->getUri()->getPath(), '/subscriptions/')) {
+                self::assertSame('GET', $request->getMethod());
+            }
+        }
+        self::assertStringNotContainsString('fixture-', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function cancelledMismatches(): iterable
+    {
+        yield 'active state' => ['status', 'ACTIVE'];
+        yield 'unknown state' => ['status', 'FUTURE_STATE'];
+        yield 'missing state' => ['status', null];
+        yield 'wrong Customer' => ['billing_customer_id', 'other-private-customer'];
+        yield 'wrong marker' => ['metadata', ['sdk_validation_run' => 'other-run']];
+        yield 'wrong identity' => ['id', 'other-private-subscription'];
+        yield 'API failure' => ['http_status', 403];
+    }
+
+    #[DataProvider('cancelledMismatches')]
+    public function testAnyUnverifiedRecordedSubscriptionPreventsEveryCatalogueWrite(string $field, mixed $value): void
+    {
+        $this->recordSubscriptions();
+        $object = $this->cancelledSubscription(1);
+        $object[$field] = $value;
+        $responses = [];
+        foreach ($this->cancelledResponses() as $index => $response) {
+            $responses[] = $index === 3 ? ($field === 'http_status'
+                ? new Response(403, [], '{"code":"forbidden","message":"PRIVATE"}')
+                : self::response($object)) : $response;
+        }
+        [$session, $http] = $this->session($responses);
+        $ledger = RunLedger::create($session->contextFingerprint(), $this->directory);
+        $result = BillingCatalogueCleanup::load($this->prior, $session, true)->execute($session, $ledger);
+        self::assertSame('fail', $result['result']);
+        self::assertFalse($result['catalogue_verified']);
+        self::assertSame(0, $result['prices_archived']);
+        self::assertFalse($result['ambiguous_mutation']);
+        self::assertCount(4, $http->requests);
+        foreach (array_slice($http->requests, 1) as $request) {
+            self::assertSame('GET', $request->getMethod());
+        }
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+    }
 }

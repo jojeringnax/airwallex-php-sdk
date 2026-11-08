@@ -21,9 +21,11 @@ final class BillingCatalogueCleanupCommand
         $credentials = $options['credentials-file'] ?? null;
         $previous = $options['prior-ledger'] ?? null;
         $directory = $options['state-dir'] ?? null;
+        $mode = $options['mode'] ?? 'catalogue-only';
         if (
             ($options['environment'] ?? null) !== 'sandbox' || !is_string($credentials) || $credentials === ''
             || !is_string($previous) || $previous === '' || !is_string($directory) || $directory === ''
+            || !in_array($mode, ['catalogue-only', 'verify-cancelled-subscriptions'], true)
         ) {
             return $result;
         }
@@ -32,7 +34,11 @@ final class BillingCatalogueCleanupCommand
             $session = new SandboxSession(Configuration::load('sandbox', $credentials), 'organization', $httpClient);
             $result['context'] = 'organization';
             $result['context_fingerprint'] = $session->contextFingerprint();
-            $cleanup = BillingCatalogueCleanup::load($previous, $session); // Version/context precede authentication.
+            $cleanup = BillingCatalogueCleanup::load(
+                $previous,
+                $session,
+                verifyCancelledSubscriptions: $mode === 'verify-cancelled-subscriptions',
+            ); // Version/context precede authentication.
             $ledger = RunLedger::create($session->contextFingerprint(), $directory);
             $result = array_replace($result, $cleanup->execute($session, $ledger));
         } catch (\Throwable $error) {

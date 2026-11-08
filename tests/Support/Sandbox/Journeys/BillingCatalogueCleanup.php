@@ -15,7 +15,10 @@ final class BillingCatalogueCleanup
     private bool $used = false;
     private bool $ambiguous = false;
 
-    /** @param list<string> $prices */
+    /**
+     * @param list<string> $prices
+     * @param list<string> $subscriptions
+     */
     private function __construct(
         #[SensitiveParameter] private readonly string $customer,
         #[SensitiveParameter] private readonly string $product,
@@ -23,11 +26,16 @@ final class BillingCatalogueCleanup
         #[SensitiveParameter] private readonly string $marker,
         private readonly string $contextFingerprint,
         private readonly string $originalDigest,
+        #[SensitiveParameter] private readonly array $subscriptions,
+        private readonly bool $verifyCancelledSubscriptions,
     ) {
     }
 
-    public static function load(#[SensitiveParameter] string $path, SandboxSession $session): self
-    {
+    public static function load(
+        #[SensitiveParameter] string $path,
+        SandboxSession $session,
+        bool $verifyCancelledSubscriptions = false,
+    ): self {
         if (!$session->isOrganization() || !str_starts_with($path, '/')) {
             throw new RuntimeException('Cleanup requires organization context and an absolute private ledger.');
         }
@@ -64,9 +72,12 @@ final class BillingCatalogueCleanup
             || !is_array($resources) || !is_array($actions)
             || (!is_array($actions['create_future_trial'] ?? null)
                 && !is_array($actions['create_future_start'] ?? null))
-            || ($resources['subscriptions'] ?? []) !== []
         ) {
-            throw new RuntimeException('Cleanup requires a recorded lifecycle create without a returned Subscription.');
+            throw new RuntimeException('Cleanup requires a recorded lifecycle create and valid run inventory.');
+        }
+        $subscriptions = self::references($resources['subscriptions'] ?? []);
+        if (!$verifyCancelledSubscriptions && $subscriptions !== []) {
+            throw new RuntimeException('Default cleanup cannot handle recorded Subscriptions.');
         }
         return new self(
             self::references($resources['customers'] ?? null, 1)[0],
@@ -75,13 +86,15 @@ final class BillingCatalogueCleanup
             $marker,
             $session->contextFingerprint(),
             hash('sha256', $raw),
+            $subscriptions,
+            $verifyCancelledSubscriptions,
         );
     }
 
     /** @return list<non-empty-string> */
-    private static function references(mixed $value, int $count): array
+    private static function references(mixed $value, ?int $count = null): array
     {
-        if (!is_array($value) || !array_is_list($value) || count($value) !== $count) {
+        if (!is_array($value) || !array_is_list($value) || ($count !== null && count($value) !== $count)) {
             throw new RuntimeException('Original state has an unexpected catalogue inventory.');
         }
         $result = [];
@@ -111,11 +124,25 @@ final class BillingCatalogueCleanup
             'prices_archived' => 0, 'prices_already_inactive' => 0,
             'product_archived' => false, 'product_already_inactive' => false,
             'subscription_mutation_sent' => false, 'run_id' => $ledger->runId(),
+            'cleanup_mode' => $this->verifyCancelledSubscriptions
+                ? 'verify-cancelled-subscriptions' : 'catalogue-only',
+            'cancelled_subscriptions_verified' => 0,
         ] + $ledger->evidence();
         $stage = 'catalogue_preflight';
         try {
             $billing = $session->client->billing();
             $this->verify($billing->customers()->retrieve($this->customer), $this->customer, 'customers');
+            foreach ($this->subscriptions as $id) {
+                $subscription = $billing->subscriptions()->retrieve($id);
+                $this->verify($subscription, $id, 'subscriptions');
+                if (
+                    ($subscription['billing_customer_id'] ?? null) !== $this->customer
+                    || ($subscription['status'] ?? null) !== 'CANCELLED'
+                ) {
+                    throw new ProtocolException('Cleanup requires an owned recorded Subscription already cancelled.');
+                }
+                ++$result['cancelled_subscriptions_verified'];
+            }
             $product = $billing->products()->retrieve($this->product);
             $this->verify($product, $this->product, 'products');
             $prices = [];
@@ -162,7 +189,7 @@ final class BillingCatalogueCleanup
         if (
             ($object['id'] ?? null) !== $id || !is_array($metadata)
             || ($metadata['sdk_validation_run'] ?? null) !== $this->marker
-            || ($kind !== 'customers' && !is_bool($object['active'] ?? null))
+            || (in_array($kind, ['prices', 'products'], true) && !is_bool($object['active'] ?? null))
         ) {
             throw new ProtocolException('Cleanup resource ownership or state did not match.');
         }
