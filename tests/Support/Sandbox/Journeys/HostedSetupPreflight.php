@@ -19,7 +19,7 @@ final class HostedSetupPreflight
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool):array<string,mixed>)|null $browser
+     * @param (Closure(string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -34,7 +34,7 @@ final class HostedSetupPreflight
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
                 'playwright-module', 'create-one-hosted-setup', 'render-owned-data',
                 'observe-one-method-config', 'observe-normal-reads', 'observe-risk-bootstrap',
-                'observe-parent-country'];
+                'observe-parent-country', 'select-one-native-card'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -75,6 +75,13 @@ final class HostedSetupPreflight
             }
             if ($observeParentCountry) {
                 $safe['parent_country_requested'] = true;
+            }
+            $selectCard = $options['select-one-native-card'] ?? false;
+            if (!is_bool($selectCard) || ($selectCard && !$observeNormal)) {
+                throw new RuntimeException('Native Card choice requires explicit normal reads.');
+            }
+            if ($selectCard) {
+                $safe['native_card_selection_requested'] = true;
             }
             $safe['render_requested'] = $render;
             $safe['method_config_requested'] = $observeConfig;
@@ -165,6 +172,12 @@ final class HostedSetupPreflight
                     'startup_window_max_ms' => 8000, 'normal_window_max_ms' => 8000, 'limit' => 1,
                 ], $fingerprint);
             }
+            if ($selectCard) {
+                $ledger->requestId('preflight_native_card_choice', $browserExpected + [
+                    'action' => 'one_unforced_native_card_radio', 'scope' => 'original_qualified_dropin_document',
+                    'financial_authority' => false, 'capture_window_max_ms' => 5500,
+                ], $fingerprint);
+            }
             $phase = 'browser_read_only';
             $riskJournal = $observeRisk
                 ? new HostedRiskJournal($ledger, $fingerprint, $browserExpected, $safe['browser_tool_hashes']) : null;
@@ -178,12 +191,14 @@ final class HostedSetupPreflight
                     $observeRisk,
                     $riskJournal,
                     $observeParentCountry,
+                    $selectCard,
                 ),
                 $render,
                 $observeConfig,
                 $observeNormal,
                 $observeRisk,
                 $observeParentCountry,
+                $selectCard,
             );
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {

@@ -2,6 +2,7 @@
 
 const http = require('node:http');
 const path = require('node:path');
+const { fixtureCardRuntime } = require('./hosted-card-choice.cjs');
 const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
@@ -14,6 +15,7 @@ async function smoke(playwright) {
   let normalStatus = 200;
   let normalStatusDelay = 0;
   let lateFields = false;
+  let nativeCardScenario = null;
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
       case '/page':
@@ -124,7 +126,30 @@ async function smoke(playwright) {
         response.writeHead(200, { 'Content-Type': 'text/html' }).end(
           `<!doctype html><p>Fixture render frame</p><script src="/render-sdk.js?ts=${Date.now()}"></script><script>
             const options = JSON.parse(new URLSearchParams(location.hash.split('?')[1]).get('options'));
-            if (options.observeConfig) {
+            const nativeChoice = new URL(parent.location.href).searchParams.has('cardchoice');
+            if (nativeChoice) {
+              window.nativeCardClicks = 0;
+              const wrapper = document.createElement('div'); wrapper.id = 'payment-method-card';
+              if (${nativeCardScenario === 'offscreen'}) wrapper.style.marginTop = '10000px';
+              for (let index = 0; index < ${nativeCardScenario === 'multiple' ? 2 : 1}; index++) {
+                const radio = document.createElement('input'); radio.type = 'radio'; radio.id = 'radio-card';
+                radio.name = 'method'; radio.value = 'card'; radio.checked = ${nativeCardScenario === 'selected'};
+                radio.addEventListener('change', () => {
+                  window.nativeCardClicks++;
+                  for (const name of ['cardnumber', 'cardnumber', 'cvc']) {
+                    const input = document.createElement('input'); input.name = name; document.body.append(input);
+                  }
+                  fetch('/billing/payer-web-api/checkout/complete', { method: 'POST' }).catch(() => {});
+                });
+                wrapper.append(radio);
+              }
+              document.body.append(wrapper);
+              fetch('/api/v1/pa/payment_consents?' + new URLSearchParams({ customer_id: options.customer_id,
+                status: 'VERIFIED', page_size: 100 }), { headers: {
+                'client-secret': options.client_secret, 'content-type': 'application/json',
+                'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout',
+                'x-cloud-trace-context': '0123456789abcdef0123456789abcdef' } }).catch(() => {});
+            } else if (options.observeConfig) {
               const headers = { 'client-secret': options.client_secret, 'content-type': 'application/json',
                 'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout', 'awx-tracker': 'SYNTHETIC_TRACKER',
                 'x-cloud-trace-context': '0123456789abcdef0123456789abcdef' };
@@ -204,7 +229,7 @@ async function smoke(playwright) {
             'Set-Cookie': 'synthetic_normal_' + (status ? 'status' : country ? 'country' : consent ? 'consent' : 'customer')
               + '=PRIVATE_COOKIE; Path=/' });
           response.end(JSON.stringify(status ? { status: 'REQUESTED' } : country ? { countryCode: 'DE' }
-            : consent ? { items: [] } : { id: 'PRIVATE_EXTERNAL_CUSTOMER' })); };
+            : consent ? { items: [], ...(nativeCardScenario ? { has_more: false } : {}) } : { id: 'PRIVATE_EXTERNAL_CUSTOMER' })); };
           if (status && normalStatusDelay > 0) setTimeout(send, normalStatusDelay);
           else send();
         }
@@ -515,6 +540,28 @@ async function smoke(playwright) {
         || deniedParent.normal_country_sends !== 1 || hits.forbidden !== 0) {
       throw new Error('Local default parent denial changed the bound-country slot.');
     }
+    for (const scenario of ['unchecked', 'selected', 'multiple', 'offscreen']) {
+      nativeCardScenario = scenario;
+      let observedClicks, frameScroll;
+      const native = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&poll=1&cardchoice=1',
+        playwright, origin, async page => {
+          const frame = page.frames().find(candidate => candidate !== page.mainFrame());
+          observedClicks = await frame.evaluate(() => window.nativeCardClicks);
+          frameScroll = await frame.evaluate(() => scrollY);
+        }, expected, true, true, true, null, null, false, true, fixtureCardRuntime(origin));
+      if (native.proxy_external_connections !== 0 || hits.forbidden !== 0 || !native.normal_read_inspection_completed
+          || native.method_config_get_attempted || native.native_card_action_attempts !== (['unchecked', 'offscreen'].includes(scenario) ? 1 : 0)
+          || observedClicks !== (scenario === 'unchecked' ? 1 : 0)
+          || (scenario === 'unchecked' && (native.native_card_selection !== 'completed'
+            || !native.native_card_action_completed_before_capture || native.cardnumber_match_count !== 'multiple'
+            || native.expiry_match_count !== 'zero' || native.cvc_match_count !== 'one'))
+          || (scenario === 'selected' && native.native_card_selection !== 'already_selected')
+          || (scenario === 'multiple' && native.native_card_selection !== 'ambiguous')
+          || (scenario === 'offscreen' && (frameScroll !== 0 || native.native_card_selection !== 'uncertain')))  {
+        throw new Error('Local native Card choice changed scope, count or financial boundaries.');
+      }
+    }
+    nativeCardScenario = null;
     // Both failure probes keep the payer mismatched, so no private body or frame can be delivered.
     payerReply = 'wrong_mode'; tamperController = true;
     let controllerRejected = false;
@@ -536,6 +583,7 @@ async function smoke(playwright) {
       method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
       normal_poll_window_verified: true, normal_status_poison_verified: true, normal_failure_diagnostics_verified: true,
       normal_inflight_drain_verified: true, parent_country_pre_payer_verified: true,
+      native_card_choice_verified: true, native_card_counts_verified: true,
       parent_country_distinct_slots_verified: true, parent_country_default_denial_verified: true, ...await riskSmoke(playwright) };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }

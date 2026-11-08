@@ -54,13 +54,14 @@ final readonly class HostedBrowser
         bool $observeRisk = false,
         ?HostedRiskJournal $riskJournal = null,
         bool $observeParentCountry = false,
+        bool $selectCard = false,
     ): array {
         $keys = array_keys($expected);
         sort($keys);
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
             || ($observeRisk && !$observeNormal) || ($observeRisk !== ($riskJournal !== null))
-            || ($observeParentCountry && !$observeNormal)
+            || ($observeParentCountry && !$observeNormal) || ($selectCard && !$observeNormal)
             || !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
             || $expected['checkout_id'] === '' || strlen($expected['checkout_id']) > 256
             || preg_match('/[\x00-\x20]/', $expected['checkout_id']) === 1
@@ -90,6 +91,7 @@ final readonly class HostedBrowser
                 'url' => $url, 'expected' => $expected, 'render' => $render,
                 'observeConfig' => $observeConfig, 'observeNormal' => $observeNormal,
                 ...($observeParentCountry ? ['observeParentCountry' => true] : []),
+                ...($selectCard ? ['selectCard' => true] : []),
             ];
             if ($riskJournal !== null) {
                 if (!is_resource($journalRead) || !is_resource($journalAck)) {
@@ -152,6 +154,7 @@ final readonly class HostedBrowser
                 $observeNormal,
                 $observeRisk,
                 $observeParentCountry,
+                $selectCard,
             );
             if ($journalFailed) {
                 $safe['risk_parent_journal_failed'] = true;
@@ -183,10 +186,12 @@ final readonly class HostedBrowser
         bool $observeNormal = false,
         bool $observeRisk = false,
         bool $observeParentCountry = false,
+        bool $selectCard = false,
     ): array {
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
             || ($observeRisk && !$observeNormal) || ($observeParentCountry && !$observeNormal)
+            || ($selectCard && !$observeNormal)
         ) {
             throw new RuntimeException('Method observation requires explicit rendering.');
         }
@@ -534,6 +539,15 @@ final readonly class HostedBrowser
         if (is_int($payerStatus) && $payerStatus >= 100 && $payerStatus <= 599) {
             $safe['payer_http_status'] = $payerStatus;
         }
+        if (
+            array_key_exists('native_card_selection_requested', $data)
+            && $data['native_card_selection_requested'] !== $selectCard
+        ) {
+            throw new RuntimeException('Card choice did not match the explicit configuration.');
+        }
+        if ($selectCard) {
+            $safe += self::cardEvidence($data);
+        }
         if ($observeRisk) {
             $safe += self::riskEvidence($data, $safe);
         }
@@ -547,6 +561,86 @@ final readonly class HostedBrowser
         return $safe;
     }
 
+    /**
+     * @param array<mixed> $data
+     * @return array<string,string|int|bool>
+     */
+    private static function cardEvidence(array $data): array
+    {
+        $safe = [];
+        if (array_key_exists('native_card_selection_requested', $data)) {
+            if ($data['native_card_selection_requested'] !== true) {
+                throw new RuntimeException('Card choice did not match the explicit configuration.');
+            }
+            $safe['native_card_selection_requested'] = true;
+        }
+        $outcomes = ['withheld', 'missing', 'ambiguous', 'hidden', 'disabled', 'already_selected',
+            'invoked', 'completed', 'uncertain', 'unavailable'];
+        if (in_array($data['native_card_selection'] ?? null, $outcomes, true)) {
+            $safe['native_card_selection'] = $data['native_card_selection'];
+        }
+        foreach (
+            ['native_card_radio_visible', 'native_card_radio_enabled', 'native_card_radio_checked',
+            'native_card_action_invoked', 'native_card_action_invoked_before_capture',
+            'native_card_action_completed', 'native_card_action_completed_before_capture'] as $field
+        ) {
+            if (is_bool($data[$field] ?? null)) {
+                $safe[$field] = $data[$field];
+            }
+        }
+        if (in_array($data['native_card_radio_count'] ?? null, ['zero', 'one', 'multiple'], true)) {
+            $safe['native_card_radio_count'] = $data['native_card_radio_count'];
+        }
+        $attempts = $data['native_card_action_attempts'] ?? null;
+        if (is_int($attempts) && in_array($attempts, [0, 1], true)) {
+            $safe['native_card_action_attempts'] = $attempts;
+        }
+        if (($safe['native_card_action_invoked'] ?? false) === true) {
+            foreach (
+                ['payer_payload_delivered', 'payer_mode_matches', 'payer_currency_matches',
+                'native_card_action_invoked_before_capture', 'native_card_radio_visible',
+                'native_card_radio_enabled', 'normal_consent_list_pagination_known'] as $field
+            ) {
+                if (($data[$field] ?? null) !== true) {
+                    throw new RuntimeException('Card choice has no complete scoped proof.');
+                }
+            }
+            if (
+                ($safe['native_card_selection_requested'] ?? false) !== true || $attempts !== 1
+                || ($safe['native_card_radio_count'] ?? null) !== 'one'
+                || ($safe['native_card_radio_checked'] ?? null) !== false
+                || ($data['normal_checkout_status_state'] ?? null) !== 'REQUESTED'
+                || ($data['normal_checkout_status_delivered'] ?? 0) < 1
+                || ($data['normal_checkout_status_poisoned'] ?? null) !== false
+                || ($data['normal_consent_list_delivered'] ?? null) !== 1
+                || ($data['normal_consent_list_items'] ?? null) !== 0
+                || ($data['normal_consent_list_has_more'] ?? null) !== false
+            ) {
+                throw new RuntimeException('Card choice has no complete scoped proof.');
+            }
+        } elseif ($attempts === 1 || ($safe['native_card_action_completed'] ?? false) === true) {
+            throw new RuntimeException('Card action evidence is inconsistent.');
+        }
+        if (
+            array_key_exists('native_card_action_completed_before_capture', $safe)
+            && ($safe['native_card_action_completed'] ?? null) !== true
+        ) {
+            throw new RuntimeException('Card completion evidence is inconsistent.');
+        }
+        if (($data['card_readiness_observed'] ?? null) === true) {
+            foreach (['cardnumber', 'expiry', 'cvc'] as $field) {
+                $count = $data[$field . '_match_count'] ?? null;
+                if (in_array($count, ['zero', 'one', 'multiple'], true)) {
+                    if (($data[$field . '_unique'] ?? null) !== ($count === 'one')) {
+                        throw new RuntimeException('Native field counts are inconsistent.');
+                    }
+                    $safe[$field . '_match_count'] = $count;
+                }
+            }
+        }
+        return $safe;
+    }
+
     /** @return array<string,string> */
     public static function sourceHashes(): array
     {
@@ -555,7 +649,7 @@ final readonly class HostedBrowser
         foreach (
             ['hosted-policy.cjs', 'hosted-browser.cjs', 'hosted-smoke.cjs', 'hosted-policy.test.cjs',
                 'hosted-risk-policy.cjs', 'hosted-risk-journal.cjs', 'hosted-risk-relay.cjs',
-                'hosted-risk-observer.cjs', 'hosted-parent-country.cjs'] as $file
+                'hosted-risk-observer.cjs', 'hosted-parent-country.cjs', 'hosted-card-choice.cjs'] as $file
         ) {
             $hash = hash_file('sha256', $root . '/tools/browser/' . $file);
             if ($hash === false) {

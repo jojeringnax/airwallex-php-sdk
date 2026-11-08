@@ -203,6 +203,10 @@ class HostedPolicy {
   #normalAttempts = { customer: 0, consent_list: 0, country: 0, checkout_status: 0 };
   #statusBusy = false;
   #statusPoisoned = false;
+  #cardStatusMatched = false;
+  #cardStatusDelivered = false;
+  #cardConsentEmpty = false;
+  #cardConsentDelivered = false;
   #frameDelivered = false;
   #configAttempted = false;
   #configMatched = false;
@@ -605,12 +609,17 @@ class HostedPolicy {
     const outbound = this.#normalHeaders(headers, ['customer', 'consent_list'].includes(role) ? 'pa' : role);
     if (outbound === null) return null;
     this.#normalAttempts[role]++;
-    if (role === 'checkout_status') this.#statusBusy = true;
+    if (role === 'checkout_status') {
+      this.#statusBusy = true;
+      this.#cardStatusMatched = false;
+      this.#cardStatusDelivered = false;
+    }
     return { role, headers: outbound };
   }
 
   failNormalRead(role) {
     if (role === 'checkout_status') this.#statusPoisoned = true;
+    if (role === 'consent_list') this.#cardConsentDelivered = false;
   }
 
   observeNormalRead(role, body) {
@@ -620,12 +629,14 @@ class HostedPolicy {
       if (role === 'customer') {
         if (data.id !== this.#frameReference?.customer) throw new Error();
       } else if (role === 'consent_list') {
+        this.#cardConsentEmpty = false;
         if (!Array.isArray(data.items) || data.items.length > 100
             || data.items.some(item => !item || typeof item !== 'object' || Array.isArray(item)
               || typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(item.id)
               || item.customer_id !== this.#frameReference?.customer || item.status !== 'VERIFIED')
             || new Set(data.items.map(item => item.id)).size !== data.items.length
             || (Object.hasOwn(data, 'has_more') && typeof data.has_more !== 'boolean')) throw new Error();
+        this.#cardConsentEmpty = data.items.length === 0 && data.has_more === false;
         return { matched: true, items: data.items.length, pagination_known: typeof data.has_more === 'boolean',
           has_more: data.has_more === true };
       } else if (role === 'country') {
@@ -635,6 +646,7 @@ class HostedPolicy {
         checkoutState = ['REQUESTED', 'PENDING', 'COMPLETED', 'EXPIRED'].includes(data.status)
           ? data.status : typeof data.status === 'string' ? 'unlisted' : 'unavailable';
         if (checkoutState !== 'REQUESTED') throw new Error();
+        this.#cardStatusMatched = true;
       } else throw new Error();
       return { matched: true, ...(role === 'checkout_status' ? { state: checkoutState } : {}) };
     } catch {
@@ -644,7 +656,17 @@ class HostedPolicy {
   }
 
   markNormalReadDelivered(role) {
-    if (role === 'checkout_status') this.#statusBusy = false;
+    if (role === 'checkout_status') {
+      this.#statusBusy = false;
+      this.#cardStatusDelivered = this.#cardStatusMatched && !this.#statusPoisoned;
+    }
+    if (role === 'consent_list') this.#cardConsentDelivered = this.#cardConsentEmpty;
+  }
+
+  nativeCardChoiceAllowed(value) {
+    return this.#observeConfig && this.#observeNormal && this.#payerMatched && this.#payerDelivered
+      && this.#frameDelivered && this.#cardStatusDelivered && !this.#statusPoisoned && !this.#statusBusy
+      && this.#cardConsentDelivered && this.normalWindowRemaining() > 2500 && this.normalSourceMatches(value);
   }
 
   normalEvidence() {

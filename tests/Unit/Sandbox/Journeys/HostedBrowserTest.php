@@ -113,6 +113,92 @@ final class HostedBrowserTest extends TestCase
             'bound_render_frames' => 1, 'card_readiness_observed' => true];
     }
 
+    /** @return array<string,mixed> */
+    private static function nativeCardEvidence(): array
+    {
+        return array_replace(self::normalEvidence(), [
+            'normal_consent_list_pagination_known' => true,
+            'normal_checkout_status_attempts' => 1, 'normal_checkout_status_sends' => 1,
+            'normal_checkout_status_delivered' => 1, 'normal_checkout_status_observation' => 'matched',
+            'normal_checkout_status_http_status' => 200, 'normal_checkout_status_state' => 'REQUESTED',
+            'native_card_selection_requested' => true, 'native_card_selection' => 'completed',
+            'native_card_radio_count' => 'one', 'native_card_radio_visible' => true,
+            'native_card_radio_enabled' => true, 'native_card_radio_checked' => false,
+            'native_card_action_attempts' => 1, 'native_card_action_invoked' => true,
+            'native_card_action_invoked_before_capture' => true, 'native_card_action_completed' => true,
+            'native_card_action_completed_before_capture' => true,
+            'cardnumber_match_count' => 'multiple', 'cardnumber_unique' => false,
+            'expiry_match_count' => 'zero', 'expiry_unique' => false,
+            'cvc_match_count' => 'one', 'cvc_unique' => true,
+        ]);
+    }
+
+    public function testNativeCardEvidenceIsScopedClosedAndPreservesHonestSnapshotCounts(): void
+    {
+        $data = self::nativeCardEvidence() + ['native_card_selector' => 'PRIVATE_SELECTOR',
+            'native_card_value' => 'PRIVATE_VALUE', 'native_card_error' => 'PRIVATE_ERROR'];
+        $safe = HostedBrowser::sanitize($data, true, true, true, false, false, true);
+        self::assertSame(1, $safe['native_card_action_attempts']);
+        self::assertTrue($safe['native_card_action_completed_before_capture']);
+        self::assertSame('multiple', $safe['cardnumber_match_count']);
+        self::assertSame('zero', $safe['expiry_match_count']);
+        self::assertSame('one', $safe['cvc_match_count']);
+        self::assertFalse($safe['card_entry_enabled']);
+        self::assertArrayNotHasKey('method_config_payload_delivered', $safe);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        $late = HostedBrowser::sanitize(array_replace($data, [
+            'native_card_action_completed_before_capture' => false,
+        ]), true, true, true, false, false, true);
+        self::assertFalse($late['native_card_action_completed_before_capture']);
+        self::assertSame('zero', $late['expiry_match_count']);
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function invalidNativeCardProof(): iterable
+    {
+        yield 'SDK vocabulary cannot replace gateway state' => ['normal_checkout_status_state', 'ACTIVE'];
+        yield 'Consent pagination unknown' => ['normal_consent_list_pagination_known', false];
+        yield 'Consent nonempty' => ['normal_consent_list_items', 1];
+        yield 'already checked' => ['native_card_radio_checked', true];
+        yield 'hidden' => ['native_card_radio_visible', false];
+        yield 'ambiguous' => ['native_card_radio_count', 'multiple'];
+        yield 'second invocation' => ['native_card_action_attempts', 2];
+        yield 'late invocation' => ['native_card_action_invoked_before_capture', false];
+        yield 'count cannot claim uniqueness' => ['cardnumber_match_count', 'one'];
+    }
+
+    #[DataProvider('invalidNativeCardProof')]
+    public function testNativeCardEvidenceCannotManufactureItsProof(string $field, mixed $value): void
+    {
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize(
+            array_replace(self::nativeCardEvidence(), [$field => $value]),
+            true,
+            true,
+            true,
+            false,
+            false,
+            true
+        );
+    }
+
+    public function testUnrequestedCardActionFailsClosedAndOpaqueStartupFailureInventsNoAction(): void
+    {
+        $safe = HostedBrowser::sanitize(
+            ['result' => 'fail', 'reason' => 'browser_preflight_failed',
+            'card_entry_enabled' => false, 'browser_failure_phase' => 'tooling_load'],
+            true,
+            true,
+            true,
+            false,
+            false,
+            true
+        );
+        self::assertArrayNotHasKey('native_card_action_attempts', $safe);
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize(self::nativeCardEvidence(), true, true, true);
+    }
+
     public function testPartialRiskEvidenceIsExplicitClosedAndDoesNotCreateCountsAfterAnOpaqueFailure(): void
     {
         $data = self::normalEvidence() + [

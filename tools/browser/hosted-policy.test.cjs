@@ -963,6 +963,34 @@ function normalClaim(p, role, change = {}) {
     change.main ?? role === 'checkout_status', change.bound ?? role !== 'checkout_status');
 }
 
+test('native Card scope requires delivered REQUESTED plus explicit empty terminal Consents, not invented config delivery', () => {
+  const { p, advance } = normalPolicy();
+  assert.equal(p.nativeCardChoiceAllowed(privateFrame()), false);
+  assert.equal(normalClaim(p, 'consent_list').role, 'consent_list');
+  assert.equal(p.observeNormalRead('consent_list', Buffer.from('{"items":[],"has_more":false}')).matched, true);
+  p.markNormalReadDelivered('consent_list');
+  assert.equal(normalClaim(p, 'checkout_status').role, 'checkout_status');
+  p.observeNormalRead('checkout_status', Buffer.from('{"status":"REQUESTED"}'));
+  assert.equal(p.nativeCardChoiceAllowed(privateFrame()), false);
+  p.markNormalReadDelivered('checkout_status');
+  assert.equal(p.nativeCardChoiceAllowed(privateFrame()), true);
+  assert.equal(p.methodEvidence().method_config_get_attempted, false);
+  assert.equal(p.nativeCardChoiceAllowed(privateFrame() + 'changed'), false);
+  assert.equal(p.decide(normalOrigin + '/billing/payer-web-api/checkout/complete', 'POST', 'fetch'), 'block');
+  assert.equal(p.decide(normalOrigin + '/api/v1/pa/payment_consents/create', 'POST', 'fetch'), 'block');
+  advance(5500); assert.equal(p.nativeCardChoiceAllowed(privateFrame()), false);
+});
+
+for (const body of ['{"items":[]}', '{"items":[],"has_more":true}',
+  '{"items":[{"id":"fixture","customer_id":"PRIVATE_EXTERNAL_CUSTOMER","status":"VERIFIED"}],"has_more":false}']) {
+  test('native Card choice withholds nonterminal or nonempty Consent inventory: ' + body, () => {
+    const { p } = normalPolicy(); normalClaim(p, 'consent_list'); p.observeNormalRead('consent_list', Buffer.from(body));
+    p.markNormalReadDelivered('consent_list'); normalClaim(p, 'checkout_status');
+    p.observeNormalRead('checkout_status', Buffer.from('{"status":"REQUESTED"}')); p.markNormalReadDelivered('checkout_status');
+    assert.equal(p.nativeCardChoiceAllowed(privateFrame()), false);
+  });
+}
+
 test('normal reads are explicit and scoped, each once except three serialized status slots', () => {
   assert.throws(() => new HostedPolicy(initial, null, expectedCheckout, true, false, true));
   for (const options of [{ normal: false }, { origin: 'https://checkout.airwallex.com' }]) {
