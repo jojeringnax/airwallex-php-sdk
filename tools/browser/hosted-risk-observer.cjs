@@ -15,6 +15,7 @@ class HostedRiskObserver {
   #publicClient;
   #publicDisposal;
   #deadline;
+  #caseDeadline;
   #handlers = new Set();
   #responseDisposals = new Map();
   #cleanupFailed = false;
@@ -22,7 +23,9 @@ class HostedRiskObserver {
   #beforeCookies = null;
   #chain = Promise.resolve();
   #waiting = 0;
-  constructor(parent, journal, playwright, fixture = null) {
+  constructor(parent, journal, playwright, fixture = null, caseDeadline = performance.now() + 40000) {
+    if (!Number.isFinite(caseDeadline)) throw new Error('Risk case deadline is invalid.');
+    this.#caseDeadline = caseDeadline;
     this.#parent = parent;
     this.#journal = journal;
     this.#playwright = playwright;
@@ -36,18 +39,20 @@ class HostedRiskObserver {
       this.#fixture === null ? null : { origin: this.#fixture.bwsOrigin, ca: this.#fixture.ca });
   }
 
-  authority(host, port) { return !this.#closed && this.#policy.authority(host, port); }
+  authority(host, port) {
+    return !this.#closed && performance.now() < this.#caseDeadline && this.#policy.authority(host, port);
+  }
   noteDenied(value) { this.#policy.noteDenied(value); }
   evidence() { return { ...this.#policy.evidence(), ...(this.#journal?.evidence() ?? {}) }; }
 
   #rememberDeadline() {
-    const remaining = this.#parent.normalWindowRemaining();
+    const remaining = Math.min(this.#parent.normalWindowRemaining(), this.#caseDeadline - performance.now());
     if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('Risk scope is unavailable.');
     this.#deadline ??= performance.now() + Math.min(8000, remaining);
   }
 
   async #bounded(promise) {
-    const remaining = Math.max(0, (this.#deadline ?? performance.now() + 100) - performance.now());
+    const remaining = Math.max(0, Math.min(this.#caseDeadline, this.#deadline ?? performance.now() + 100) - performance.now());
     let timer;
     try {
       return await Promise.race([Promise.resolve(promise).then(value => value !== false, () => false),
@@ -79,7 +84,8 @@ class HostedRiskObserver {
 
   #original(frame, main, bound) {
     try {
-      return frame.isDetached() === false && ((frame === main && this.#parent.normalSourceMatches(frame.url(), true))
+      return performance.now() < this.#caseDeadline && frame.isDetached() === false
+        && ((frame === main && this.#parent.normalSourceMatches(frame.url(), true))
         || (frame === bound && this.#parent.normalSourceMatches(frame.url())));
     } catch { return false; }
   }
@@ -136,7 +142,7 @@ class HostedRiskObserver {
         if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) return true;
         const response = await this.#value(client.get(request.url(), {
           headers: { accept: '*/*', cookie: '', referer: '' }, maxRedirects: 0, maxRetries: 0,
-          timeout: Math.max(1, this.#parent.normalWindowRemaining()),
+          timeout: Math.max(1, Math.min(this.#parent.normalWindowRemaining(), this.#caseDeadline - performance.now())),
         }).then(created => {
           if (this.#closed) void this.#disposeResponse(created);
           return created;
@@ -185,7 +191,7 @@ class HostedRiskObserver {
         if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
           this.#policy.poison('document_changed'); throw new Error('Risk scope is unavailable.');
         }
-        const deadline = Math.min(this.#deadline, performance.now() + this.#parent.normalWindowRemaining());
+        const deadline = Math.min(this.#caseDeadline, this.#deadline, performance.now() + this.#parent.normalWindowRemaining());
         const forward = async selected => this.#journal.run(selected, async () => {
           if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
             throw new Error('Risk scope is unavailable.');
@@ -211,7 +217,7 @@ class HostedRiskObserver {
         this.#policy.delivered(claim.role);
       });
       this.#chain = task.catch(() => {});
-      await task;
+      await this.#value(task);
     } catch { this.#policy.poison('journal'); }
     finally {
       if (queued) this.#waiting--;
