@@ -192,6 +192,18 @@ class HostedPolicy {
   #observeConfig;
   #observeNormal;
   #observeParentCountry;
+  #observeCurrencySettings;
+  #currencySecret = null;
+  #currencySecretObserved = false;
+  #currencyMainRequested = false;
+  #currencyClosed = false;
+  #currencyAttempted = false;
+  #currencyFailed = false;
+  #currencyHeaderWithheld = false;
+  #currencyXsrfWithheld = false;
+  #currencyShape = 'not_observed';
+  #currencyItems;
+  #currencyEntries;
   #parentCountryDeadline = 0;
   #parentMainRequested = false;
   #parentCountryClosed = false;
@@ -212,7 +224,7 @@ class HostedPolicy {
   #configMatched = false;
   #deniedReads = Object.fromEntries(deniedReadNames.map(name => [name, 0]));
   #renderChecks = Object.fromEntries(renderCheckNames.map(name => [name, 0]));
-  constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false, observeNormal = false, clock = () => performance.now(), observeParentCountry = false) {
+  constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false, observeNormal = false, clock = () => performance.now(), observeParentCountry = false, observeCurrencySettings = false) {
     if (typeof render !== 'boolean' || (render && expected === null)) {
       throw new Error('Invalid read-only render configuration.');
     }
@@ -225,6 +237,10 @@ class HostedPolicy {
     if (typeof observeParentCountry !== 'boolean' || (observeParentCountry && !observeNormal)) {
       throw new Error('Parent country requires explicit normal reads.');
     }
+    if (typeof observeCurrencySettings !== 'boolean' || (observeCurrencySettings && !observeNormal)) {
+      throw new Error('Currency settings require explicit normal reads.');
+    }
+    this.#observeCurrencySettings = observeCurrencySettings;
     this.#observeParentCountry = observeParentCountry;
     this.#observeNormal = observeNormal;
     this.#normalClock = clock;
@@ -301,14 +317,23 @@ class HostedPolicy {
   observePayer(body) {
     this.#payerMatched = false;
     this.#frameReference = null;
+    this.#currencySecret = null; this.#currencySecretObserved = false;
     try {
       if (!Buffer.isBuffer(body) || body.length > 65536) throw new Error();
-      const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
+      const data = this.#observeCurrencySettings ? privateJson(body)
+        : JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
       const mode = data.mode === this.#expected?.mode;
       const currency = data.currency === this.#expected?.currency;
       this.#payerMatched = mode && currency;
       const setup = data.setupModeDetails;
+      if (this.#observeCurrencySettings && this.#render && this.#payerMatched && data.mode === 'SETUP') {
+        this.#currencySecretObserved = true;
+        const transaction = setup && typeof setup === 'object' && !Array.isArray(setup)
+          ? setup.externalTransactionClientSecret : null;
+        if (typeof transaction === 'string' && transaction.length > 0 && transaction.length <= 8192
+            && !/[^\x21-\x7e]/u.test(transaction)) this.#currencySecret = transaction;
+      }
       if (this.#render && this.#payerMatched && setup && typeof setup === 'object' && !Array.isArray(setup)) {
         const secret = setup.externalTransactionClientSecret || setup.externalCustomerClientSecret;
         if (typeof secret === 'string' && secret.length > 0 && secret.length <= 8192
@@ -527,6 +552,68 @@ class HostedPolicy {
       parent_country_attempts: this.#parentCountryAttempted ? 1 : 0 } : {};
   }
 
+  noteCurrencyMainDocument(value) {
+    if (!this.#observeCurrencySettings) return;
+    if (this.#currencyMainRequested || value !== this.#initial) this.closeCurrencySettingsWindow();
+    else this.#currencyMainRequested = true;
+  }
+  currencySettingsWindowRemaining() {
+    return this.#observeCurrencySettings && this.#currencyMainRequested && !this.#currencyClosed
+      && this.#payerDelivered && this.#currencySecret !== null ? this.normalWindowRemaining() : 0;
+  }
+  closeCurrencySettingsWindow() { this.#currencyClosed = true; }
+  failCurrencySettings() { this.#currencyFailed = true; }
+  claimCurrencySettings(value, method, type, headers, body, fromMain) {
+    const url = parse(value);
+    if (!fromMain || this.#currencyAttempted || this.currencySettingsWindowRemaining() <= 0
+        || !url || method !== 'GET' || !['fetch', 'xhr'].includes(type) || body !== null
+        || url.origin !== new URL(this.#initial).origin || url.pathname !== '/api/v1/pa/config/currency_settings'
+        || value !== url.origin + url.pathname) return null;
+    this.#currencyAttempted = true; // Before any async work; source interceptor retries get no slot.
+    const outgoing = this.#normalHeaders(headers, 'currency_settings');
+    if (outgoing === null) {
+      this.#currencyHeaderWithheld = true;
+      this.#currencyXsrfWithheld = !!headers && Object.hasOwn(headers, 'x-xsrf-token');
+      this.#currencyFailed = true;
+      return false; // A recognized one-shot role, withheld locally rather than forwarded.
+    }
+    return outgoing;
+  }
+  currencySettingsSendAllowed() {
+    return this.#currencyAttempted && !this.#currencyFailed && this.currencySettingsWindowRemaining() > 0;
+  }
+  observeCurrencySettings(body) {
+    try {
+      const data = privateJson(body);
+      if (!Object.hasOwn(data, 'items') || data.items === null) {
+        this.#currencyShape = Object.hasOwn(data, 'items') ? 'null' : 'missing';
+        return 'source_fallback'; // Source explicitly uses items ?? []; no empty-inventory claim.
+      }
+      if (!Array.isArray(data.items) || data.items.length > 200) throw new Error();
+      let count = 0;
+      for (const item of data.items) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error();
+        if (item.type === 'currency_switcher') {
+          if (!Array.isArray(item.currencies) || item.currencies.some(code => typeof code !== 'string'
+              || !/^[A-Z]{3}$/u.test(code)) || (count += item.currencies.length) > 200) throw new Error();
+        }
+      }
+      this.#currencyShape = 'array'; this.#currencyItems = data.items.length; this.#currencyEntries = count;
+      return 'matched';
+    } catch { this.failCurrencySettings(); this.#currencyShape = 'unsupported'; return 'unsupported_response_shape'; }
+  }
+  currencySettingsEvidence() {
+    return this.#observeCurrencySettings ? { currency_settings_requested: true,
+      ...(this.#currencySecretObserved ? { currency_settings_secret_available: this.#currencySecret !== null } : {}),
+      currency_settings_window_closed: this.#currencyClosed || this.#normalClosed,
+      currency_settings_attempts: this.#currencyAttempted ? 1 : 0,
+      currency_settings_headers_withheld: this.#currencyHeaderWithheld,
+      currency_settings_xsrf_withheld: this.#currencyXsrfWithheld,
+      currency_settings_items_state: this.#currencyShape,
+      ...(this.#currencyItems === undefined ? {} : { currency_settings_items: this.#currencyItems,
+        currency_settings_currency_entries: this.#currencyEntries }) } : {};
+  }
+
   // A private source-generated session, never an operator label or output field.
   riskSessionMatches(value, main = false) {
     if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(value) || !this.#frameSource) return false;
@@ -564,7 +651,8 @@ class HostedPolicy {
       'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site'];
     const pa = ['client-secret', 'content-type', 'awx-tracker', 'x-api-version', 'x-client-ip-source',
       'x-device-type', 'x-cloud-trace-context'];
-    const allowed = [...common, ...(role === 'pa' ? pa : role === 'checkout_status' ? ['authorization'] : [])];
+    const allowed = [...common, ...(role === 'pa' ? pa : role === 'checkout_status' ? ['authorization']
+      : role === 'currency_settings' ? ['client-secret'] : [])];
     if (!headers || typeof headers !== 'object' || Object.keys(headers).some(key => !allowed.includes(key))
         || (Object.hasOwn(headers, 'origin') && headers.origin !== new URL(this.#initial).origin)) return null;
     if (role === 'pa') {
@@ -577,6 +665,12 @@ class HostedPolicy {
       const result = { accept: 'application/json, text/plain, */*', cookie: '', referer: '' };
       for (const key of pa) if (Object.hasOwn(headers, key)) result[key] = headers[key];
       return result;
+    }
+    if (role === 'currency_settings') {
+      if (headers.accept !== 'application/json, text/plain, */*'
+          || headers['client-secret'] !== `Bearer ${this.#currencySecret}`) return null;
+      return { accept: headers.accept, 'client-secret': headers['client-secret'], cookie: '', referer: '',
+        ...(Object.hasOwn(headers, 'origin') ? { origin: headers.origin } : {}) };
     }
     if (role === 'parent_country' && headers.accept !== 'application/json, text/plain, */*') return null;
     if (role === 'checkout_status' && headers.authorization !== `Bearer ${this.#token}`) return null;

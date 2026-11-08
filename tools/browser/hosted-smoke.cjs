@@ -6,7 +6,7 @@ const { fixtureCardRuntime } = require('./hosted-card-choice.cjs');
 const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
-  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0, method: 0, customer: 0, consent: 0, country: 0, status: 0, reloadPages: 0 };
+  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0, method: 0, customer: 0, consent: 0, country: 0, status: 0, reloadPages: 0, currency: 0 };
   let tamper = false;
   let payerReply = 'matched';
   let tamperController = false;
@@ -15,6 +15,8 @@ async function smoke(playwright) {
   let normalStatus = 200;
   let normalStatusDelay = 0;
   let lateFields = false;
+  let currencyProbe = false;
+  let currencyReply = 'matched';
   let nativeCardScenario = null;
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
@@ -52,6 +54,19 @@ async function smoke(playwright) {
           bootstrap.catch(() => {});
           parentCountryReady.then(() => fetch(getter, { headers })).then(r => r.json()).then(async data => {
             window.payerDelivered = true;
+            window.currencySettingsCompleted = false;
+            if (new URL(location.href).searchParams.has('currency')) {
+              document.cookie = 'synthetic_currency_parent=PRIVATE_COOKIE; Path=/';
+              try {
+                const currencyHeaders = { Accept: 'application/json, text/plain, */*',
+                  'client-secret': 'Bearer ' + data.setupModeDetails.externalTransactionClientSecret };
+                if (new URL(location.href).searchParams.has('xsrf')) currencyHeaders['X-XSRF-TOKEN'] = 'PRIVATE_XSRF';
+                const reply = await fetch('/api/v1/pa/config/currency_settings', { headers: currencyHeaders });
+                const settings = await reply.json();
+                window.currencySettingsCompleted = true;
+                window.currencySettingsMatched = (settings.items ?? []).every(item => item.type === 'currency_switcher');
+              } catch { /* Source ordinary failure also clears its loading gate. */ }
+            }
             if (new URL(location.href).searchParams.has('poll')) {
               window.pollsStarted = 0; window.firstPayerDelivery = performance.now();
               setInterval(async () => {
@@ -105,7 +120,8 @@ async function smoke(playwright) {
             : JSON.stringify({ mode: payerReply === 'wrong_mode' ? 'PAYMENT' : 'SETUP',
               currency: payerReply === 'wrong_currency' ? 'USD' : 'EUR',
               setupModeDetails: { billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER',
-                externalCustomerClientSecret: 'PRIVATE_CLIENT_SECRET' } }));
+                externalCustomerClientSecret: 'PRIVATE_CLIENT_SECRET',
+                ...(currencyProbe ? { externalTransactionClientSecret: 'PRIVATE_CLIENT_SECRET' } : {}) } }));
         }
         break;
       case '/controller-sdk.js':
@@ -184,6 +200,25 @@ async function smoke(playwright) {
               }).catch(() => {});
             }
           </script>`);
+        break;
+      case '/api/v1/pa/config/currency_settings':
+        hits.currency++;
+        if (request.method !== 'GET' || new URL(request.url, 'http://fixture.test').search !== ''
+            || request.headers['client-secret'] !== 'Bearer PRIVATE_CLIENT_SECRET'
+            || request.headers.accept !== 'application/json, text/plain, */*'
+            || request.headers.cookie || request.headers.referer || request.headers.authorization
+            || request.headers['x-api-version'] || request.headers['x-cloud-trace-context']
+            || request.headers['x-xsrf-token']) {
+          hits.forbidden++; response.writeHead(500).end();
+        } else if (currencyReply === 'redirect') {
+          response.writeHead(302, { Location: '/forbidden?PRIVATE_CURRENCY' }).end();
+        } else {
+          response.writeHead(200, { 'Content-Type': 'application/json',
+            'Set-Cookie': 'synthetic_currency_response=PRIVATE_COOKIE; Path=/' }).end(
+            currencyReply === 'missing' ? '{}' : JSON.stringify({
+              items: [{ type: 'currency_switcher', currencies: ['EUR', 'USD'] }],
+            }));
+        }
         break;
       case '/api/v1/pa/config/payment_method_types':
         hits.method++;
@@ -540,6 +575,56 @@ async function smoke(playwright) {
         || deniedParent.normal_country_sends !== 1 || hits.forbidden !== 0) {
       throw new Error('Local default parent denial changed the bound-country slot.');
     }
+    currencyProbe = true;
+    const currencyStart = hits.currency;
+    const currencyRead = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&parent=1&currency=1',
+      playwright, origin, async (page, context) => {
+        if (!await page.evaluate(() => window.currencySettingsCompleted && window.currencySettingsMatched)) {
+          throw new Error('Local source currency effect did not complete.');
+        }
+        if ((await context.cookies()).some(cookie => cookie.name === 'synthetic_currency_response')) {
+          throw new Error('Local settings response cookie crossed contexts.');
+        }
+      }, expected, true, true, true, null, null, true, true);
+    if (hits.currency !== currencyStart + 1 || currencyRead.currency_settings_attempts !== 1
+        || currencyRead.currency_settings_sends !== 1 || currencyRead.currency_settings_delivered !== 1
+        || currencyRead.currency_settings_http_status !== 200 || currencyRead.currency_settings_outcome !== 'matched'
+        || currencyRead.currency_settings_items !== 1 || currencyRead.currency_settings_currency_entries !== 2
+        || currencyRead.parent_country_sends !== 1 || currencyRead.proxy_external_connections !== 0) {
+      throw new Error('Local exact currency settings proof failed.');
+    }
+    const xsrfStart = hits.currency;
+    const xsrfRead = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&currency=1&xsrf=1',
+      playwright, origin, null, expected, true, true, true, null, null, false, true);
+    if (hits.currency !== xsrfStart || xsrfRead.currency_settings_attempts !== 1
+        || xsrfRead.currency_settings_sends !== 0 || !xsrfRead.currency_settings_xsrf_withheld
+        || xsrfRead.currency_settings_outcome !== 'headers_withheld') throw new Error('Local XSRF was not withheld.');
+    currencyReply = 'redirect';
+    const currencyRedirect = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&currency=1',
+      playwright, origin, null, expected, true, true, true, null, null, false, true);
+    if (currencyRedirect.currency_settings_http_status !== 302 || currencyRedirect.currency_settings_delivered !== 0
+        || currencyRedirect.currency_settings_outcome !== 'redirect_rejected') throw new Error('Settings redirect followed.');
+    currencyReply = 'missing';
+    const currencyFallback = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&currency=1',
+      playwright, origin, null, expected, true, true, true, null, null, false, true);
+    if (currencyFallback.currency_settings_delivered !== 1 || currencyFallback.currency_settings_outcome !== 'source_fallback'
+        || currencyFallback.currency_settings_items_state !== 'missing'
+        || Object.hasOwn(currencyFallback, 'currency_settings_items')) throw new Error('Settings fallback invented inventory.');
+    currencyReply = 'matched'; currencyProbe = false;
+    const noTransactionStart = hits.currency;
+    const noTransaction = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&currency=1',
+      playwright, origin, null, expected, true, true, true, null, null, false, true);
+    if (hits.currency !== noTransactionStart || noTransaction.currency_settings_secret_available !== false
+        || noTransaction.currency_settings_sends !== 0) throw new Error('Customer secret substituted for transaction secret.');
+    currencyProbe = true;
+    const defaultStart = hits.currency;
+    const currencyDefault = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&currency=1',
+      playwright, origin, null, expected, true, true, true);
+    if (hits.currency !== defaultStart || Object.hasOwn(currencyDefault, 'currency_settings_requested')) {
+      throw new Error('Default settings denial changed.');
+    }
+    currencyProbe = false;
+    if (hits.forbidden !== 0 || hits.websocket !== 0) throw new Error('Local currency probe escaped its finite roles.');
     for (const scenario of ['unchecked', 'selected', 'multiple', 'offscreen']) {
       nativeCardScenario = scenario;
       let observedClicks, frameScroll;
@@ -548,7 +633,7 @@ async function smoke(playwright) {
           const frame = page.frames().find(candidate => candidate !== page.mainFrame());
           observedClicks = await frame.evaluate(() => window.nativeCardClicks);
           frameScroll = await frame.evaluate(() => scrollY);
-        }, expected, true, true, true, null, null, false, true, fixtureCardRuntime(origin));
+        }, expected, true, true, true, null, null, false, false, true, fixtureCardRuntime(origin));
       if (native.proxy_external_connections !== 0 || hits.forbidden !== 0 || !native.normal_read_inspection_completed
           || native.method_config_get_attempted || native.native_card_action_attempts !== (['unchecked', 'offscreen'].includes(scenario) ? 1 : 0)
           || observedClicks !== (scenario === 'unchecked' ? 1 : 0)
@@ -584,7 +669,10 @@ async function smoke(playwright) {
       normal_poll_window_verified: true, normal_status_poison_verified: true, normal_failure_diagnostics_verified: true,
       normal_inflight_drain_verified: true, parent_country_pre_payer_verified: true,
       native_card_choice_verified: true, native_card_counts_verified: true,
-      parent_country_distinct_slots_verified: true, parent_country_default_denial_verified: true, ...await riskSmoke(playwright) };
+      parent_country_distinct_slots_verified: true, parent_country_default_denial_verified: true, currency_settings_verified: true,
+      currency_settings_cookie_suppressed: true, currency_settings_xsrf_withheld: true,
+      currency_settings_redirect_blocked: true, currency_settings_source_fallback_verified: true,
+      currency_settings_no_customer_fallback: true, currency_settings_default_denial_verified: true, ...await riskSmoke(playwright) };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

@@ -54,6 +54,7 @@ final readonly class HostedBrowser
         bool $observeRisk = false,
         ?HostedRiskJournal $riskJournal = null,
         bool $observeParentCountry = false,
+        bool $observeCurrencySettings = false,
         bool $selectCard = false,
     ): array {
         $keys = array_keys($expected);
@@ -61,7 +62,8 @@ final readonly class HostedBrowser
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
             || ($observeRisk && !$observeNormal) || ($observeRisk !== ($riskJournal !== null))
-            || ($observeParentCountry && !$observeNormal) || ($selectCard && !$observeNormal)
+            || ($observeParentCountry && !$observeNormal) || ($observeCurrencySettings && !$observeNormal)
+            || ($selectCard && !$observeNormal)
             || !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
             || $expected['checkout_id'] === '' || strlen($expected['checkout_id']) > 256
             || preg_match('/[\x00-\x20]/', $expected['checkout_id']) === 1
@@ -91,6 +93,7 @@ final readonly class HostedBrowser
                 'url' => $url, 'expected' => $expected, 'render' => $render,
                 'observeConfig' => $observeConfig, 'observeNormal' => $observeNormal,
                 ...($observeParentCountry ? ['observeParentCountry' => true] : []),
+                ...($observeCurrencySettings ? ['observeCurrencySettings' => true] : []),
                 ...($selectCard ? ['selectCard' => true] : []),
             ];
             if ($riskJournal !== null) {
@@ -154,6 +157,7 @@ final readonly class HostedBrowser
                 $observeNormal,
                 $observeRisk,
                 $observeParentCountry,
+                $observeCurrencySettings,
                 $selectCard,
             );
             if ($journalFailed) {
@@ -186,11 +190,13 @@ final readonly class HostedBrowser
         bool $observeNormal = false,
         bool $observeRisk = false,
         bool $observeParentCountry = false,
+        bool $observeCurrencySettings = false,
         bool $selectCard = false,
     ): array {
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
             || ($observeRisk && !$observeNormal) || ($observeParentCountry && !$observeNormal)
+            || ($observeCurrencySettings && !$observeNormal)
             || ($selectCard && !$observeNormal)
         ) {
             throw new RuntimeException('Method observation requires explicit rendering.');
@@ -217,6 +223,7 @@ final readonly class HostedBrowser
             'normal_fulfill', 'normal_response_dispose', 'normal_abort'];
         $failurePhases[] = 'risk_shutdown';
         $failurePhases[] = 'parent_country_read';
+        $failurePhases[] = 'currency_settings_read';
         foreach (['cardnumber', 'expiry', 'cvc'] as $field) {
             foreach (['locator', 'count', 'visible', 'enabled'] as $step) {
                 $failurePhases[] = 'readiness_' . $field . '_' . $step;
@@ -554,6 +561,9 @@ final readonly class HostedBrowser
         if ($observeParentCountry) {
             $safe += self::parentCountryEvidence($data, $safe);
         }
+        if ($observeCurrencySettings) {
+            $safe += self::currencySettingsEvidence($data, $safe);
+        }
         $version = $data['browser_version'] ?? null;
         if (is_string($version) && preg_match('/^[0-9]+(?:\.[0-9]+){1,3}$/D', $version) === 1) {
             $safe['browser_version'] = $version;
@@ -649,7 +659,8 @@ final readonly class HostedBrowser
         foreach (
             ['hosted-policy.cjs', 'hosted-browser.cjs', 'hosted-smoke.cjs', 'hosted-policy.test.cjs',
                 'hosted-risk-policy.cjs', 'hosted-risk-journal.cjs', 'hosted-risk-relay.cjs',
-                'hosted-risk-observer.cjs', 'hosted-parent-country.cjs', 'hosted-card-choice.cjs'] as $file
+                'hosted-risk-observer.cjs', 'hosted-parent-country.cjs', 'hosted-currency-settings.cjs',
+                'hosted-card-choice.cjs'] as $file
         ) {
             $hash = hash_file('sha256', $root . '/tools/browser/' . $file);
             if ($hash === false) {
@@ -844,6 +855,119 @@ final readonly class HostedBrowser
             'dispose', 'abort', 'context_dispose'], true)
         ) {
             $safe['parent_country_failure_phase'] = $phase;
+        }
+        return $safe;
+    }
+
+    /**
+     * @param array<array-key,mixed> $data
+     * @param array<string,mixed> $base
+     * @return array<string,string|int|bool>
+     */
+    private static function currencySettingsEvidence(array $data, array $base): array
+    {
+        $safe = ['currency_settings_requested' => true];
+        if (isset($data['currency_settings_requested']) && $data['currency_settings_requested'] !== true) {
+            throw new RuntimeException('Currency settings configuration did not match.');
+        }
+        foreach (['secret_available', 'window_closed', 'headers_withheld', 'xsrf_withheld'] as $suffix) {
+            $key = 'currency_settings_' . $suffix;
+            if (is_bool($data[$key] ?? null)) {
+                $safe[$key] = $data[$key];
+            }
+        }
+        $counts = ['currency_settings_attempts', 'currency_settings_sends', 'currency_settings_delivered'];
+        if (array_intersect($counts, array_keys($data)) !== [] && array_diff($counts, array_keys($data)) !== []) {
+            throw new RuntimeException('Currency settings returned incomplete counts.');
+        }
+        $last = 1;
+        foreach ($counts as $key) {
+            if (array_key_exists($key, $data)) {
+                $value = $data[$key];
+                if (!is_int($value) || $value < 0 || $value > $last) {
+                    throw new RuntimeException('Currency settings exceeded its finite slot.');
+                }
+                $safe[$key] = $value;
+                $last = $value;
+            }
+        }
+        $outcome = $data['currency_settings_outcome'] ?? null;
+        if (
+            in_array($outcome, ['not_observed', 'matched', 'source_fallback', 'unsupported_response_shape',
+            'headers_withheld', 'invalid_response', 'unavailable', 'redirect_rejected', 'http_rejected'], true)
+        ) {
+            $safe['currency_settings_outcome'] = $outcome;
+        }
+        $status = $data['currency_settings_http_status'] ?? null;
+        if (is_int($status) && $status >= 100 && $status <= 599) {
+            $safe['currency_settings_http_status'] = $status;
+        }
+        if (($safe['currency_settings_attempts'] ?? 0) > 0) {
+            foreach (
+                ['payer_payload_delivered', 'payer_mode_matches', 'payer_currency_matches',
+                'payer_request_scope_verified', 'checkout_token_matches'] as $key
+            ) {
+                if (($base[$key] ?? null) !== true) {
+                    throw new RuntimeException('Currency settings lacked its fresh own payer proof.');
+                }
+            }
+            if (
+                ($base['candidate_origin'] ?? null) !== 'sandbox'
+                || ($safe['currency_settings_secret_available'] ?? null) !== true
+            ) {
+                throw new RuntimeException('Currency settings lacked its private Sandbox transaction scope.');
+            }
+        }
+        if (
+            ($safe['currency_settings_delivered'] ?? 0) > 0
+            && ($status !== 200 || !in_array($outcome, ['matched', 'source_fallback'], true))
+        ) {
+            throw new RuntimeException('Currency settings delivery lacked its bounded inspected response.');
+        }
+        if (
+            ($safe['currency_settings_xsrf_withheld'] ?? null) === true
+            && ($safe['currency_settings_headers_withheld'] ?? null) !== true
+        ) {
+            throw new RuntimeException('Currency settings header facts were inconsistent.');
+        }
+        if (
+            ($safe['currency_settings_headers_withheld'] ?? null) === true
+            && (($safe['currency_settings_sends'] ?? 0) > 0
+                || ($safe['currency_settings_attempts'] ?? 0) !== 1)
+        ) {
+            throw new RuntimeException('Withheld currency headers cannot authorize a send.');
+        }
+        if (
+            ($safe['currency_settings_delivered'] ?? 0) > 0
+            && (($outcome === 'matched' && ($data['currency_settings_items_state'] ?? null) !== 'array')
+                || ($outcome === 'source_fallback' && !in_array(
+                    $data['currency_settings_items_state'] ?? null,
+                    ['missing', 'null'],
+                    true
+                )))
+        ) {
+            throw new RuntimeException('Currency settings shape and delivery facts did not match.');
+        }
+        $shape = $data['currency_settings_items_state'] ?? null;
+        if (in_array($shape, ['not_observed', 'array', 'missing', 'null', 'unsupported'], true)) {
+            $safe['currency_settings_items_state'] = $shape;
+        }
+        foreach (['items', 'currency_entries'] as $suffix) {
+            $key = 'currency_settings_' . $suffix;
+            if (is_int($data[$key] ?? null) && $data[$key] >= 0 && $data[$key] <= 200 && $shape === 'array') {
+                $safe[$key] = $data[$key];
+            }
+        }
+        $timeout = $data['currency_settings_request_timeout_ms'] ?? null;
+        if (is_int($timeout) && $timeout >= 1 && $timeout <= 8000) {
+            $safe['currency_settings_request_timeout_ms'] = $timeout;
+        }
+        $phase = $data['currency_settings_failure_phase'] ?? null;
+        if (
+            in_array($phase, ['scope', 'context', 'get', 'status', 'headers', 'body', 'fulfill',
+            'dispose', 'abort', 'context_dispose'], true)
+        ) {
+            $safe['currency_settings_failure_phase'] = $phase;
         }
         return $safe;
     }

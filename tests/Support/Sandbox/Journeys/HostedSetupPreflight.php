@@ -19,7 +19,9 @@ final class HostedSetupPreflight
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool):array<string,mixed>)|null $browser
+     * @param (Closure(
+     *     string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool,bool
+     * ):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -34,7 +36,7 @@ final class HostedSetupPreflight
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
                 'playwright-module', 'create-one-hosted-setup', 'render-owned-data',
                 'observe-one-method-config', 'observe-normal-reads', 'observe-risk-bootstrap',
-                'observe-parent-country', 'select-one-native-card'];
+                'observe-parent-country', 'observe-one-currency-settings', 'select-one-native-card'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -75,6 +77,13 @@ final class HostedSetupPreflight
             }
             if ($observeParentCountry) {
                 $safe['parent_country_requested'] = true;
+            }
+            $observeCurrencySettings = $options['observe-one-currency-settings'] ?? false;
+            if (!is_bool($observeCurrencySettings) || ($observeCurrencySettings && !$observeNormal)) {
+                throw new RuntimeException('Currency settings require explicit normal reads.');
+            }
+            if ($observeCurrencySettings) {
+                $safe['currency_settings_requested'] = true;
             }
             $selectCard = $options['select-one-native-card'] ?? false;
             if (!is_bool($selectCard) || ($selectCard && !$observeNormal)) {
@@ -172,6 +181,13 @@ final class HostedSetupPreflight
                     'startup_window_max_ms' => 8000, 'normal_window_max_ms' => 8000, 'limit' => 1,
                 ], $fingerprint);
             }
+            if ($observeCurrencySettings) {
+                $ledger->requestId('preflight_currency_settings', $browserExpected + [
+                    'method' => 'GET', 'path' => '/api/v1/pa/config/currency_settings',
+                    'scope' => 'original_main_and_matched_payer_transaction_secret', 'limit' => 1,
+                    'normal_window_max_ms' => 8000,
+                ], $fingerprint); // Generic role intent; no future private wire or provider-ID claim.
+            }
             if ($selectCard) {
                 $ledger->requestId('preflight_native_card_choice', $browserExpected + [
                     'action' => 'one_unforced_native_card_radio', 'scope' => 'original_qualified_dropin_document',
@@ -191,6 +207,7 @@ final class HostedSetupPreflight
                     $observeRisk,
                     $riskJournal,
                     $observeParentCountry,
+                    $observeCurrencySettings,
                     $selectCard,
                 ),
                 $render,
@@ -198,6 +215,7 @@ final class HostedSetupPreflight
                 $observeNormal,
                 $observeRisk,
                 $observeParentCountry,
+                $observeCurrencySettings,
                 $selectCard,
             );
             $safe['result'] = $safe['browser']['result'];

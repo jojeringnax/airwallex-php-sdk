@@ -137,7 +137,7 @@ final class HostedBrowserTest extends TestCase
     {
         $data = self::nativeCardEvidence() + ['native_card_selector' => 'PRIVATE_SELECTOR',
             'native_card_value' => 'PRIVATE_VALUE', 'native_card_error' => 'PRIVATE_ERROR'];
-        $safe = HostedBrowser::sanitize($data, true, true, true, false, false, true);
+        $safe = HostedBrowser::sanitize($data, true, true, true, false, false, false, true);
         self::assertSame(1, $safe['native_card_action_attempts']);
         self::assertTrue($safe['native_card_action_completed_before_capture']);
         self::assertSame('multiple', $safe['cardnumber_match_count']);
@@ -148,7 +148,7 @@ final class HostedBrowserTest extends TestCase
         self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
         $late = HostedBrowser::sanitize(array_replace($data, [
             'native_card_action_completed_before_capture' => false,
-        ]), true, true, true, false, false, true);
+        ]), true, true, true, false, false, false, true);
         self::assertFalse($late['native_card_action_completed_before_capture']);
         self::assertSame('zero', $late['expiry_match_count']);
     }
@@ -178,6 +178,7 @@ final class HostedBrowserTest extends TestCase
             true,
             false,
             false,
+            false,
             true
         );
     }
@@ -190,6 +191,7 @@ final class HostedBrowserTest extends TestCase
             true,
             true,
             true,
+            false,
             false,
             false,
             true
@@ -302,6 +304,99 @@ final class HostedBrowserTest extends TestCase
         $data[$key] = $value;
         $this->expectException(RuntimeException::class);
         HostedBrowser::sanitize($data, true, true, true);
+    }
+
+    /** @return array<string,mixed> */
+    private static function currencyEvidence(): array
+    {
+        return self::normalEvidence() + ['currency_settings_requested' => true,
+            'currency_settings_secret_available' => true, 'currency_settings_window_closed' => true,
+            'currency_settings_headers_withheld' => false, 'currency_settings_xsrf_withheld' => false,
+            'currency_settings_attempts' => 1, 'currency_settings_sends' => 1, 'currency_settings_delivered' => 1,
+            'currency_settings_http_status' => 200, 'currency_settings_outcome' => 'matched',
+            'currency_settings_items_state' => 'array', 'currency_settings_items' => 1,
+            'currency_settings_currency_entries' => 2];
+    }
+
+    public function testCurrencyProjectionKeepsClosedCountsWithoutAnyPrivateSourceValues(): void
+    {
+        $data = self::currencyEvidence() + ['currency_settings_raw' => 'PRIVATE_SECRET',
+            'currency_settings_country' => 'PRIVATE_COUNTRY', 'currency_settings_request_timeout_ms' => 7900];
+        $safe = HostedBrowser::sanitize($data, true, true, true, false, false, true);
+        self::assertSame(1, $safe['currency_settings_delivered']);
+        self::assertSame(2, $safe['currency_settings_currency_entries']);
+        self::assertSame(7900, $safe['currency_settings_request_timeout_ms']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertArrayNotHasKey('currency_settings_delivered', HostedBrowser::sanitize($data, true, true, true));
+    }
+
+    public function testCurrencySourceFallbackDoesNotInventAnEmptySettingsInventory(): void
+    {
+        $data = self::currencyEvidence();
+        $data['currency_settings_outcome'] = 'source_fallback';
+        $data['currency_settings_items_state'] = 'missing';
+        $safe = HostedBrowser::sanitize($data, true, true, true, false, false, true);
+        self::assertSame('source_fallback', $safe['currency_settings_outcome']);
+        self::assertArrayNotHasKey('currency_settings_items', $safe);
+        self::assertArrayNotHasKey('currency_settings_currency_entries', $safe);
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function badCurrencyFacts(): iterable
+    {
+        yield 'scope' => ['payer_request_scope_verified', false];
+        yield 'undelivered payer' => ['payer_payload_delivered', false];
+        yield 'mode' => ['payer_mode_matches', false];
+        yield 'currency' => ['payer_currency_matches', false];
+        yield 'origin' => ['candidate_origin', 'shared'];
+        yield 'secret' => ['currency_settings_secret_available', false];
+        yield 'second slot' => ['currency_settings_attempts', 2];
+        yield 'uninovked delivery' => ['currency_settings_sends', 0];
+        yield 'redirect' => ['currency_settings_http_status', 302];
+        yield 'withheld' => ['currency_settings_headers_withheld', true];
+        yield 'missing shape' => ['currency_settings_items_state', 'not_observed'];
+        yield 'config mismatch' => ['currency_settings_requested', false];
+        yield 'bad response' => ['currency_settings_outcome', 'unsupported_response_shape'];
+    }
+
+    #[DataProvider('badCurrencyFacts')]
+    public function testCurrencyCannotInventScopeHeaderOrDeliveryProof(string $key, mixed $value): void
+    {
+        $data = self::currencyEvidence();
+        $data[$key] = $value;
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true, false, false, true);
+    }
+
+    public function testCurrencyXsrfWithholdingKeepsNoSendProofWithoutInventingHttpOrItems(): void
+    {
+        $data = self::currencyEvidence();
+        $data['currency_settings_sends'] = 0;
+        $data['currency_settings_delivered'] = 0;
+        $data['currency_settings_headers_withheld'] = true;
+        $data['currency_settings_xsrf_withheld'] = true;
+        $data['currency_settings_outcome'] = 'headers_withheld';
+        $data['currency_settings_items_state'] = 'not_observed';
+        unset($data['currency_settings_http_status']);
+        $safe = HostedBrowser::sanitize($data, true, true, true, false, false, true);
+        self::assertTrue($safe['currency_settings_xsrf_withheld']);
+        self::assertSame(0, $safe['currency_settings_sends']);
+        self::assertArrayNotHasKey('currency_settings_http_status', $safe);
+        self::assertArrayNotHasKey('currency_settings_items', $safe);
+    }
+
+    public function testCurrencyFlagRequiresExistingNormalReadOptInBeforeStartingAChild(): void
+    {
+        $started = $this->directory . '/child-started';
+        $bridge = $this->bridge('file_put_contents(' . var_export($started, true) . ', "started"); exit(9);');
+        $this->expectException(RuntimeException::class);
+        try {
+            $bridge->inspect('https://checkout.sandbox.airwallex.com/pay?s=PRIVATE', [
+                'checkout_id' => 'PRIVATE', 'mode' => 'SETUP', 'currency' => 'EUR',
+            ], render: true, observeConfig: true, observeCurrencySettings: true);
+        } finally {
+            self::assertFileDoesNotExist($started);
+        }
     }
 
     /** @return array<string,mixed> */

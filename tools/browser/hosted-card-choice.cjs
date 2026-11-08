@@ -7,6 +7,11 @@ const runtimeProofs = new WeakMap();
 const selector = '#payment-method-card input#radio-card[type=radio][name=method][value=card]';
 const runtimeHash = '9393fa79e1c67c74edc26b610d65a4f7ed73d345a762465cc88340a33a2454ac';
 
+function cardWindowRemaining(normalRemaining, caseDeadline, now = performance.now()) {
+  if (![normalRemaining, caseDeadline, now].every(Number.isFinite)) return 0;
+  return Math.max(0, Math.min(normalRemaining - 2500, caseDeadline - now));
+}
+
 // Reviewed local implementation, including channel cancellation and the no-scroll pointer branch.
 async function verifyCardRuntime(modulePath) {
   const entry = require.resolve('playwright-core/package.json', { paths: [modulePath] });
@@ -116,4 +121,4 @@ class NativeCardChoice {
   }
 }
 
-module.exports = { NativeCardChoice, verifyCardRuntime, fixtureCardRuntime };
+module.exports = { NativeCardChoice, verifyCardRuntime, fixtureCardRuntime, cardWindowRemaining };

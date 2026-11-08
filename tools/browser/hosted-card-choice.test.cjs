@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { NativeCardChoice, fixtureCardRuntime, verifyCardRuntime } = require('./hosted-card-choice.cjs');
+const { NativeCardChoice, fixtureCardRuntime, verifyCardRuntime, cardWindowRemaining } = require('./hosted-card-choice.cjs');
 const origin = 'http://127.0.0.1:12345';
 function fixture(options = {}) {
   let calls = 0, lookups = 0;
@@ -18,7 +18,7 @@ function fixture(options = {}) {
   const frame = { locator: value => { lookups++; assert.equal(value,
     '#payment-method-card input#radio-card[type=radio][name=method][value=card]');
     return { count: async () => options.count ?? 1, elementHandle: async () => element }; } };
-  const choice = new NativeCardChoice(options.selected ?? true, fixtureCardRuntime(origin), () => 100,
+  const choice = new NativeCardChoice(options.selected ?? true, fixtureCardRuntime(origin), options.remaining ?? (() => 100),
     options.clock, origin);
   return { choice, run: () => choice.consider(frame, () => valid, options.qualified ?? true),
     invalidate: () => { valid = false; }, calls: () => calls, lookups: () => lookups, element };
@@ -100,4 +100,11 @@ test('completion observed past its finite cutoff is not labeled before capture m
   await f.run(); assert.equal(f.calls(), 1);
   assert.equal(f.choice.evidence().native_card_action_completed, true);
   assert.equal(f.choice.evidence().native_card_action_completed_before_capture, false);
+});
+test('original absolute case expiry with a fresh normal window withholds input even before a delayed watchdog callback', async () => {
+  assert.equal(cardWindowRemaining(8000, 40000, 39000), 1000);
+  assert.equal(cardWindowRemaining(2500, 40000, 39000), 0);
+  assert.equal(cardWindowRemaining(8000, 40000, 41000), 0);
+  const f = fixture({ remaining: () => cardWindowRemaining(8000, 40000, 41000) });
+  await f.run(); assert.equal(f.lookups(), 0); assert.equal(f.calls(), 0);
 });

@@ -6,8 +6,9 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { HostedPolicy, egressProxy, assetMatches } = require('./hosted-policy.cjs');
-const { NativeCardChoice, verifyCardRuntime } = require('./hosted-card-choice.cjs');
+const { NativeCardChoice, verifyCardRuntime, cardWindowRemaining } = require('./hosted-card-choice.cjs');
 const { ParentCountryObserver } = require('./hosted-parent-country.cjs');
+const { CurrencySettingsObserver } = require('./hosted-currency-settings.cjs');
 const { RiskJournalClient } = require('./hosted-risk-journal.cjs');
 const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
 
@@ -19,11 +20,13 @@ class PreflightFailure extends Error {
 }
 let startupPhase = 'configuration';
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false, selectCard = false, cardRuntime = null) {
-  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal, undefined, observeParentCountry);
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false, observeCurrencySettings = false, selectCard = false, cardRuntime = null) {
+  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal, undefined, observeParentCountry, observeCurrencySettings);
   if (typeof selectCard !== 'boolean' || (selectCard && !observeNormal)) throw new Error('Card choice requires explicit normal reads.');
   if (riskJournal !== null && !observeNormal) throw new Error('Risk observation requires explicit normal reads.');
-  const cardChoice = new NativeCardChoice(selectCard, cardRuntime, () => policy.normalWindowRemaining() - 2500, undefined, fixtureOrigin);
+  let cardCaseDeadline = 0;
+  const cardChoice = new NativeCardChoice(selectCard, cardRuntime,
+    () => cardWindowRemaining(policy.normalWindowRemaining(), cardCaseDeadline), undefined, fixtureOrigin);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
   await fs.chmod(directory, 0o700);
   let proxy;
@@ -97,7 +100,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     } finally { clearTimeout(timer); }
   };
   const caseDeadline = performance.now() + (render ? 40000 : 20000);
+  cardCaseDeadline = caseDeadline;
   const parentCountry = new ParentCountryObserver(policy, observeParentCountry, playwright, caseDeadline);
+  const currencySettings = new CurrencySettingsObserver(policy, observeCurrencySettings, playwright, caseDeadline);
   const considerCard = () => {
     if (!selectCard) return;
     const frame = boundFrame;
@@ -133,6 +138,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     }));
     risk.start(proxy.server);
     parentCountry.start(proxy.server);
+    currencySettings.start(proxy.server);
     browser = await step('browser_launch', () => playwright.chromium.launch({
       channel: 'chrome', headless: true, timeout: 15000,
       proxy: { server: proxy.server, bypass: '' },
@@ -159,6 +165,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       if (observeParentCountry && request.resourceType() === 'document' && request.frame() === mainPage?.mainFrame()) {
         policy.noteParentMainDocument(request.url());
       }
+      if (observeCurrencySettings && request.resourceType() === 'document' && request.frame() === mainPage?.mainFrame()) {
+        policy.noteCurrencyMainDocument(request.url());
+      }
       if (normalAdmissionClosed) {
         counts.blocked_requests++;
         policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
@@ -166,6 +175,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         return;
       }
       if (await parentCountry.handle(route, mainPage?.mainFrame(), () => shuttingDown, () => normalAdmissionClosed)) return;
+      if (observeCurrencySettings && await currencySettings.handle(route, mainPage?.mainFrame(), () => shuttingDown, () => normalAdmissionClosed)) return;
       if (await risk.handle(route, context, mainPage?.mainFrame(), boundFrame,
         () => shuttingDown, () => normalAdmissionClosed)) return;
       // Script admission and integrity share one immutable, non-null expected hash.
@@ -585,7 +595,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       normal.normal_read_inspection_completed = readiness.card_readiness_observed === true
         && policy.normalWindowRemaining() > 500;
       normalAdmissionClosed = true; // No new request or late context-construction send after the fixed snapshot.
-      await Promise.all([drainSentNormalReads(), parentCountry.drainSent()]); // Already sent reads only.
+      await Promise.all([drainSentNormalReads(), parentCountry.drainSent(), currencySettings.drainSent()]); // Already sent reads only.
       policy.closeNormalWindow();
     }
     const visible = await step('visible_label', () =>
@@ -597,7 +607,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       navigation_passed: true, test_mode_visible: visible,
       sandbox_origin_verified: false, card_entry_enabled: false,
       ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
-      ...policy.bindingEvidence(), ...cardChoice.evidence(), ...parentCountry.evidence(), ...payer, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
+      ...policy.bindingEvidence(), ...cardChoice.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...payer, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
       browser_version: /^[0-9]+(?:\.[0-9]+){1,3}$/u.test(browser.version()) ? browser.version() : 'unclassified',
       ...counts, proxy_rejections: proxy.counts.rejected,
       proxy_connections: proxy.counts.connected,
@@ -607,11 +617,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     markFailure('unclassified');
   } finally {
     cardChoice.capture();
-    if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads(), parentCountry.drainSent()]); }
+    if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads(), parentCountry.drainSent(), currencySettings.drainSent()]); }
     shuttingDown = true;
     policy.closeNormalWindow();
     clearTimeout(normalWindowTimer);
     clearTimeout(watchdog);
+    if (!await currencySettings.close() || currencySettings.failed()) markFailure('currency_settings_read');
     if (!await parentCountry.close() || parentCountry.failed()) markFailure('parent_country_read');
     await track(async () => {
       if (!await risk.close()) throw new Error('Risk relay did not close safely.');
@@ -633,12 +644,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false,
     browser_failure_phase: firstFailure ?? 'unclassified', ...counts,
     ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
-    ...policy.bindingEvidence(), ...cardChoice.evidence(), ...parentCountry.evidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
+    ...policy.bindingEvidence(), ...cardChoice.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
     ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}),
     ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
     ...risk.evidence(),
   });
-  return { ...result, ...counts, ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
@@ -654,11 +665,13 @@ async function main() {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url', 'expected,observeConfig,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url'].includes(Object.keys(input).filter(key => key !== 'selectCard').sort().join(','))
+      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url', 'expected,observeConfig,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,render,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url'].includes(Object.keys(input).filter(key => key !== 'selectCard').sort().join(','))
       || (Object.hasOwn(input, 'selectCard') && (input.selectCard !== true || input.observeNormal !== true))
       || (Object.hasOwn(input, 'observeRisk') && input.observeRisk !== true)
       || (input.observeRisk === true && input.observeNormal !== true)
       || (Object.hasOwn(input, 'observeParentCountry') && (typeof input.observeParentCountry !== 'boolean' || (input.observeParentCountry && input.observeNormal !== true)))
+      || (Object.hasOwn(input, 'observeCurrencySettings') && (typeof input.observeCurrencySettings !== 'boolean'
+        || (input.observeCurrencySettings && input.observeNormal !== true)))
       || (Object.hasOwn(input, 'observeNormal') && typeof input.observeNormal !== 'boolean')
       || (Object.hasOwn(input, 'observeConfig') && typeof input.observeConfig !== 'boolean')
       || (Object.hasOwn(input, 'render') && typeof input.render !== 'boolean') || typeof input.url !== 'string'
@@ -666,13 +679,13 @@ async function main() {
     throw new Error('Invalid private browser input.');
   }
   // Reject non-provider input before requiring any browser module or launching Chrome.
-  new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, undefined, input.observeParentCountry ?? false);
+  new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, undefined, input.observeParentCountry ?? false, input.observeCurrencySettings ?? false);
   startupPhase = 'tooling_load';
   const playwright = require(process.argv[2]);
   const cardRuntime = input.selectCard === true ? await verifyCardRuntime(process.argv[2]) : null;
   startupPhase = 'browser_startup';
   const journal = input.observeRisk === true ? RiskJournalClient.fromDescriptors(input.riskJournal) : null;
-  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal, null, input.observeParentCountry ?? false, input.selectCard ?? false, cardRuntime);
+  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal, null, input.observeParentCountry ?? false, input.observeCurrencySettings ?? false, input.selectCard ?? false, cardRuntime);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
