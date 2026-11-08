@@ -113,6 +113,52 @@ final class HostedBrowserTest extends TestCase
             'bound_render_frames' => 1, 'card_readiness_observed' => true];
     }
 
+    public function testPartialRiskEvidenceIsExplicitClosedAndDoesNotCreateCountsAfterAnOpaqueFailure(): void
+    {
+        $data = self::normalEvidence() + [
+            'risk_bootstrap_requested' => true, 'risk_graph_complete' => false, 'risk_financial_ready' => false,
+            'risk_loader_attempted' => true, 'risk_loader_verified' => true,
+            'risk_partial_reason' => 'unknown_dependency', 'risk_telemetry_poisoned' => true,
+            'risk_visitor_attempts' => 1, 'risk_visitor_client_invocations' => 1, 'risk_visitor_delivered' => 0,
+            'risk_visitor_http_status' => 503, 'risk_journal_prepared' => 1, 'risk_journal_results' => 1,
+            'risk_denied_dependencies' => ['risk_document' => 1, 'forter' => 2, 'PRIVATE_URL' => 3],
+            'risk_raw_error' => 'PRIVATE_ERROR', 'risk_nonce' => 'PRIVATE_NONCE', 'risk_cookie' => 'PRIVATE_COOKIE',
+        ];
+        $safe = HostedBrowser::sanitize($data, true, true, true, true);
+        self::assertFalse($safe['risk_graph_complete']);
+        self::assertFalse($safe['risk_financial_ready']);
+        self::assertSame(503, $safe['risk_visitor_http_status']);
+        self::assertSame(['risk_document' => 1, 'forter' => 2], $safe['risk_denied_dependencies']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertArrayNotHasKey('risk_bootstrap_requested', HostedBrowser::sanitize($data, true, true, true));
+        $opaque = HostedBrowser::sanitize([
+            'result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+        ], true, true, true, true);
+        self::assertArrayNotHasKey('risk_visitor_client_invocations', $opaque);
+        self::assertArrayNotHasKey('risk_loader_verified', $opaque);
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize(array_replace($data, ['risk_financial_ready' => true]), true, true, true, true);
+    }
+
+    public function testRiskCountsCannotClaimMoreThanFiniteAttemptsOrLoseTheirOwnScope(): void
+    {
+        foreach (
+            [
+            ['risk_event_attempts' => 9],
+            ['risk_visitor_attempts' => 1, 'risk_visitor_client_invocations' => 2],
+            ['risk_visitor_attempts' => 1, 'risk_visitor_client_invocations' => 0, 'risk_visitor_delivered' => 1],
+            ['risk_loader_verified' => true, 'risk_loader_attempted' => false],
+            ] as $extra
+        ) {
+            try {
+                HostedBrowser::sanitize(self::normalEvidence() + $extra, true, true, true, true);
+                self::fail('Invalid risk evidence was retained.');
+            } catch (RuntimeException $error) {
+                self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+            }
+        }
+    }
+
     public function testNormalEvidenceKeepsOnlyClosedFactsAndDoesNotInventUnavailableCounts(): void
     {
         $data = self::normalEvidence() + ['normal_customer_url' => 'PRIVATE_URL', 'countryCode' => 'PRIVATE',
@@ -188,13 +234,33 @@ final class HostedBrowserTest extends TestCase
     {
         $data = self::parentCountryEvidence() + ['countryCode' => 'PRIVATE', 'parent_country_url' => 'PRIVATE',
             'parent_country_request_timeout_ms' => 7990];
-        $safe = HostedBrowser::sanitize($data, true, true, true, true);
+        $safe = HostedBrowser::sanitize($data, true, true, true, false, true);
         self::assertSame(1, $safe['parent_country_delivered']);
         self::assertSame(7990, $safe['parent_country_request_timeout_ms']);
         self::assertArrayNotHasKey('payer_payload_delivered', $safe);
         self::assertArrayNotHasKey('bound_render_frames', $safe);
         self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
         self::assertArrayNotHasKey('parent_country_delivered', HostedBrowser::sanitize($data, true, true, true));
+    }
+
+    public function testRiskAndParentSanitizersRetainOnlyTheirIndependentlySelectedFacts(): void
+    {
+        $data = self::normalEvidence() + self::parentCountryEvidence() + [
+            'risk_bootstrap_requested' => true, 'risk_graph_complete' => false, 'risk_financial_ready' => false,
+            'risk_loader_attempted' => false, 'risk_partial_reason' => 'scope_unavailable',
+        ];
+        $both = HostedBrowser::sanitize($data, true, true, true, true, true);
+        self::assertSame(1, $both['parent_country_delivered']);
+        self::assertTrue($both['risk_bootstrap_requested']);
+        self::assertFalse($both['risk_financial_ready']);
+        self::assertArrayNotHasKey(
+            'parent_country_delivered',
+            HostedBrowser::sanitize($data, true, true, true, true),
+        );
+        self::assertArrayNotHasKey(
+            'risk_bootstrap_requested',
+            HostedBrowser::sanitize($data, true, true, true, false, true),
+        );
     }
 
     /** @return iterable<string,array{string,mixed}> */
@@ -216,19 +282,19 @@ final class HostedBrowserTest extends TestCase
         $data = self::parentCountryEvidence();
         $data[$key] = $value;
         $this->expectException(RuntimeException::class);
-        HostedBrowser::sanitize($data, true, true, true, true);
+        HostedBrowser::sanitize($data, true, true, true, false, true);
     }
 
     public function testOpaqueParentFailureDoesNotInventUnavailableCountsAndRejectsPartialCounts(): void
     {
         $safe = HostedBrowser::sanitize(['result' => 'fail', 'reason' => 'browser_preflight_failed',
-            'card_entry_enabled' => false, 'parent_country_failure_phase' => 'get'], true, true, true, true);
+            'card_entry_enabled' => false, 'parent_country_failure_phase' => 'get'], true, true, true, false, true);
         self::assertSame('get', $safe['parent_country_failure_phase']);
         self::assertArrayNotHasKey('parent_country_attempts', $safe);
         $data = self::parentCountryEvidence();
         unset($data['parent_country_attempts']);
         $this->expectException(RuntimeException::class);
-        HostedBrowser::sanitize($data, true, true, true, true);
+        HostedBrowser::sanitize($data, true, true, true, false, true);
     }
 
     /** @return iterable<string,array{string,mixed}> */

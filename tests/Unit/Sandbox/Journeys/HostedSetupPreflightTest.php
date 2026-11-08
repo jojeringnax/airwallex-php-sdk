@@ -8,6 +8,7 @@ use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Psr7\Response;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedSetupPreflight;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedRiskJournal;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -65,10 +66,24 @@ final class HostedSetupPreflightTest extends TestCase
      */
     private function execute(string $fault = '', ?array $options = null): array
     {
-        $transport = new HttpClient(['handler' => function (RequestInterface $request) use ($fault): Response {
+        $transport = new HttpClient(['handler' => function (RequestInterface $request) use (
+            $fault,
+            $options
+        ): Response {
             $this->requests[] = $request;
             $path = $request->getUri()->getPath();
             if ($path === '/api/v1/authentication/login') {
+                if (($options['observe-risk-bootstrap'] ?? false) === true) {
+                    $paths = glob($this->directory . '/sdk-validation-*/ledger.json');
+                    self::assertIsArray($paths);
+                    self::assertCount(1, $paths);
+                    $private = file_get_contents($paths[0]);
+                    self::assertIsString($private);
+                    $state = json_decode($private, true, flags: JSON_THROW_ON_ERROR);
+                    self::assertIsArray($state);
+                    self::assertIsArray($state['actions']);
+                    self::assertArrayHasKey('preflight_risk_bootstrap', $state['actions']);
+                }
                 return $this->json(['token' => 'fixture_token', 'expires_at' => '2099-01-01T00:00:00Z']);
             }
             if ($path === '/api/v1/account') {
@@ -127,6 +142,8 @@ final class HostedSetupPreflightTest extends TestCase
                 bool $render,
                 bool $observeConfig,
                 bool $observeNormal,
+                bool $observeRisk,
+                ?HostedRiskJournal $riskJournal,
                 bool $observeParentCountry,
             ) use (
                 $fault,
@@ -135,6 +152,8 @@ final class HostedSetupPreflightTest extends TestCase
                 self::assertSame(($options['render-owned-data'] ?? false) === true, $render);
                 self::assertSame(($options['observe-one-method-config'] ?? false) === true, $observeConfig);
                 self::assertSame(($options['observe-normal-reads'] ?? false) === true, $observeNormal);
+                self::assertSame(($options['observe-risk-bootstrap'] ?? false) === true, $observeRisk);
+                self::assertSame($observeRisk, $riskJournal !== null);
                 self::assertSame(($options['observe-parent-country'] ?? false) === true, $observeParentCountry);
                 self::assertSame([
                     'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
@@ -147,6 +166,13 @@ final class HostedSetupPreflightTest extends TestCase
                 $state = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
                 self::assertIsArray($state);
                 self::assertIsArray($state['actions']);
+                if ($observeRisk) {
+                    self::assertIsArray($state['actions']['preflight_risk_bootstrap']);
+                    self::assertNotNull($riskJournal);
+                    self::assertSame(1, $riskJournal->bootstrap()['version']);
+                } else {
+                    self::assertArrayNotHasKey('preflight_risk_bootstrap', $state['actions']);
+                }
                 if ($observeParentCountry) {
                     self::assertIsArray($state['actions']['preflight_parent_country']);
                     self::assertSame(hash('sha256', json_encode($expected + [
@@ -190,6 +216,19 @@ final class HostedSetupPreflightTest extends TestCase
                 self::assertStringNotContainsString('PRIVATE_SYNTHETIC_SESSION', $contents);
                 $this->browserCalls++;
                 self::assertSame('https://checkout.airwallex.com/pay?s=PRIVATE_SYNTHETIC_SESSION', $url);
+                if ($fault === 'risk_unacknowledged') {
+                    self::assertNotNull($riskJournal);
+                    $riskJournal->accept(json_encode($riskJournal->bootstrap() + [
+                        'sequence' => 1, 'phase' => 'prepare', 'role' => 'visitor', 'ordinal' => 0,
+                        'body_sha256' => hash('sha256', 'PRIVATE_WIRE'), 'body_bytes' => 12,
+                        'target_uri' => 'https://bws.sandbox.airwallex.com/bws/v3/visit',
+                        'target_sha256' => hash('sha256', 'https://bws.sandbox.airwallex.com/bws/v3/visit'),
+                        'headers_sha256' => hash('sha256', 'PRIVATE_HEADERS'),
+                        'session_sha256' => hash('sha256', 'PRIVATE_SESSION'),
+                        'scope_sha256' => hash('sha256', 'PRIVATE_SCOPE'),
+                    ], JSON_THROW_ON_ERROR));
+                    throw new RuntimeException('PRIVATE_POSSIBLE_TELEMETRY_SEND');
+                }
                 if ($fault === 'browser_throws') {
                     throw new RuntimeException('PRIVATE_BROWSER_ERROR');
                 }
@@ -242,8 +281,11 @@ final class HostedSetupPreflightTest extends TestCase
             self::assertStringNotContainsString($private, $encoded);
         }
         self::assertIsArray($result['browser_tool_hashes']);
-        self::assertCount(6, $result['browser_tool_hashes']);
+        self::assertCount(10, $result['browser_tool_hashes']);
         self::assertArrayHasKey('hosted-parent-country.cjs', $result['browser_tool_hashes']);
+        foreach (['policy', 'journal', 'relay', 'observer'] as $helper) {
+            self::assertArrayHasKey('hosted-risk-' . $helper . '.cjs', $result['browser_tool_hashes']);
+        }
     }
 
     public function testExplicitRenderingStillCreatesAndCancelsOnlyOneOwnedSetup(): void
@@ -271,6 +313,41 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
+    public function testPartialRiskTelemetryHasPrivatePreauthProfileAndStillCleansOnlyItsOwnedCheckout(): void
+    {
+        $options = $this->options();
+        foreach (
+            ['render-owned-data', 'observe-one-method-config',
+                'observe-normal-reads', 'observe-risk-bootstrap'] as $flag
+        ) {
+            $options[$flag] = true;
+        }
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['risk_bootstrap_requested']);
+        self::assertSame('blocked', $result['result']);
+        self::assertSame(1, $this->cancels);
+        self::assertSame(1, $this->browserCalls);
+        self::assertIsArray($result['browser']);
+        self::assertFalse($result['browser']['risk_graph_complete']);
+        self::assertFalse($result['browser']['risk_financial_ready']);
+    }
+
+    public function testUnknownNonfinancialTelemetryOutcomeDoesNotInventAReasonToRetainTheOwnedActiveCheckout(): void
+    {
+        $options = $this->options();
+        foreach (
+            ['render-owned-data', 'observe-one-method-config',
+                'observe-normal-reads', 'observe-risk-bootstrap'] as $flag
+        ) {
+            $options[$flag] = true;
+        }
+        $result = $this->execute('risk_unacknowledged', $options);
+        self::assertSame('fail', $result['result']);
+        self::assertSame(1, $this->cancels);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
     public function testParentCountryHasItsOwnPrivateSlotBeforeBrowserHandoffAndNoFinancialPermission(): void
     {
         $options = $this->options();
@@ -284,6 +361,25 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertTrue($result['parent_country_requested']);
         self::assertSame(1, $this->browserCalls);
         self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testParentCountryAndRiskKeepIndependentPrivateArgumentsAndDurableSlots(): void
+    {
+        $options = $this->options();
+        foreach (
+            ['render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
+                'observe-risk-bootstrap', 'observe-parent-country'] as $flag
+        ) {
+            $options[$flag] = true;
+        }
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['parent_country_requested']);
+        self::assertTrue($result['risk_bootstrap_requested']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertIsArray($result['browser']);
+        self::assertFalse($result['browser']['risk_financial_ready']);
         self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
@@ -403,6 +499,8 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'invalid normal flag' => ['observe-normal-reads', 'PRIVATE_MODE'];
         yield 'parent without normal' => ['observe-parent-country', true];
         yield 'parent invalid flag' => ['observe-parent-country', 'PRIVATE_MODE'];
+        yield 'risk missing normal' => ['observe-risk-bootstrap', true];
+        yield 'risk arbitrary value' => ['observe-risk-bootstrap', 'PRIVATE_MODE'];
     }
 
     #[DataProvider('invalidOptions')]
@@ -421,13 +519,12 @@ final class HostedSetupPreflightTest extends TestCase
     public static function invalidMethodFlags(): iterable
     {
         yield 'requires rendering' => [['--observe-one-method-config']];
-        yield 'parent missing normal' => [['--render-owned-data', '--observe-one-method-config',
-            '--observe-parent-country']];
-        yield 'parent value' => [['--observe-parent-country=true']];
-        yield 'parent duplicate' => [['--observe-parent-country', '--observe-parent-country']];
         yield 'normal missing method' => [['--render-owned-data', '--observe-normal-reads']];
         yield 'normal value' => [['--observe-normal-reads=true']];
         yield 'normal duplicate' => [['--observe-normal-reads', '--observe-normal-reads']];
+        yield 'risk missing gates' => [['--observe-risk-bootstrap']];
+        yield 'risk value' => [['--observe-risk-bootstrap=true']];
+        yield 'risk duplicate' => [['--observe-risk-bootstrap', '--observe-risk-bootstrap']];
         yield 'rejects a flag value' => [['--render-owned-data', '--observe-one-method-config=true']];
         yield 'rejects duplicate flags' => [['--render-owned-data', '--observe-one-method-config',
             '--observe-one-method-config']];

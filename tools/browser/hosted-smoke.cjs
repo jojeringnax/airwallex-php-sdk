@@ -498,7 +498,7 @@ async function smoke(playwright) {
         if ((await context.cookies()).some(cookie => cookie.name.startsWith('synthetic_normal_'))) {
           throw new Error('Local parent response cookie crossed contexts.');
         }
-      }, expected, true, true, true, true);
+      }, expected, true, true, true, null, null, true);
     if (parentRead.parent_country_attempts !== 1 || parentRead.parent_country_sends !== 1
         || parentRead.parent_country_delivered !== 1 || parentRead.parent_country_http_status !== 200
         || parentRead.parent_country_outcome !== 'matched' || !parentRead.parent_country_startup_started
@@ -536,8 +536,154 @@ async function smoke(playwright) {
       method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
       normal_poll_window_verified: true, normal_status_poison_verified: true, normal_failure_diagnostics_verified: true,
       normal_inflight_drain_verified: true, parent_country_pre_payer_verified: true,
-      parent_country_distinct_slots_verified: true, parent_country_default_denial_verified: true };
+      parent_country_distinct_slots_verified: true, parent_country_default_denial_verified: true, ...await riskSmoke(playwright) };
   } finally { await new Promise(resolve => server.close(resolve)); }
+}
+
+async function riskSmoke(playwright) {
+  const https = require('node:https');
+  const fs = require('node:fs');
+  const { PassThrough } = require('node:stream');
+  const { createHash } = require('node:crypto');
+  const { egressProxy } = require('./hosted-policy.cjs');
+  const { RiskJournalClient } = require('./hosted-risk-journal.cjs');
+  const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+  const fixturePath = path.join(__dirname, '../../tests/fixtures/hosted-risk');
+  const cert = fs.readFileSync(path.join(fixturePath, 'localhost-fixture.crt'));
+  const key = fs.readFileSync(path.join(fixturePath, 'localhost-fixture.key'));
+  const sockets = new Set(), requests = [];
+  let origin, bwsOrigin, tamper = false;
+  const session = 'synthetic_bound_session';
+  const bws = https.createServer({ cert, key }, (request, response) => {
+    const chunks = [];
+    request.on('data', chunk => chunks.push(chunk));
+    request.on('end', () => {
+      requests.push({ method: request.method, path: request.url, headers: request.headers, body: Buffer.concat(chunks) });
+      const cors = { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'POST',
+        'access-control-allow-headers': 'content-type', 'set-cookie': 'UNTRUSTED_RESPONSE=PRIVATE_RESPONSE; Secure; SameSite=None' };
+      if (request.method === 'OPTIONS') response.writeHead(204, cors).end();
+      else if (request.url === '/bws/v3/visit') response.writeHead(200, { ...cors, 'content-type': 'application/json' })
+        .end('{"data":{"visitorID":"PRIVATE_VISITOR","visitorToken":"PRIVATE_TOKEN"}}');
+      else response.writeHead(204, cors).end();
+    });
+  });
+  const syntheticLoader = () => `document.cookie = 'AWX_RISK_SID=${session}; Path=/';
+    const item = {eventId:'${'b'.repeat(40)}',sessionId:'${session}',tenant:'pa',projectName:'element-js',
+      window:{document:{url:location.origin+location.pathname}},event:{type:'pageShow'},fromMainWindow:true};
+    navigator.sendBeacon('${bwsOrigin}/bws/v1/${session}',JSON.stringify([item]));
+    fetch('${bwsOrigin}/bws/v3/visit',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({deviceInfo:{},requestTime:1})}).then(r=>r.json()).catch(()=>{});
+    fetch('/api/v1/pa/payment_consents/create',{method:'POST',body:'PRIVATE_BLOCKED'}).catch(()=>{});
+    const forbidden = document.createElement('iframe'); forbidden.src='/risk-iframe.html'; document.body.append(forbidden);`;
+  const server = http.createServer((request, response) => {
+    if (request.url === '/page') response.writeHead(200, { 'content-type': 'text/html',
+      'set-cookie': 'application=PRIVATE_APPLICATION; Path=/' }).end(`<!doctype html><body><script
+      id="airwallex-fraud-api" data-order-session-id="${session}" data-tenant="pa" data-project-name="element-js"
+      src="/fingerprint.js?sessionId=${session}&hasScriptId=false&disable3rdTracking=false"></script>`);
+    else if (request.url.startsWith('/fingerprint.js?')) response.writeHead(200, { 'content-type': 'application/javascript' })
+      .end(tamper ? 'window.syntheticTamper = true;' : syntheticLoader());
+    else { response.writeHead(500).end(); throw new Error('Forbidden local risk fixture was reached.'); }
+  });
+  for (const fixture of [server, bws]) fixture.on('connection', socket => {
+    sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket));
+  });
+  await Promise.all([new Promise(resolve => server.listen(0, '127.0.0.1', resolve)),
+    new Promise(resolve => bws.listen(0, '127.0.0.1', resolve))]);
+  origin = 'http://127.0.0.1:' + server.address().port;
+  bwsOrigin = 'https://127.0.0.1:' + bws.address().port;
+  let browser, context, proxy, observer;
+  let phase = 'configuration';
+  let localDetails = {};
+  try {
+    for (const mode of ['matched', 'tampered', 'disabled']) {
+      const enabled = mode !== 'disabled';
+      tamper = mode === 'tampered';
+      const before = requests.length, messages = [];
+      const deadline = performance.now() + 8000;
+      const document = origin + '/page';
+      const parent = { renderEnabled: () => true, bindingEvidence: () => ({ payer_payload_delivered: true }),
+        normalEvidence: () => ({ normal_reads_requested: true }), normalWindowRemaining: () => Math.max(0, deadline - performance.now()),
+        normalSourceMatches: value => value === document, riskSessionMatches: value => value === session };
+      const input = new PassThrough(), output = new PassThrough(), nonce = 'a'.repeat(64);
+      const journal = enabled ? new RiskJournalClient({ version: 1, nonce }, input, output) : null;
+      output.on('data', chunk => {
+        const message = JSON.parse(chunk.toString()); messages.push(message);
+        input.write(JSON.stringify({ version: 1, nonce, sequence: message.sequence, phase: message.phase,
+          role: message.role, ordinal: message.ordinal, durable: true }) + '\n');
+      });
+      phase = 'observer';
+      observer = new HostedRiskObserver(parent, journal, playwright, { origin, bwsOrigin, ca: cert,
+        loaderHash: createHash('sha256').update(syntheticLoader()).digest('hex') });
+      phase = 'proxy';
+      proxy = await egressProxy({ allowsHttp: value => new URL(value).origin === origin,
+        allowsAuthority: (host, port) => (host === '127.0.0.1' && String(port) === new URL(origin).port)
+          || observer.authority(host, port) });
+      observer.start(proxy.server);
+      phase = 'browser';
+      browser = await playwright.chromium.launch({ channel: 'chrome', headless: true,
+        proxy: { server: proxy.server, bypass: '' }, args: ['--proxy-bypass-list=<-loopback>', '--disable-quic'] });
+      phase = 'context';
+      context = await browser.newContext({ ignoreHTTPSErrors: false, serviceWorkers: 'block' });
+      let page, closing = false, blocked = 0;
+      const pending = new Set();
+      await context.route('**/*', route => {
+        const action = (async () => {
+          if (await observer.handle(route, context, page?.mainFrame(), undefined, () => closing)) return;
+          if (route.request().url() === document && route.request().method() === 'GET') {
+            const response = await route.fetch({ maxRedirects: 0, maxRetries: 0 });
+            try { await route.fulfill({ response }); } finally { await response.dispose(); }
+          } else { blocked++; await route.abort('blockedbyclient'); }
+        })();
+        const safe = action.catch(() => { throw new Error('Local risk route failed.'); });
+        pending.add(safe); void safe.finally(() => pending.delete(safe)); return safe;
+      });
+      await context.routeWebSocket(/.*/, socket => socket.close());
+      phase = 'page';
+      page = await context.newPage();
+      phase = 'navigation';
+      await page.goto(document, { waitUntil: 'domcontentloaded', timeout: 5000 });
+      phase = 'observation';
+      const until = performance.now() + 1500;
+      while (enabled && requests.length - before < 3 && performance.now() < until) await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 100));
+      if (mode === 'matched') {
+        const observed = requests.slice(before);
+        if (observed.length !== 3 || observed.filter(value => value.method === 'OPTIONS').length !== 1
+            || observed.filter(value => value.path === '/bws/v3/visit' && value.method === 'POST').length !== 1
+            || observed.some(value => value.headers.authorization || value.headers['client-secret']
+              || (value.headers.cookie ?? '').includes('PRIVATE_APPLICATION'))
+            || messages.length !== 6 || blocked < 2
+            || observer.evidence().risk_visitor_delivered !== 1 || observer.evidence().risk_event_delivered !== 1
+            || (await context.cookies()).some(cookie => cookie.name === 'UNTRUSTED_RESPONSE')) {
+          localDetails = { messages: messages.length, blocked,
+            application_cookie_forwarded: observed.some(value => (value.headers.cookie ?? '').includes('PRIVATE_APPLICATION')),
+            response_cookie_retained: (await context.cookies()).some(cookie => cookie.name === 'UNTRUSTED_RESPONSE'),
+            preflights: observed.filter(value => value.method === 'OPTIONS').length,
+            visitor_posts: observed.filter(value => value.path === '/bws/v3/visit' && value.method === 'POST').length };
+          throw new Error('Local risk scope or durability check failed.');
+        }
+      } else if (requests.length !== before || messages.length !== 0
+          || await page.evaluate(() => window.syntheticTamper === true)) throw new Error('Default or tampered risk denial failed.');
+      phase = 'close';
+      closing = true;
+      if (!await observer.close()) throw new Error('Local risk relay did not close.');
+      await context.close(); await browser.close(); await Promise.all([...pending]); await proxy.close();
+      context = browser = proxy = observer = null;
+    }
+    return { risk_bootstrap_local_verified: true, risk_cookie_isolation_verified: true,
+      risk_cors_grant_verified: true, risk_default_denial_verified: true, risk_financial_denial_verified: true };
+  } catch {
+    const failure = new Error('Local risk smoke failed safely.');
+    failure.fixedLocalEvidence = { phase, requests: requests.length, ...localDetails, ...observer?.evidence() };
+    throw failure;
+  } finally {
+    if (observer) await observer.close();
+    if (context) await context.close();
+    if (browser) await browser.close();
+    if (proxy) await proxy.close();
+    for (const socket of sockets) socket.destroy();
+    await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => bws.close(resolve))]);
+  }
 }
 
 if (require.main === module) {
@@ -550,4 +696,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { smoke };
+module.exports = { smoke, riskSmoke };

@@ -51,12 +51,15 @@ final readonly class HostedBrowser
         bool $render = false,
         bool $observeConfig = false,
         bool $observeNormal = false,
+        bool $observeRisk = false,
+        ?HostedRiskJournal $riskJournal = null,
         bool $observeParentCountry = false,
     ): array {
         $keys = array_keys($expected);
         sort($keys);
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
+            || ($observeRisk && !$observeNormal) || ($observeRisk !== ($riskJournal !== null))
             || ($observeParentCountry && !$observeNormal)
             || !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
             || $expected['checkout_id'] === '' || strlen($expected['checkout_id']) > 256
@@ -65,9 +68,15 @@ final readonly class HostedBrowser
         ) {
             throw new RuntimeException('Checkout preflight URL is not an approved candidate.');
         }
+        $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        if ($observeRisk) {
+            // Anonymous pipes only: child writes 3, reads 4. Chrome receives neither descriptor.
+            $descriptors[3] = ['pipe', 'w'];
+            $descriptors[4] = ['pipe', 'r'];
+        }
         $process = @proc_open(
             [$this->node, dirname(__DIR__, 4) . '/tools/browser/hosted-browser.cjs', $this->playwright],
-            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $descriptors,
             $pipes,
             null,
             ['PATH' => getenv('PATH') ?: '/usr/bin:/bin', 'LANG' => 'en_US.UTF-8'],
@@ -75,13 +84,23 @@ final readonly class HostedBrowser
         if (!is_resource($process)) {
             throw new RuntimeException('Browser preflight could not start.');
         }
-        [$input, $output, $errors] = self::pipes($pipes);
+        [$input, $output, $errors, $journalRead, $journalAck] = self::pipes($pipes);
         try {
-            $payload = json_encode([
+            $handoff = [
                 'url' => $url, 'expected' => $expected, 'render' => $render,
                 'observeConfig' => $observeConfig, 'observeNormal' => $observeNormal,
                 ...($observeParentCountry ? ['observeParentCountry' => true] : []),
-            ], JSON_THROW_ON_ERROR);
+            ];
+            if ($riskJournal !== null) {
+                if (!is_resource($journalRead) || !is_resource($journalAck)) {
+                    throw new RuntimeException('Private risk pipes are unavailable.');
+                }
+                stream_set_blocking($journalRead, false);
+                stream_set_blocking($journalAck, false);
+                $handoff['observeRisk'] = true;
+                $handoff['riskJournal'] = $riskJournal->bootstrap();
+            }
+            $payload = json_encode($handoff, JSON_THROW_ON_ERROR);
             if (@fwrite($input, $payload) !== strlen($payload)) {
                 throw new RuntimeException('Private browser handoff failed.');
             }
@@ -90,8 +109,20 @@ final readonly class HostedBrowser
             stream_set_blocking($errors, false);
             $contents = '';
             $hadErrors = false;
+            $journalBuffer = '';
+            $journalFailed = false;
             $deadline = microtime(true) + ($render ? 60 : 40);
             do {
+                if ($riskJournal !== null && is_resource($journalRead) && is_resource($journalAck)) {
+                    try {
+                        self::journalStep($journalRead, $journalAck, $journalBuffer, $riskJournal);
+                    } catch (\Throwable) {
+                        $journalFailed = true;
+                        // EOF denies any later send while the worker closes its own browser/relay normally.
+                        fclose($journalAck);
+                        fclose($journalRead);
+                    }
+                }
                 $chunk = stream_get_contents($output, 8193);
                 $discard = stream_get_contents($errors, 8193);
                 if ($chunk === false || $discard === false || microtime(true) > $deadline) {
@@ -119,14 +150,20 @@ final readonly class HostedBrowser
                 $render,
                 $observeConfig,
                 $observeNormal,
+                $observeRisk,
                 $observeParentCountry,
             );
+            if ($journalFailed) {
+                $safe['risk_parent_journal_failed'] = true;
+                $safe['result'] = 'fail';
+                $safe['reason'] = 'browser_preflight_failed';
+            }
             if ($safe['result'] === 'blocked' && $status['exitcode'] !== 0) {
                 throw new RuntimeException('Browser preflight process failed.');
             }
             return $safe;
         } finally {
-            foreach ([$input, $output, $errors] as $stream) {
+            foreach ([$input, $output, $errors, $journalRead, $journalAck] as $stream) {
                 if (is_resource($stream)) {
                     fclose($stream);
                 }
@@ -144,11 +181,12 @@ final readonly class HostedBrowser
         bool $render = false,
         bool $observeConfig = false,
         bool $observeNormal = false,
+        bool $observeRisk = false,
         bool $observeParentCountry = false,
     ): array {
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
-            || ($observeParentCountry && !$observeNormal)
+            || ($observeRisk && !$observeNormal) || ($observeParentCountry && !$observeNormal)
         ) {
             throw new RuntimeException('Method observation requires explicit rendering.');
         }
@@ -171,7 +209,9 @@ final readonly class HostedBrowser
             'shutdown_browser_context', 'shutdown_browser', 'shutdown_request_context', 'shutdown_proxy',
             'shutdown_directory', 'readiness_attachment', 'unclassified', 'normal_observation_deadline',
             'normal_context', 'normal_get', 'normal_status', 'normal_headers', 'normal_body',
-            'normal_fulfill', 'normal_response_dispose', 'normal_abort', 'parent_country_read'];
+            'normal_fulfill', 'normal_response_dispose', 'normal_abort'];
+        $failurePhases[] = 'risk_shutdown';
+        $failurePhases[] = 'parent_country_read';
         foreach (['cardnumber', 'expiry', 'cvc'] as $field) {
             foreach (['locator', 'count', 'visible', 'enabled'] as $step) {
                 $failurePhases[] = 'readiness_' . $field . '_' . $step;
@@ -494,6 +534,9 @@ final readonly class HostedBrowser
         if (is_int($payerStatus) && $payerStatus >= 100 && $payerStatus <= 599) {
             $safe['payer_http_status'] = $payerStatus;
         }
+        if ($observeRisk) {
+            $safe += self::riskEvidence($data, $safe);
+        }
         if ($observeParentCountry) {
             $safe += self::parentCountryEvidence($data, $safe);
         }
@@ -511,7 +554,8 @@ final readonly class HostedBrowser
         $hashes = [];
         foreach (
             ['hosted-policy.cjs', 'hosted-browser.cjs', 'hosted-smoke.cjs', 'hosted-policy.test.cjs',
-            'hosted-parent-country.cjs'] as $file
+                'hosted-risk-policy.cjs', 'hosted-risk-journal.cjs', 'hosted-risk-relay.cjs',
+                'hosted-risk-observer.cjs', 'hosted-parent-country.cjs'] as $file
         ) {
             $hash = hash_file('sha256', $root . '/tools/browser/' . $file);
             if ($hash === false) {
@@ -525,6 +569,119 @@ final readonly class HostedBrowser
         }
         $hashes['hosted-setup-preflight.php'] = $hash;
         return $hashes;
+    }
+
+    /**
+     * @param resource $input
+     * @param resource $output
+     */
+    private static function journalStep($input, $output, string &$buffer, HostedRiskJournal $journal): void
+    {
+        $chunk = stream_get_contents($input, 4097);
+        if ($chunk === false) {
+            throw new RuntimeException('Private risk framing is unavailable.');
+        }
+        $buffer .= $chunk;
+        if (strlen($buffer) > 4096 || (feof($input) && $buffer !== '')) {
+            throw new RuntimeException('Private risk framing is invalid.');
+        }
+        $newline = strpos($buffer, "\n");
+        if ($newline === false) {
+            return;
+        }
+        if ($newline !== strlen($buffer) - 1) {
+            throw new RuntimeException('Private risk framing is invalid.');
+        }
+        $ack = $journal->accept(substr($buffer, 0, $newline));
+        $buffer = '';
+        $written = 0;
+        $deadline = microtime(true) + 0.1;
+        do {
+            $count = @fwrite($output, substr($ack, $written));
+            if ($count === false || $count < 1 || microtime(true) >= $deadline) {
+                throw new RuntimeException('Private risk acknowledgement is unavailable.');
+            }
+            $written += $count;
+        } while ($written < strlen($ack));
+    }
+
+    /**
+     * @param array<array-key,mixed> $data
+     * @param array<string,mixed> $base
+     * @return array<string,string|int|bool|array<string,int>>
+     */
+    private static function riskEvidence(array $data, array $base): array
+    {
+        $safe = ['risk_bootstrap_requested' => true, 'risk_graph_complete' => false, 'risk_financial_ready' => false];
+        if (isset($data['risk_bootstrap_requested']) && $data['risk_bootstrap_requested'] !== true) {
+            throw new RuntimeException('Risk evidence did not match its explicit configuration.');
+        }
+        foreach (['risk_graph_complete', 'risk_financial_ready'] as $key) {
+            if (isset($data[$key]) && $data[$key] !== false) {
+                throw new RuntimeException('Risk observation exceeded its partial evidence boundary.');
+            }
+        }
+        foreach (
+            ['risk_loader_attempted', 'risk_loader_verified', 'risk_telemetry_poisoned',
+                'risk_journal_poisoned', 'risk_journal_closed', 'risk_parent_journal_failed'] as $key
+        ) {
+            if (is_bool($data[$key] ?? null)) {
+                $safe[$key] = $data[$key];
+            }
+        }
+        if (($safe['risk_loader_verified'] ?? false) === true) {
+            if (
+                ($safe['risk_loader_attempted'] ?? false) !== true
+                || ($base['payer_payload_delivered'] ?? false) !== true
+                || ($base['candidate_origin'] ?? null) !== 'sandbox' || ($base['bound_render_frames'] ?? 0) < 1
+            ) {
+                throw new RuntimeException('Risk loader lacked the owned read-only scope.');
+            }
+        }
+        $reasons = ['not_observed', 'scope_unavailable', 'session_mismatch', 'loader_replay',
+            'loader_integrity',
+            'cookie_unbound', 'unknown_dependency', 'budget', 'journal', 'response', 'window',
+            'document_changed', 'shutdown', 'cors', 'headers', 'body'];
+        if (in_array($data['risk_partial_reason'] ?? null, $reasons, true)) {
+            $safe['risk_partial_reason'] = $data['risk_partial_reason'];
+        }
+        foreach (['visitor' => 1, 'preflight' => 1, 'event' => 8] as $role => $cap) {
+            $previous = $cap;
+            foreach (['attempts', 'client_invocations', 'delivered'] as $kind) {
+                $key = 'risk_' . $role . '_' . $kind;
+                if (!array_key_exists($key, $data)) {
+                    continue;
+                }
+                $value = $data[$key];
+                if (!is_int($value) || $value < 0 || $value > $previous) {
+                    throw new RuntimeException('Risk observation returned invalid finite counts.');
+                }
+                $safe[$key] = $value;
+                $previous = $value;
+            }
+            $status = $data['risk_' . $role . '_http_status'] ?? null;
+            if (is_int($status) && $status >= 100 && $status <= 599) {
+                $safe['risk_' . $role . '_http_status'] = $status;
+            }
+        }
+        foreach (['risk_journal_prepared', 'risk_journal_results'] as $key) {
+            $value = $data[$key] ?? null;
+            if (is_int($value) && $value >= 0 && $value <= 10) {
+                $safe[$key] = $value;
+            }
+        }
+        $dependencies = $data['risk_denied_dependencies'] ?? null;
+        if (is_array($dependencies)) {
+            $closed = [];
+            foreach (['risk_document', 'captcha', 'forter', 'sardine', 'monitoring', 'other'] as $key) {
+                $value = $dependencies[$key] ?? null;
+                if (is_int($value) && $value >= 0 && $value <= 1000000) {
+                    $closed[$key] = $value;
+                }
+            }
+            $safe['risk_denied_dependencies'] = $closed;
+        }
+        return $safe;
     }
 
     /**
@@ -609,7 +766,7 @@ final readonly class HostedBrowser
         throw new RuntimeException('Browser preflight cannot be serialized.');
     }
 
-    /** @return array{resource,resource,resource} */
+    /** @return array{resource,resource,resource,resource|null,resource|null} */
     private static function pipes(mixed $pipes): array
     {
         if (!is_array($pipes)) {
@@ -621,6 +778,9 @@ final readonly class HostedBrowser
         if (!is_resource($input) || !is_resource($output) || !is_resource($errors)) {
             throw new RuntimeException('Browser preflight pipes are unavailable.');
         }
-        return [$input, $output, $errors];
+        $journalRead = $pipes[3] ?? null;
+        $journalAck = $pipes[4] ?? null;
+        return [$input, $output, $errors,
+            is_resource($journalRead) ? $journalRead : null, is_resource($journalAck) ? $journalAck : null];
     }
 }
