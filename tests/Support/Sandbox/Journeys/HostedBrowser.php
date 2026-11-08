@@ -56,7 +56,14 @@ final readonly class HostedBrowser
         bool $observeParentCountry = false,
         bool $observeCurrencySettings = false,
         bool $selectCard = false,
+        HostedSecurityMode $mode = HostedSecurityMode::Preflight,
     ): array {
+        if (
+            $mode === HostedSecurityMode::InstrumentSecurity && (!$render || !$observeConfig || !$observeNormal
+            || !$observeRisk || $selectCard)
+        ) {
+            throw new RuntimeException('Invalid closed instrument security profile.');
+        }
         $keys = array_keys($expected);
         sort($keys);
         if (
@@ -78,7 +85,7 @@ final readonly class HostedBrowser
             $descriptors[4] = ['pipe', 'r'];
         }
         $process = @proc_open(
-            [$this->node, dirname(__DIR__, 4) . '/tools/browser/hosted-browser.cjs', $this->playwright],
+            [$this->node, dirname(__DIR__, 4) . '/tools/browser/' . $mode->entry(), $this->playwright],
             $descriptors,
             $pipes,
             null,
@@ -88,6 +95,8 @@ final readonly class HostedBrowser
             throw new RuntimeException('Browser preflight could not start.');
         }
         [$input, $output, $errors, $journalRead, $journalAck] = self::pipes($pipes);
+        $journal = $riskJournal !== null && $mode === HostedSecurityMode::InstrumentSecurity
+            ? $riskJournal->instrumentAdapter(self::sourceHashes($mode)) : $riskJournal;
         try {
             $handoff = [
                 'url' => $url, 'expected' => $expected, 'render' => $render,
@@ -116,11 +125,11 @@ final readonly class HostedBrowser
             $hadErrors = false;
             $journalBuffer = '';
             $journalFailed = false;
-            $deadline = microtime(true) + ($render ? 60 : 40);
+            $deadline = microtime(true) + ($mode === HostedSecurityMode::InstrumentSecurity ? 45 : ($render ? 60 : 40));
             do {
-                if ($riskJournal !== null && is_resource($journalRead) && is_resource($journalAck)) {
+                if ($journal !== null && is_resource($journalRead) && is_resource($journalAck)) {
                     try {
-                        self::journalStep($journalRead, $journalAck, $journalBuffer, $riskJournal);
+                        self::journalStep($journalRead, $journalAck, $journalBuffer, $journal);
                     } catch (\Throwable) {
                         $journalFailed = true;
                         // EOF denies any later send while the worker closes its own browser/relay normally.
@@ -159,6 +168,7 @@ final readonly class HostedBrowser
                 $observeParentCountry,
                 $observeCurrencySettings,
                 $selectCard,
+                $mode,
             );
             if ($journalFailed) {
                 $safe['risk_parent_journal_failed'] = true;
@@ -175,11 +185,31 @@ final readonly class HostedBrowser
                     fclose($stream);
                 }
             }
-            if (proc_get_status($process)['running']) {
+            if (self::processRunning($process)) {
                 proc_terminate($process);
+                if ($mode === HostedSecurityMode::InstrumentSecurity) {
+                    $stop = microtime(true) + 2;
+                    do {
+                        usleep(10000);
+                        $running = self::processRunning($process);
+                    } while ($running && microtime(true) < $stop);
+                    if ($running) {
+                        proc_terminate($process, 9);
+                    }
+                }
             }
             proc_close($process);
         }
+    }
+
+    /**
+     * The operating system can change process state independently between calls.
+     * @param resource $process
+     * @phpstan-impure
+     */
+    private static function processRunning($process): bool
+    {
+        return proc_get_status($process)['running'];
     }
 
     /** @return array<string,string|int|bool|array<string,string|int|bool>> */
@@ -192,6 +222,7 @@ final readonly class HostedBrowser
         bool $observeParentCountry = false,
         bool $observeCurrencySettings = false,
         bool $selectCard = false,
+        HostedSecurityMode $mode = HostedSecurityMode::Preflight,
     ): array {
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
@@ -213,6 +244,31 @@ final readonly class HostedBrowser
             throw new RuntimeException('Browser preflight returned invalid evidence.');
         }
         $safe = ['result' => $result, 'reason' => $reason, 'card_entry_enabled' => false];
+        if ($mode === HostedSecurityMode::InstrumentSecurity) {
+            if (
+                !$observeRisk || $selectCard || ($data['instrument_security_requested'] ?? null) !== true
+                || ($data['instrument_ready'] ?? null) !== false || ($data['financial_permission'] ?? null) !== false
+                || ($data['security_graph_complete'] ?? null) !== false
+            ) {
+                throw new RuntimeException('Invalid no-input security evidence.');
+            }
+            $safe += ['instrument_security_requested' => true, 'instrument_ready' => false,
+                'financial_permission' => false, 'security_graph_complete' => false];
+            foreach (['security_loader_candidate', 'security_loader_promoted'] as $field) {
+                if (is_bool($data[$field] ?? null)) {
+                    $safe[$field] = $data[$field];
+                }
+            }
+            if (
+                in_array(
+                    $data['security_loader_wait_reason'] ?? null,
+                    ['not_observed', 'duplicate', 'scope', 'promoted', 'expired'],
+                    true
+                )
+            ) {
+                $safe['security_loader_wait_reason'] = $data['security_loader_wait_reason'];
+            }
+        }
         $failurePhases = ['configuration', 'tooling_load', 'browser_startup', 'proxy_start', 'browser_launch',
             'browser_context', 'page_setup', 'navigation', 'route_action', 'watchdog', 'visible_label',
             'method_context', 'method_get', 'method_status', 'method_headers', 'method_body', 'method_fulfill',
@@ -556,7 +612,7 @@ final readonly class HostedBrowser
             $safe += self::cardEvidence($data);
         }
         if ($observeRisk) {
-            $safe += self::riskEvidence($data, $safe);
+            $safe += self::riskEvidence($data, $safe, $mode);
         }
         if ($observeParentCountry) {
             $safe += self::parentCountryEvidence($data, $safe);
@@ -674,7 +730,7 @@ final readonly class HostedBrowser
     }
 
     /** @return array<string,string> */
-    public static function sourceHashes(): array
+    public static function sourceHashes(HostedSecurityMode $mode = HostedSecurityMode::Preflight): array
     {
         $root = dirname(__DIR__, 4);
         $hashes = [];
@@ -695,6 +751,20 @@ final readonly class HostedBrowser
             throw new RuntimeException('Browser preflight source is unavailable.');
         }
         $hashes['hosted-setup-preflight.php'] = $hash;
+        if ($mode === HostedSecurityMode::InstrumentSecurity) {
+            foreach (['hosted-pending-loader.cjs', 'hosted-instrument-security.cjs'] as $file) {
+                $hash = hash_file('sha256', $root . '/tools/browser/' . $file);
+                if ($hash === false) {
+                    throw new RuntimeException('Instrument security source is unavailable.');
+                }
+                $hashes[$file] = $hash;
+            }
+            $hash = hash_file('sha256', $root . '/tools/hosted-instrument-security.php');
+            if ($hash === false) {
+                throw new RuntimeException('Instrument security source is unavailable.');
+            }
+            $hashes['hosted-instrument-security.php'] = $hash;
+        }
         return $hashes;
     }
 
@@ -702,8 +772,12 @@ final readonly class HostedBrowser
      * @param resource $input
      * @param resource $output
      */
-    private static function journalStep($input, $output, string &$buffer, HostedRiskJournal $journal): void
-    {
+    private static function journalStep(
+        $input,
+        $output,
+        string &$buffer,
+        HostedRiskJournal|HostedInstrumentSecurityJournal $journal,
+    ): void {
         $chunk = stream_get_contents($input, 4097);
         if ($chunk === false) {
             throw new RuntimeException('Private risk framing is unavailable.');
@@ -737,8 +811,11 @@ final readonly class HostedBrowser
      * @param array<string,mixed> $base
      * @return array<string,string|int|bool|array<string,int>>
      */
-    private static function riskEvidence(array $data, array $base): array
-    {
+    private static function riskEvidence(
+        array $data,
+        array $base,
+        HostedSecurityMode $mode = HostedSecurityMode::Preflight,
+    ): array {
         $safe = ['risk_bootstrap_requested' => true, 'risk_graph_complete' => false, 'risk_financial_ready' => false];
         if (isset($data['risk_bootstrap_requested']) && $data['risk_bootstrap_requested'] !== true) {
             throw new RuntimeException('Risk evidence did not match its explicit configuration.');
@@ -793,7 +870,8 @@ final readonly class HostedBrowser
         }
         foreach (['risk_journal_prepared', 'risk_journal_results'] as $key) {
             $value = $data[$key] ?? null;
-            if (is_int($value) && $value >= 0 && $value <= 10) {
+            $cap = $mode === HostedSecurityMode::InstrumentSecurity ? 11 : 10;
+            if (is_int($value) && $value >= 0 && $value <= $cap) {
                 $safe[$key] = $value;
             }
         }

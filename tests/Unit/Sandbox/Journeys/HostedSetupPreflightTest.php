@@ -9,6 +9,7 @@ use GuzzleHttp\Psr7\Response;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedSetupPreflight;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedRiskJournal;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedSecurityMode;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -64,8 +65,16 @@ final class HostedSetupPreflightTest extends TestCase
      * @param array<string,mixed>|null $options
      * @return array<string,mixed>
      */
-    private function execute(string $fault = '', ?array $options = null): array
-    {
+    private function execute(
+        string $fault = '',
+        ?array $options = null,
+        HostedSecurityMode $mode = HostedSecurityMode::Preflight,
+    ): array {
+        $originalOptions = $options;
+        if ($mode === HostedSecurityMode::InstrumentSecurity) {
+            $options = $this->options() + ['render-owned-data' => true, 'observe-one-method-config' => true,
+                'observe-normal-reads' => true, 'observe-risk-bootstrap' => true];
+        }
         $transport = new HttpClient(['handler' => function (RequestInterface $request) use (
             $fault,
             $options
@@ -133,7 +142,10 @@ final class HostedSetupPreflightTest extends TestCase
             throw new RuntimeException('Unexpected synthetic request.');
         }]);
         return HostedSetupPreflight::run(
-            $options ?? $this->options(),
+            $mode === HostedSecurityMode::InstrumentSecurity
+                ? (array_diff_key($this->options(), ['create-one-hosted-setup' => true])
+                    + ['observe-first-party-security' => true] + ($originalOptions ?? []))
+                : ($options ?? $this->options()),
             static fn (Configuration $config, string $context): SandboxSession
                 => new SandboxSession($config, $context, $transport),
             function (
@@ -147,10 +159,13 @@ final class HostedSetupPreflightTest extends TestCase
                 bool $observeParentCountry,
                 bool $observeCurrencySettings,
                 bool $selectCard,
+                HostedSecurityMode $actualMode,
             ) use (
                 $fault,
-                $options
+                $options,
+                $mode,
             ): array {
+                self::assertSame($mode, $actualMode);
                 self::assertSame(($options['render-owned-data'] ?? false) === true, $render);
                 self::assertSame(($options['observe-one-method-config'] ?? false) === true, $observeConfig);
                 self::assertSame(($options['observe-normal-reads'] ?? false) === true, $observeNormal);
@@ -173,6 +188,10 @@ final class HostedSetupPreflightTest extends TestCase
                 $state = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
                 self::assertIsArray($state);
                 self::assertIsArray($state['actions']);
+                if ($mode === HostedSecurityMode::InstrumentSecurity) {
+                    self::assertArrayHasKey('instrument_security_profile', $state['actions']);
+                    self::assertArrayNotHasKey('preflight_native_card_choice', $state['actions']);
+                }
                 if ($observeCurrencySettings) {
                     self::assertIsArray($state['actions']['preflight_currency_settings']);
                     self::assertSame(hash('sha256', json_encode($expected + [
@@ -265,12 +284,42 @@ final class HostedSetupPreflightTest extends TestCase
                 }
                 return ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
                     'card_entry_enabled' => false, 'test_mode_visible' => true,
+                    ...($mode === HostedSecurityMode::InstrumentSecurity ? ['instrument_security_requested' => true,
+                        'instrument_ready' => false, 'financial_permission' => false,
+                        'security_graph_complete' => false,
+                        'security_loader_candidate' => true, 'security_loader_promoted' => false,
+                        'security_loader_wait_reason' => 'expired'] : []),
                     ...($selectCard ? ['native_card_selection_requested' => true,
                         'native_card_selection' => 'withheld', 'native_card_action_attempts' => 0,
                         'native_card_action_invoked' => false] : []),
                     'private_url' => $url, 'private_message' => 'PRIVATE_BROWSER_ERROR'];
             },
+            $mode,
         );
+    }
+
+    public function testSeparateSecurityModeKeepsPrivateArgumentOrderAndNeverSelectsCard(): void
+    {
+        $result = $this->execute(mode: HostedSecurityMode::InstrumentSecurity);
+        self::assertSame('hosted-instrument-security', $result['scenario']);
+        self::assertSame('blocked', $result['result']);
+        self::assertFalse($result['instrument_ready']);
+        self::assertFalse($result['financial_permission']);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertSame(1, $this->cancels);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testNewModeRejectsCardOverrideBeforeAuth(): void
+    {
+        $result = HostedSetupPreflight::run(
+            ['environment' => 'sandbox',
+            'observe-first-party-security' => true, 'select-one-native-card' => true],
+            mode: HostedSecurityMode::InstrumentSecurity
+        );
+        self::assertSame('configuration', $result['phase']);
+        self::assertSame('fail', $result['result']);
+        self::assertSame([], $this->requests);
     }
 
     public function testOneFreshOwnedSetupPrivateHandoffAndOneCancellation(): void

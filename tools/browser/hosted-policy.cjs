@@ -2,6 +2,7 @@
 
 const http = require('node:http');
 const net = require('node:net');
+const dns = require('node:dns/promises');
 const { createHash } = require('node:crypto');
 
 // Development-only preflight: no financial request and no card entry is enabled.
@@ -884,9 +885,47 @@ class HostedPolicy {
   toJSON() { throw new Error('Browser preflight configuration cannot be serialized.'); }
 }
 
+// Conservative routability policy selected only by the separate no-input profile.
+function publicAddress(value) {
+  const family = net.isIP(value);
+  if (!family || value.includes('%') || value.includes('::ffff:')) return false;
+  const denied = new net.BlockList();
+  if (family === 4) {
+    for (const [base, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10],
+      ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24],
+      ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+      ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]]) denied.addSubnet(base, bits);
+    return !denied.check(value);
+  }
+  const global = new net.BlockList(); global.addSubnet('2000::', 3, 'ipv6');
+  for (const [base, bits] of [['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['3fff::', 20]]) {
+    denied.addSubnet(base, bits, 'ipv6');
+  }
+  return global.check(value, 'ipv6') && !denied.check(value, 'ipv6');
+}
+
+async function publicConnectionTarget(host, lookup = dns.lookup) {
+  if (typeof host !== 'string' || !/^[a-z0-9.-]+$/u.test(host) || net.isIP(host)) {
+    throw new Error('Public connection target is unavailable.');
+  }
+  const answers = await lookup(host, { all: true, verbatim: true });
+  if (!Array.isArray(answers) || answers.length === 0 || answers.length > 32
+      || answers.some(item => !publicAddress(item.address) || net.isIP(item.address) !== item.family)) {
+    throw new Error('Public connection target is unavailable.');
+  }
+  return answers[0];
+}
+
+function sameAddress(actual, expected) {
+  if (net.isIP(actual) !== net.isIP(expected)) return false;
+  const block = new net.BlockList(); block.addAddress(expected, net.isIP(expected) === 6 ? 'ipv6' : 'ipv4');
+  return block.check(actual, net.isIP(actual) === 6 ? 'ipv6' : 'ipv4');
+}
+
 // A second host boundary protects browser traffic outside page routing (including
 // redirects/background traffic). CONNECT is tunneled unchanged: browser TLS remains enabled.
-async function egressProxy(policy) {
+async function egressProxy(policy, publicOnly = false) {
+  if (typeof publicOnly !== 'boolean') throw new Error('Invalid connection profile.');
   const sockets = new Set();
   const counts = { rejected: 0, connected: 0, externalConnected: 0 };
   const server = http.createServer((request, response) => {
@@ -907,13 +946,27 @@ async function egressProxy(policy) {
     request.pipe(upstream);
   });
   server.on('connect', (request, client, head) => {
+    void connect(request, client, head).catch(() => { counts.rejected++; client.destroy(); });
+  });
+  async function connect(request, client, head) {
     const authority = /^([a-z0-9.-]+):([0-9]+)$/iu.exec(request.url ?? '');
     if (!authority || !policy.allowsAuthority(authority[1], authority[2])) {
       counts.rejected++;
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
-    const upstream = net.connect(Number(authority[2]), authority[1], () => {
+    let selected;
+    if (publicOnly) {
+      let timer;
+      try { selected = await Promise.race([publicConnectionTarget(authority[1]), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Connection lookup expired.')), 1000);
+      })]); } finally { clearTimeout(timer); }
+      if (client.destroyed || !policy.allowsAuthority(authority[1], authority[2])) return;
+    }
+    const upstream = net.connect({ port: Number(authority[2]), host: selected?.address ?? authority[1],
+      ...(selected ? { family: selected.family } : {}) }, () => {
+      if (publicOnly && (!sameAddress(upstream.remoteAddress, selected.address)
+          || !policy.allowsAuthority(authority[1], authority[2]))) { upstream.destroy(); client.destroy(); return; }
       counts.connected++;
       if (authority[1] !== '127.0.0.1') counts.externalConnected++;
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
@@ -926,7 +979,7 @@ async function egressProxy(policy) {
     upstream.on('error', () => client.destroy());
     client.on('error', () => upstream.destroy());
     client.on('close', () => upstream.destroy());
-  });
+  }
   server.on('connection', socket => {
     sockets.add(socket);
     socket.on('error', () => {});
@@ -952,4 +1005,4 @@ async function egressProxy(policy) {
   };
 }
 
-module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, controllerAsset, renderCheckNames, deniedReadNames, assetMatches };
+module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, controllerAsset, renderCheckNames, deniedReadNames, assetMatches, publicAddress, publicConnectionTarget, sameAddress };

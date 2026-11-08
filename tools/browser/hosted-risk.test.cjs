@@ -114,6 +114,9 @@ async function tlsFixture(mode = 'matched') {
     request.on('data', chunk => chunks.push(chunk));
     request.on('end', () => {
       requests.push({ method: request.method, path: request.url, headers: request.headers, body: Buffer.concat(chunks) });
+      if (mode === 'loader_large_declared') { response.writeHead(200, { 'content-length': '262145' }).flushHeaders(); return; }
+      if (mode === 'loader_large') { response.writeHead(200).end('x'.repeat(262145)); return; }
+      if (mode === 'loader_encoding') { response.writeHead(200, { 'content-encoding': 'gzip' }).end('private'); return; }
       if (mode === 'redirect') { response.writeHead(302, { location: 'https://unknown.invalid/PRIVATE' }).end(); return; }
       if (mode === 'large_header') { response.writeHead(200, { 'X-Large': 'x'.repeat(17000) }).end(); return; }
       if (mode === 'large_declared') { response.writeHead(200, { 'content-length': '65537' }).flushHeaders(); return; }
@@ -122,7 +125,9 @@ async function tlsFixture(mode = 'matched') {
         response.writeHead(200); const timer = setInterval(() => response.write('x'), 5);
         response.on('close', () => clearInterval(timer)); return;
       }
-      response.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      response.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*',
+        ...(mode === 'instrument_pair' ? { 'access-control-allow-methods': 'POST',
+          'access-control-allow-headers': 'content-type' } : {}) });
       response.end(mode === 'large_body' ? 'x'.repeat(65537) : '{"data":{"visitorID":"PRIVATE_VISITOR"}}');
     });
   });
@@ -677,3 +682,78 @@ for (const delayedAck of [false, true]) {
     } finally { await observer.close(); await upstream.close(); }
   });
 }
+
+
+for (const mode of ['matched', 'redirect', 'loader_large_declared', 'loader_large', 'loader_encoding', 'trickle', 'aborted']) {
+  test('instrument-only pinned loader uses bounded identity streaming and never follows: ' + mode, async () => {
+    const upstream = await tlsFixture(mode);
+    const relay = new HostedRiskRelay(upstream.proxy, { origin: upstream.origin, ca: upstream.cert }, true);
+    const target = upstream.origin + '/fingerprint.js?sessionId=synthetic&hasScriptId=false&disable3rdTracking=false';
+    try {
+      const operation = relay.send(target, 'GET', 'loader', { accept: '*/*' }, Buffer.alloc(0), performance.now() + 100, () => true);
+      if (['matched', 'redirect'].includes(mode)) {
+        const response = await operation;
+        assert.equal(response.status, mode === 'matched' ? 200 : 302);
+      } else await assert.rejects(operation, error => !String(error).includes('PRIVATE'));
+      assert.equal(upstream.requests.length, 1);
+      assert.equal(upstream.requests[0].method, 'GET');
+      assert.equal(upstream.requests[0].path, '/fingerprint.js?sessionId=synthetic&hasScriptId=false&disable3rdTracking=false');
+      assert.equal(upstream.requests[0].headers.cookie, undefined);
+      assert.equal(upstream.requests[0].headers.referer, undefined);
+      assert.equal(upstream.requests[0].headers.authorization, undefined);
+      await assert.rejects(relay.send(target, 'GET', 'loader', { accept: '*/*' }, Buffer.alloc(0), performance.now() + 100, () => true));
+      assert.equal(upstream.requests.length, 1);
+    } finally { await relay.close(); await upstream.close(); }
+  });
+}
+
+test('legacy relay has no loader role or new anonymous GET authority', async () => {
+  const relay = new HostedRiskRelay('http://127.0.0.1:9');
+  await assert.rejects(relay.send('https://static.sandbox.airwallex.com/webapp/fraud/device-fingerprint/index.js'
+    + '?sessionId=synthetic&hasScriptId=false&disable3rdTracking=false', 'GET', 'loader',
+    { accept: '*/*' }, Buffer.alloc(0), performance.now() + 100, () => true));
+  await relay.close();
+});
+
+test('instrument observer journals loader before release, then preserves preflight/visitor/event sequencing over local TLS', async () => {
+  const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+  const upstream = await tlsFixture('instrument_pair'), fixture = policyFixture(), durable = journalFixture();
+  const original = HostedRiskRelay.prototype.send;
+  let loaderInvocations = 0, loaderDeliveries = 0, visitorDeliveries = 0;
+  HostedRiskRelay.prototype.send = async function (url, method, role, headers, body, deadline, allowed) {
+    if (role !== 'loader') return original.call(this, url, method, role, headers, body, deadline, allowed);
+    assert.equal(method, 'GET'); assert.deepEqual(headers, { accept: '*/*' }); assert.equal(body.length, 0);
+    assert.equal(allowed(), true);
+    assert.deepEqual(durable.messages.map(value => value.phase), ['prepare']);
+    assert.equal(durable.messages[0].role, 'loader'); loaderInvocations++;
+    return { status: 200, fields: [{ name: 'content-type', value: 'application/javascript' }], body: fixture.body };
+  };
+  const observer = new HostedRiskObserver(fixture.parent, durable.client, {}, { origin: 'http://127.0.0.1:1234',
+    bwsOrigin: upstream.origin, loaderHash: digest(fixture.body), ca: upstream.cert }, performance.now() + 5000, true);
+  observer.start(upstream.proxy);
+  const frame = { isDetached: () => false, url: () => sourceDocument, evaluate: async () => ({
+    id: 'airwallex-fraud-api', orderSession: privateSession, tenant: null, project: null, disableTracking: null }) };
+  try {
+    await observer.handle({ request: () => ({ frame: () => frame,
+      url: () => 'http://127.0.0.1:1234/fingerprint.js?sessionId=' + privateSession + '&hasScriptId=false&disable3rdTracking=false',
+      method: () => 'GET', resourceType: () => 'script' }),
+      fulfill: async () => { assert.equal(durable.messages.at(-1).phase, 'observed'); loaderDeliveries++; },
+      abort: async () => assert.fail('Instrument loader withheld') }, { cookies: async () => [] }, null, frame, () => false);
+    for (const role of ['visitor', 'event']) {
+      const body = role === 'visitor' ? claim().body : eventBody();
+      const fields = role === 'visitor' ? visitorHeaders : eventHeaders;
+      await observer.handle({ request: () => ({ frame: () => frame,
+        url: () => upstream.origin + (role === 'visitor' ? '/bws/v3/visit' : '/bws/v1/' + privateSession),
+        method: () => 'POST', resourceType: () => role === 'visitor' ? 'fetch' : 'ping',
+        allHeaders: async () => fields, postDataBuffer: () => body }),
+        fulfill: async () => { visitorDeliveries++; }, abort: async () => assert.fail('Instrument BWS withheld') },
+      { cookies: async () => [] }, null, frame, () => false);
+    }
+    assert.equal(loaderInvocations, 1); assert.equal(loaderDeliveries, 1); assert.equal(visitorDeliveries, 2);
+    assert.deepEqual(durable.messages.filter(value => value.phase === 'prepare').map(value => value.role),
+      ['loader', 'preflight', 'visitor', 'event']);
+    assert.deepEqual(durable.messages.map(value => value.sequence), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(upstream.requests.length, 3);
+    assert.equal(observer.evidence().risk_telemetry_poisoned, false);
+  } finally { HostedRiskRelay.prototype.send = original; await observer.close(); await upstream.close(); }
+});

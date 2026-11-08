@@ -28,12 +28,14 @@ final class HostedRiskJournal
     /**
      * @param array{checkout_id:string,mode:string,currency:string} $expected
      * @param array<string,string> $toolHashes Fixed source book captured before handoff.
+     * @param array<string,string>|null $instrumentHashes Extended book captured before authentication.
      */
     public function __construct(
         private readonly RunLedger $ledger,
         #[SensitiveParameter] private readonly string $context,
         #[SensitiveParameter] private readonly array $expected,
         private readonly array $toolHashes,
+        private readonly ?array $instrumentHashes = null,
     ) {
         $ledger->assertContext($context);
         $this->nonce = bin2hex(random_bytes(32));
@@ -43,6 +45,21 @@ final class HostedRiskJournal
     public function bootstrap(): array
     {
         return ['version' => 1, 'nonce' => $this->nonce];
+    }
+
+    /** @param array<string,string> $toolHashes Fixed extended helper book; no caller target selector. */
+    public function instrumentAdapter(array $toolHashes): HostedInstrumentSecurityJournal
+    {
+        if ($this->instrumentHashes === null || $toolHashes !== $this->instrumentHashes) {
+            throw new RuntimeException('Instrument source book does not match its original profile.');
+        }
+        return new HostedInstrumentSecurityJournal(
+            $this,
+            $this->instrumentHashes,
+            $this->ledger,
+            $this->context,
+            $this->expected,
+        );
     }
 
     /** One line in; a bounded private ACK only after the corresponding durable writes. */

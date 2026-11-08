@@ -20,19 +20,41 @@ final class HostedSetupPreflight
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
      * @param (Closure(
-     *     string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool,bool
+     *     string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool,bool,HostedSecurityMode
      * ):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
-    public static function run(array $options, ?Closure $sessions = null, ?Closure $browser = null): array
-    {
-        $safe = ['scenario' => 'hosted-setup-preflight', 'api_version' => '2026-08-21', 'result' => 'fail'];
+    public static function run(
+        array $options,
+        ?Closure $sessions = null,
+        ?Closure $browser = null,
+        HostedSecurityMode $mode = HostedSecurityMode::Preflight,
+    ): array {
+        $safe = ['scenario' => $mode === HostedSecurityMode::InstrumentSecurity
+            ? 'hosted-instrument-security' : 'hosted-setup-preflight',
+            'api_version' => '2026-08-21', 'result' => 'fail'];
         $session = null;
         $ledger = null;
         $expected = null;
         $phase = 'configuration';
         try {
+            if ($mode === HostedSecurityMode::InstrumentSecurity) {
+                if (
+                    array_diff(array_keys($options), ['environment', 'credentials-file', 'state-dir', 'node-bin',
+                    'playwright-module', 'observe-first-party-security']) !== []
+                    || ($options['observe-first-party-security'] ?? null) !== true
+                ) {
+                    throw new RuntimeException('Explicit no-input security observation is required.');
+                }
+                unset($options['observe-first-party-security']);
+                $options += ['create-one-hosted-setup' => true, 'render-owned-data' => true,
+                    'observe-one-method-config' => true, 'observe-normal-reads' => true,
+                    'observe-risk-bootstrap' => true];
+                $safe['scenario'] = 'hosted-instrument-security';
+                $safe['instrument_ready'] = false;
+                $safe['financial_permission'] = false;
+            }
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
                 'playwright-module', 'create-one-hosted-setup', 'render-owned-data',
                 'observe-one-method-config', 'observe-normal-reads', 'observe-risk-bootstrap',
@@ -97,7 +119,7 @@ final class HostedSetupPreflight
             $bridge = new HostedBrowser($strings['node-bin'], $strings['playwright-module']);
             $browser ??= $bridge->inspect(...);
             $safe['source'] = SourceEvidence::capture();
-            $safe['browser_tool_hashes'] = HostedBrowser::sourceHashes();
+            $safe['browser_tool_hashes'] = HostedBrowser::sourceHashes($mode);
             $configuration = Configuration::load('sandbox', $strings['credentials-file']);
             $sessions ??= static fn (Configuration $config, string $context): SandboxSession
                 => new SandboxSession($config, $context);
@@ -113,8 +135,18 @@ final class HostedSetupPreflight
                 $ledger->requestId('preflight_risk_bootstrap', [
                     'profile' => 'partial_first_party_bws_only', 'visitor_limit' => 1, 'event_limit' => 8,
                     'preflight_limit' => 1, 'body_limit_bytes' => 65536, 'event_total_limit_bytes' => 262144,
-                    'observation_window_max_ms' => 8000, 'browser_tools' => $safe['browser_tool_hashes'],
+                    'observation_window_max_ms' => $mode === HostedSecurityMode::InstrumentSecurity ? 15000 : 8000,
+                    'browser_tools' => $safe['browser_tool_hashes'],
                     'financial_authority' => false,
+                ], $session->contextFingerprint());
+            }
+            if ($mode === HostedSecurityMode::InstrumentSecurity) {
+                $ledger->requestId('instrument_security_profile', [
+                    'profile' => $mode->value, 'browser_case_max_ms' => 40000, 'new_admission_max_ms' => 30000,
+                    'response_release_max_ms' => 38000, 'loader_wait_max_ms' => 2000,
+                    'security_stage_max_ms' => 15000, 'loader_limit_bytes' => 262144, 'loader_encoding' => 'identity',
+                    'input_authority' => false, 'financial_authority' => false,
+                    'browser_tools' => $safe['browser_tool_hashes'],
                 ], $session->contextFingerprint());
             }
             $phase = 'account_prerequisite';
@@ -194,9 +226,22 @@ final class HostedSetupPreflight
                     'financial_authority' => false, 'capture_window_max_ms' => 5500,
                 ], $fingerprint);
             }
+            if (
+                $mode === HostedSecurityMode::InstrumentSecurity
+                && ($safe['source'] !== SourceEvidence::capture()
+                    || $safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes($mode))
+            ) {
+                throw new RuntimeException('Private security source changed before handoff.');
+            }
             $phase = 'browser_read_only';
             $riskJournal = $observeRisk
-                ? new HostedRiskJournal($ledger, $fingerprint, $browserExpected, $safe['browser_tool_hashes']) : null;
+                ? new HostedRiskJournal(
+                    $ledger,
+                    $fingerprint,
+                    $browserExpected,
+                    HostedBrowser::sourceHashes(),
+                    $mode === HostedSecurityMode::InstrumentSecurity ? $safe['browser_tool_hashes'] : null
+                ) : null;
             $safe['browser'] = HostedBrowser::sanitize(
                 $browser(
                     $url,
@@ -209,6 +254,7 @@ final class HostedSetupPreflight
                     $observeParentCountry,
                     $observeCurrencySettings,
                     $selectCard,
+                    $mode,
                 ),
                 $render,
                 $observeConfig,
@@ -217,9 +263,13 @@ final class HostedSetupPreflight
                 $observeParentCountry,
                 $observeCurrencySettings,
                 $selectCard,
+                $mode,
             );
             $safe['result'] = $safe['browser']['result'];
-            if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {
+            if (
+                ($mode === HostedSecurityMode::InstrumentSecurity && $safe['source'] !== SourceEvidence::capture())
+                || $safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes($mode)
+            ) {
                 throw new RuntimeException('Browser tooling changed during the preflight.');
             }
         } catch (\Throwable $error) {
