@@ -7,13 +7,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { HostedPolicy, egressProxy, assetMatches } = require('./hosted-policy.cjs');
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null) {
-  const policy = new HostedPolicy(initial, fixtureOrigin, expected);
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false) {
+  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
   await fs.chmod(directory, 0o700);
   let proxy;
   let browser;
   let context;
+  let mainPage;
   let result;
   let failed = false;
   const pending = new Set();
@@ -27,10 +28,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     failed = true;
     if (context) void track(() => context.close());
     if (browser) void track(() => browser.close());
-  }, 20000);
+  }, render ? 40000 : 20000);
   watchdog.unref();
   const counts = { blocked_requests: 0, blocked_websockets: 0, returns_intercepted: 0,
-    verified_static_assets: 0, integrity_rejections: 0 };
+    verified_static_assets: 0, integrity_rejections: 0, verified_render_assets: 0, bound_render_frames: 0 };
   let observationDone;
   const observed = new Promise(resolve => { observationDone = resolve; });
   let observationStarted;
@@ -60,10 +61,26 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     });
     await context.route('**/*', route => track(async () => {
       const request = route.request();
-      const action = policy.decide(request.url(), request.method(), request.resourceType());
-      if (policy.claimPayerRequest(request.url(), request.method(), request.resourceType(),
+      let action = policy.decide(request.url(), request.method(), request.resourceType());
+      let renderFrame = false;
+      if (render && request.method() === 'GET' && request.resourceType() === 'document'
+          && request.url() === new URL(fixtureOrigin === null ? '/' : '/render-frame', initial).href
+          && mainPage && request.frame().parentFrame() === mainPage.mainFrame()) {
+        const element = await request.frame().frameElement();
+        try { renderFrame = policy.claimRenderFrame(await element.getAttribute('src')); }
+        finally { await element.dispose(); }
+        action = renderFrame ? 'allow' : 'block';
+      }
+      let payerFromMainPage = false;
+      if (mainPage && ['xhr', 'fetch'].includes(request.resourceType())
+          && request.url().startsWith(new URL('/billing/payer-web-api/checkout?', initial).href)) {
+        try { payerFromMainPage = request.frame() === mainPage.mainFrame(); } catch { /* Deny unavailable frame. */ }
+      }
+      if (payerFromMainPage
+        && policy.claimPayerRequest(request.url(), request.method(), request.resourceType(),
         request.headers(), request.postData())) {
         observationStarted();
+        let delivered = false;
         try {
           // Only the reviewed getter headers survive. Never follow a redirect or replay the GET.
           const response = await route.fetch({ headers: {
@@ -83,12 +100,18 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             } else if (status !== 200) {
               payer.payer_observation = 'http_rejected';
             } else {
-              payer = { ...payer, ...policy.observePayer(await response.body()) };
+              const body = await response.body();
+              payer = { ...payer, ...policy.observePayer(body) };
+              if (policy.mayDeliverPayer()) {
+                await route.fulfill({ response, body });
+                policy.markPayerDelivered();
+                delivered = true;
+              }
             }
           } finally { await response.dispose(); }
         } finally {
-          // Even a matching payload is withheld: renderer/collection approval is a separate step.
-          try { await route.abort('blockedbyclient'); } finally { observationDone(); }
+          // Default probe always withholds. Explicit rendering can deliver only the verified own payload.
+          try { if (!delivered) await route.abort('blockedbyclient'); } finally { observationDone(); }
         }
       } else if (action === 'return') {
         counts.returns_intercepted++;
@@ -108,6 +131,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           } else {
             const body = await response.body();
             if (body.length > 2 * 1024 * 1024) throw new Error('Browser response exceeds the preflight boundary.');
+            if (renderFrame && (response.status() !== 200
+                || (fixtureOrigin === null && (!body.includes('window.checkoutVersion="v2.56.0"')
+                  || !body.includes('/static/js/vendor.61207a66.js')
+                  || !body.includes('/static/js/checkout.d2f9eaef.js'))))) {
+              throw new Error('The reviewed read-only frame document was not observed.');
+            }
             const expected = policy.assetHash(request.url(), request.method(), request.resourceType());
             if (expected !== null) {
               if (!assetMatches(body, expected)) {
@@ -115,9 +144,11 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
                 await route.abort('blockedbyclient');
                 throw new Error('Browser script integrity did not match the reviewed build.');
               }
-              counts.verified_static_assets++;
+              if (policy.isRenderAsset(request.url())) counts.verified_render_assets++;
+              else counts.verified_static_assets++;
             }
             await route.fulfill({ response, body });
+            if (renderFrame) counts.bound_render_frames++;
           }
         } finally { await response.dispose(); }
       } else {
@@ -135,6 +166,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       } catch { failed = true; }
     });
     const page = await context.newPage();
+    mainPage = page;
     page.setDefaultTimeout(3000);
     page.setDefaultNavigationTimeout(10000);
     await page.goto(initial, { waitUntil: 'domcontentloaded' });
@@ -144,6 +176,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       clearTimeout(timer);
       if (policy.bindingEvidence().payer_get_attempted) await observed;
     }
+    if (policy.bindingEvidence().payer_payload_delivered) await new Promise(resolve => setTimeout(resolve, 10000));
     const visible = await page.getByText(/^(test mode|sandbox)$/iu, { exact: true }).first().isVisible();
     if (exercise !== null) await exercise(page, context);
     result = {
@@ -185,13 +218,14 @@ async function main() {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || Object.keys(input).sort().join(',') !== 'expected,url' || typeof input.url !== 'string'
+      || !['expected,url', 'expected,render,url'].includes(Object.keys(input).sort().join(','))
+      || (Object.hasOwn(input, 'render') && typeof input.render !== 'boolean') || typeof input.url !== 'string'
       || !input.expected || typeof input.expected !== 'object') {
     throw new Error('Invalid private browser input.');
   }
   // Reject non-provider input before requiring any browser module or launching Chrome.
-  new HostedPolicy(input.url, null, input.expected);
-  const result = await inspect(input.url, require(process.argv[2]), null, null, input.expected);
+  new HostedPolicy(input.url, null, input.expected, input.render ?? false);
+  const result = await inspect(input.url, require(process.argv[2]), null, null, input.expected, input.render ?? false);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 

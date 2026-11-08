@@ -10,13 +10,16 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use RuntimeException;
 use SensitiveParameter;
 
-/** One fresh organization-owned SETUP, private browser read only, then owned cancellation. */
+/**
+ * One fresh organization-owned SETUP, private browser read only, then owned cancellation.
+ * @phpstan-type BrowserExpectation array{checkout_id:string,mode:string,currency:string}
+ */
 final class HostedSetupPreflight
 {
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,array{checkout_id:string,mode:string,currency:string}):array<string,mixed>)|null $browser
+     * @param (Closure(string,BrowserExpectation,bool):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -29,7 +32,7 @@ final class HostedSetupPreflight
         $phase = 'configuration';
         try {
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
-                'playwright-module', 'create-one-hosted-setup'];
+                'playwright-module', 'create-one-hosted-setup', 'render-owned-data'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -44,6 +47,11 @@ final class HostedSetupPreflight
             if (($options['create-one-hosted-setup'] ?? null) !== true) {
                 throw new RuntimeException('One fresh preflight must be explicitly selected.');
             }
+            $render = $options['render-owned-data'] ?? false;
+            if (!is_bool($render)) {
+                throw new RuntimeException('Explicit rendering configuration is invalid.');
+            }
+            $safe['render_requested'] = $render;
             $bridge = new HostedBrowser($strings['node-bin'], $strings['playwright-module']);
             $browser ??= $bridge->inspect(...);
             $safe['source'] = SourceEvidence::capture();
@@ -97,7 +105,7 @@ final class HostedSetupPreflight
                 'method' => 'GET', 'path' => '/billing/payer-web-api/checkout',
             ], $fingerprint);
             $phase = 'browser_read_only';
-            $safe['browser'] = HostedBrowser::sanitize($browser($url, $browserExpected));
+            $safe['browser'] = HostedBrowser::sanitize($browser($url, $browserExpected, $render), $render);
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {
                 throw new RuntimeException('Browser tooling changed during the preflight.');
