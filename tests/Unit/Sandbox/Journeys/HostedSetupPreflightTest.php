@@ -121,7 +121,23 @@ final class HostedSetupPreflightTest extends TestCase
             $options ?? $this->options(),
             static fn (Configuration $config, string $context): SandboxSession
                 => new SandboxSession($config, $context, $transport),
-            function (string $url) use ($fault): array {
+            function (string $url, array $expected) use ($fault): array {
+                self::assertSame([
+                    'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
+                ], $expected);
+                $paths = glob($this->directory . '/sdk-validation-*/ledger.json');
+                self::assertIsArray($paths);
+                self::assertCount(1, $paths);
+                $contents = file_get_contents($paths[0]);
+                self::assertIsString($contents);
+                $state = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
+                self::assertIsArray($state);
+                self::assertIsArray($state['actions']);
+                self::assertIsArray($state['actions']['preflight_payer_read']);
+                self::assertSame(hash('sha256', json_encode($expected + [
+                    'method' => 'GET', 'path' => '/billing/payer-web-api/checkout',
+                ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_payer_read']['body_hash']);
+                self::assertStringNotContainsString('PRIVATE_SYNTHETIC_SESSION', $contents);
                 $this->browserCalls++;
                 self::assertSame('https://checkout.airwallex.com/pay?s=PRIVATE_SYNTHETIC_SESSION', $url);
                 if ($fault === 'browser_throws') {
