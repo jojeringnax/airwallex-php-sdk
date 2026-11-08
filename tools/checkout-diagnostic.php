@@ -7,7 +7,8 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\CheckoutDiagnosticComma
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 $knownOptions = true;
-foreach (array_slice($argv, 1) as $argument) {
+$arguments = $argv ?? [];
+foreach (array_slice($arguments, 1) as $argument) {
     if (
         str_starts_with($argument, '--')
         && preg_match('/^--(?:environment|credentials-file|state-dir)(?:=|$)/D', $argument) !== 1
@@ -17,7 +18,7 @@ foreach (array_slice($argv, 1) as $argument) {
 }
 $index = 0;
 $options = $knownOptions ? getopt('', ['environment:', 'credentials-file:', 'state-dir:'], $index) : [];
-if (!$knownOptions || $index !== count($argv)) {
+if (!$knownOptions || $index !== count($arguments)) {
     $options = [];
 }
 $result = CheckoutDiagnosticCommand::run($options === false ? [] : $options);
