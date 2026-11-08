@@ -40,7 +40,7 @@ PHP);
     $command = [
         ...$composerCommand, 'update', '--no-dev', '--no-interaction', '--no-plugins', '--no-scripts', '--prefer-dist',
     ];
-    if (in_array('--lowest', $argv, true)) {
+    if (in_array('--lowest', $argv ?? [], true)) {
         $command[] = '--prefer-lowest';
     }
     runCommand($command, $consumer);
