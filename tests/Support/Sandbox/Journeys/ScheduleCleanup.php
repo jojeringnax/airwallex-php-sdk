@@ -348,7 +348,8 @@ final class ScheduleCleanup
         } elseif ($kind === 'prices') {
             self::fields($object, ['product_id' => $this->product, 'currency' => 'EUR', 'pricing_model' => 'PER_UNIT',
                 'billing_type' => 'IN_ADVANCE', 'recurring' => ['period' => 1,
-                    'period_unit' => $this->case === 'checkout-trial' ? 'MONTH' : 'DAY']]);
+                    'period_unit' => in_array($this->case, ['checkout-trial', 'immediate-oob-trial'], true)
+                        ? 'MONTH' : 'DAY']]);
             if (!ExactDecimal::equalsLiteral($object['unit_amount'] ?? null, '1.23')) {
                 throw new ProtocolException('The owned Price amount changed.');
             }

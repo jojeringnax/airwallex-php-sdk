@@ -210,7 +210,7 @@ final class ScheduleCleanupTest extends TestCase
         $this->safe($safe);
     }
 
-    private function catalogueOnly(): void
+    private function catalogueOnly(string $case = 'checkout-trial'): void
     {
         $state = $this->priorState();
         self::assertIsArray($state['resources']);
@@ -218,14 +218,34 @@ final class ScheduleCleanupTest extends TestCase
         $this->writePrior($state);
         foreach (['customers', 'products', 'prices'] as $kind) {
             $this->http->objects[$this->path($kind)]['metadata'] = ['sdk_validation_run' => $this->marker,
-                'sdk_validation_case' => 'checkout-trial'];
+                'sdk_validation_case' => $case];
         }
         $this->http->objects[$this->path('prices')]['recurring'] = ['period' => 1, 'period_unit' => 'MONTH'];
     }
 
-    public function testFailedCreateCatalogueOnlyNeverLooksForAnUnrecordedSubscription(): void
+    public function testImmediateTrialCatalogueOnlyRejectsDailyPriceBeforeAnyArchive(): void
     {
-        $this->catalogueOnly();
+        $this->catalogueOnly('immediate-oob-trial');
+        $this->http->objects[$this->path('prices')]['recurring'] = ['period' => 1, 'period_unit' => 'DAY'];
+        $options = $this->options();
+        unset($options['mode']);
+        $safe = ScheduleCleanupCommand::run($options, $this->http, static fn (): int => self::NOW);
+        self::assertSame('fail', $safe['result']);
+        self::assertCount(0, $this->http->mutations());
+        $this->safe($safe);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function monthlyCases(): iterable
+    {
+        yield 'checkout trial' => ['checkout-trial'];
+        yield 'immediate out-of-band trial' => ['immediate-oob-trial'];
+    }
+
+    #[DataProvider('monthlyCases')]
+    public function testFailedCreateCatalogueOnlyNeverLooksForAnUnrecordedSubscription(string $case): void
+    {
+        $this->catalogueOnly($case);
         $options = $this->options();
         unset($options['mode']);
         $safe = ScheduleCleanupCommand::run($options, $this->http, static fn (): int => self::NOW);
