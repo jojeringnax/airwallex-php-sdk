@@ -4,11 +4,17 @@ Contract research for [issue #3](https://github.com/jojeringnax/airwallex-php-sd
 
 ## Version baseline
 
-The SDK targets API date-version **`2026-08-21`**, with explicit `x-api-version` on SDK API requests and the same version configured on webhook subscriptions. This gives consumers a reproducible contract across accounts with different defaults. Endpoint pages reviewed below are the current public documentation; their extracted version selector did not identify a selected version. They establish a research baseline, not proof of a version-pinned sandbox contract.
+The SDK targets API date-version **`2026-08-21`**, with explicit `x-api-version` on SDK API requests and the same version configured on webhook subscriptions. This gives consumers a reproducible contract across accounts with different defaults. The resource references below were verified against that selected documentation version; sandbox compatibility remains a separate validation step.
 
 The [versioning reference](https://www.airwallex.com/docs/api/versioning) lists `2026-08-21` as latest. Without an override, calls use the account's configured version. The header overrides that default per call; Airwallex recommends it for exceptional cases such as migration and on-behalf-of calls. The `/v1` URL segment is separate from the date-version. The SDK uses an explicit pin to keep its contract stable across account defaults; consumers configure webhook subscriptions to match.
 
 Account upgrades do not implicitly upgrade the SDK contract. Review changelog/schema differences before changing the pin. Proposed response compatibility behavior, to be reviewed with the public interface examples: tolerate additional fields and preserve unknown provider values. Regulatory or payment-method requirements can still change across versions. SDK release compatibility remains governed by [architecture](architecture.md#compatibility-policy).
+
+## Selected-version evidence
+
+On 2026-11-08, the HTML of all 13 API resource pages in the inventory, plus the [authentication](https://www.airwallex.com/docs/api/authentication/api_access_token), [versioning](https://www.airwallex.com/docs/api/versioning), [changelog](https://www.airwallex.com/docs/api/changelog) and [Webhooks API](https://www.airwallex.com/docs/api/webhooks/webhooks) pages, was checked directly. Each page had a selected `<option value="2026-08-21">` and `__NEXT_DATA__.props.pageProps.currentVersion` equal to `2026-08-21`. The metadata identifies the source specification as `airwallex-openapi-2026-08-21.yaml`, with published `md5` identifier `f3dcbacb0453ce7a4808b6e97305dac6` in `versionItems`.
+
+The same page metadata contains `activeCategory.endpoints`; the inventory operations and representative required fields, response schema references, permissions and resource levels were cross-checked there. The URLs currently default to this version and may change later: on re-verification, check the selected option and `currentVersion` rather than assuming the URL still identifies the baseline. Product guides provide supplemental behavior and are not independently date-versioned.
 
 ## Authorization and ownership
 
@@ -23,11 +29,11 @@ The [API-key guide](https://www.airwallex.com/docs/developer-tools/api/manage-ap
 
 The [authentication contract](https://www.airwallex.com/docs/api/authentication/api_access_token) specifies `POST /api/v1/authentication/login` with `x-client-id`, `x-api-key` and optional `x-login-as`; success is 201 with `token` and ISO8601 `expires_at`. Subsequent calls use bearer authorization. Reuse the token until its returned expiration. Login documents 400, 401 (`credentials_invalid`, `credentials_expired`), 403, 429 and 500 failures. Environment, credentials and applicable account context must partition token reuse as required by the [architecture](architecture.md#dependencies-and-transport).
 
-The [connected-account reference](https://www.airwallex.com/docs/api/connected_accounts) describes platform credentials with `x-on-behalf-of` on resource requests. This differs from selecting an account during login. Its example is a balance read; it does not establish Billing organization ownership or every Payments operation's eligibility. Family-specific platform permissions, entitlements and two-account isolation remain the verification work of [issue #4](https://github.com/jojeringnax/airwallex-php-sdk/issues/4).
+The [connected-account reference](https://www.airwallex.com/docs/api/connected_accounts) describes platform credentials with `x-on-behalf-of` on resource requests. This differs from selecting an account during login. Its example is a balance read; it does not establish Billing organization ownership or every Payments operation's eligibility. Selected-version endpoint metadata independently confirms Billing Customer create/retrieve as `x-resourceLevel=org`, `x-oboSupported=false`, with `billing.customer:write`/`billing.customer:read`; Intent create/retrieve are `account`, `x-oboSupported=true`, with `payment_acceptance:write`/`payment_acceptance:read`. These are provider metadata identifiers; authentication modes and public interfaces still follow their own decisions. Family-specific platform permissions, entitlements and two-account isolation remain the verification work of [issue #4](https://github.com/jojeringnax/airwallex-php-sdk/issues/4).
 
 ## Resource inventory
 
-All rows were reviewed on 2026-11-08 using current, unpinned documentation. The selected target for every row is `2026-08-21`; version-specific schema verification remains required before endpoint implementation. Operations below identify the accepted workflows and supporting resources; provider operations outside those workflows do not expand SDK scope.
+All rows were reviewed on 2026-11-08 with documentation version `2026-08-21` selected. The operations listed are present in that version; full request/response and failure-path fixtures remain part of endpoint implementation. Operations below identify the accepted workflows and supporting resources; provider operations outside those workflows do not expand SDK scope.
 
 Permission labels come from the [API-key scope catalogue](https://www.airwallex.com/docs/developer-tools/api/api-key-scopes). Billing uses each named resource permission at organization level; the Payments rows use **Payment Acceptance** at account level. Request bodies and error cases still need endpoint-level fixtures before implementation.
 
@@ -51,7 +57,7 @@ Credit notes/Billing transactions need a separate coverage decision beyond the a
 
 ## Representative contract checks
 
-Paths below are relative to `/api/v1`. These checks compare documented reads and mutations independently for Billing and Payments; no remote requests were executed.
+Paths below are relative to `/api/v1`. These checks compare documented reads and mutations independently for Billing and Payments at `2026-08-21`; no sandbox API requests were executed. Billing Customer create/retrieve reference the same `CustomerResponse` schema; Intent create/retrieve reference `PaymentIntentSingle`. Login references `Token` and retains the required credential headers and optional `x-login-as` described above.
 
 | Family | Mutation checked | Read checked | Important contract differences |
 | --- | --- | --- | --- |
@@ -60,7 +66,7 @@ Paths below are relative to `/api/v1`. These checks compare documented reads and
 
 The [Payment Source contract](https://www.airwallex.com/docs/api/billing/payment_sources) further bridges the families: creation requires `billing_customer_id`, `external_id` (a Payment Method ID), and `request_id`. `linked_payment_account_id` is required with multiple payment accounts. For Airwallex instruments, merchant-initiated authorization uses `next_triggered_by=merchant` and `merchant_trigger_reason=unscheduled` through an Intent or Consent. Reads return the Billing customer, method and linked account references. Verify their ownership together; a Billing Customer ID cannot substitute for a Payments Customer ID.
 
-There is a documentation mismatch: the [payment-source product guide](https://www.airwallex.com/docs/billing/billing-components/payment-sources) describes creating the source using a verified Consent, while the API requires the associated Method ID. Resolve from the verified Consent's instrument and confirm the linkage in sandbox before publishing an example. The inspected API exposes create/retrieve/list, leaving default changes and removal unverified.
+There is a documentation mismatch: the [payment-source product guide](https://www.airwallex.com/docs/billing/billing-components/payment-sources) describes creating the source using a verified Consent, while the API requires the associated Method ID. For a source-backed card example, retrieve a `VERIFIED` [Payment Consent](https://www.airwallex.com/docs/api/payments/payment_consents), take its `payment_method.id`, and pass that Method ID as `external_id` with the Billing customer and linked account. The Consent response documents `payment_method.id` as card-only; other methods require their own linkage verification. Clearly mark examples as unvalidated until exercised in sandbox; sandbox evidence is required before claiming integration support, rather than before drafting interface examples. The inspected API exposes create/retrieve/list, leaving default changes and removal unverified.
 
 ## Precision, pagination and errors
 
@@ -91,7 +97,7 @@ The [rate-limit guide](https://www.airwallex.com/docs/developer-tools/api/rate-l
 
 ## Webhook contract
 
-The [subscription guide](https://www.airwallex.com/docs/developer-tools/webhooks/listen-for-webhook-events) states that webhook API versions are chosen at subscription creation, defaulting to the account version. Event `version` describes `data`; `data.object` follows the corresponding resource Retrieve schema. An API request header does not configure webhook subscriptions.
+The [subscription guide](https://www.airwallex.com/docs/developer-tools/webhooks/listen-for-webhook-events) states that webhook API versions are chosen at subscription creation, defaulting to the account version. Event `version` describes `data`; `data.object` follows the corresponding resource Retrieve schema. An API request header does not configure webhook subscriptions. The selected-version [Webhooks API](https://www.airwallex.com/docs/api/webhooks/webhooks) independently requires a `version` field when creating a subscription; set it to `2026-08-21`. This inventory verifies version configuration, while event-by-event payload validation remains in issue #8.
 
 The envelope includes `id`, `name`, `created_at`, `version`, `data.object` and applicable `org_id`/`account_id`. Validate organization/account applicability per event instead of requiring both IDs universally. Verify HMAC-SHA256 over the exact `x-timestamp` string followed by the raw body using the subscription secret; compare in constant time and apply timestamp tolerance. `x-timestamp` is milliseconds.
 
@@ -107,7 +113,7 @@ The durable SDK constraint is to expose observed provider state and account-conf
 
 | Gap | Required resolution | Follow-up |
 | --- | --- | --- |
-| Version-specific schemas | Verify endpoint schemas and changelog against the selected `2026-08-21` target before implementation | Resource implementation issues |
+| Endpoint fixtures | Derive complete request/response and failure-path fixtures from the verified `2026-08-21` documentation for each implemented operation | Resource implementation issues |
 | Platform access | Verify Billing organization ownership, Payments on-behalf-of eligibility, scopes and linked-account entitlements for two connected accounts | [#4](https://github.com/jojeringnax/airwallex-php-sdk/issues/4) |
 | Lifecycle and documents | Resolve PDF/self-service/trial capability boundaries and account-configured dunning outcomes | [#5](https://github.com/jojeringnax/airwallex-php-sdk/issues/5) |
 | Public representation | Approve decimals, pagination, optional/null fields, errors and unknown-value behavior in consumer examples | [#6](https://github.com/jojeringnax/airwallex-php-sdk/issues/6) |
