@@ -8,6 +8,8 @@
 
 For authentication, endpoint, retry or webhook work, consult the [API contract and permission inventory](api-contracts.md) for verified sources, the selected version policy and evidence gaps.
 
+For selected Billing webhook names, versioned resource transitions, setup and unknown-event handling, consult the [webhook catalogue](webhook-contracts.md).
+
 The initial scope is limited to the Billing and Payments capabilities below. Other Airwallex product families and connected-account onboarding operations require separate scope decisions.
 
 ## Initial Billing and Payments scope

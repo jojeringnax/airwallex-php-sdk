@@ -1,0 +1,183 @@
+[
+  {
+    "id": "evt_example_payment_consent_created",
+    "name": "payment_consent.created",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "REQUIRES_PAYMENT_METHOD"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_updated",
+    "name": "payment_consent.updated",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "REQUIRES_PAYMENT_METHOD"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_pending",
+    "name": "payment_consent.pending",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "PENDING",
+        "payment_method": {
+          "type": "bacs_direct_debit"
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_verified",
+    "name": "payment_consent.verified",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "VERIFIED",
+        "payment_method": {
+          "type": "card",
+          "id": "mtd_example"
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_disabled",
+    "name": "payment_consent.disabled",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "DISABLED"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_paused",
+    "name": "payment_consent.paused",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "PAUSED",
+        "payment_method": {
+          "type": "payto"
+        }
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_requires_payment_method",
+    "name": "payment_consent.requires_payment_method",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "REQUIRES_PAYMENT_METHOD"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_requires_customer_action",
+    "name": "payment_consent.requires_customer_action",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "REQUIRES_CUSTOMER_ACTION"
+      }
+    }
+  },
+  {
+    "id": "evt_example_payment_consent_verification_failed",
+    "name": "payment_consent.verification_failed",
+    "account_id": "acct_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "cst_example",
+        "customer_id": "cus_example",
+        "request_id": "request_example",
+        "next_triggered_by": "merchant",
+        "merchant_trigger_reason": "unscheduled",
+        "status": "REQUIRES_PAYMENT_METHOD"
+      }
+    }
+  }
+]

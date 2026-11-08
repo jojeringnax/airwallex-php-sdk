@@ -1,0 +1,87 @@
+{
+  "reviewed_at": "2026-11-08",
+  "version": "2026-08-21",
+  "origin": "Synthetic documentation-derived examples; not captured deliveries or sandbox evidence.",
+  "groups": [
+    {
+      "file": "subscription.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/billing/subscriptions/retrieve",
+      "retrieve_path": "/api/v1/billing/subscriptions/{id}",
+      "schema": "#/components/schemas/Subscription",
+      "event_names": [
+        "subscription.active",
+        "subscription.cancelled",
+        "subscription.created",
+        "subscription.in_trial",
+        "subscription.modified",
+        "subscription.unpaid"
+      ]
+    },
+    {
+      "file": "billing_checkout.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/billing/billing_checkouts/retrieve",
+      "retrieve_path": "/api/v1/billing/billing_checkouts/{id}",
+      "schema": "#/components/schemas/Checkout",
+      "event_names": [
+        "billing_checkout.cancelled",
+        "billing_checkout.completed",
+        "billing_checkout.created"
+      ]
+    },
+    {
+      "file": "invoice.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/billing/invoices/retrieve",
+      "retrieve_path": "/api/v1/billing/invoices/{id}",
+      "schema": "#/components/schemas/Invoice",
+      "event_names": [
+        "invoice.created",
+        "invoice.finalized",
+        "invoice.payment.paid",
+        "invoice.updated",
+        "invoice.voided"
+      ]
+    },
+    {
+      "file": "payment_consent.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/payments/payment_consents/retrieve",
+      "retrieve_path": "/api/v1/pa/payment_consents/{id}",
+      "schema": "#/components/schemas/PaymentConsent",
+      "event_names": [
+        "payment_consent.created",
+        "payment_consent.disabled",
+        "payment_consent.paused",
+        "payment_consent.pending",
+        "payment_consent.requires_customer_action",
+        "payment_consent.requires_payment_method",
+        "payment_consent.updated",
+        "payment_consent.verification_failed",
+        "payment_consent.verified"
+      ]
+    },
+    {
+      "file": "payment_method.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/payments/payment_methods/retrieve",
+      "retrieve_path": "/api/v1/pa/payment_methods/{id}",
+      "schema": "#/components/schemas/PaymentMethod",
+      "event_names": [
+        "payment_method.attached",
+        "payment_method.created",
+        "payment_method.detached",
+        "payment_method.disabled",
+        "payment_method.updated"
+      ]
+    }
+  ],
+  "payment_source": {
+    "file": "payment-source-retrieve.json",
+    "resource_reference": "https://www.airwallex.com/docs/api/billing/payment_sources/retrieve",
+    "retrieve_path": "/api/v1/billing/payment_sources/{id}",
+    "schema": "#/components/schemas/Billing_PaymentSource",
+    "event_names": []
+  },
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "f3dcbacb0453ce7a4808b6e97305dac6"
+  }
+}

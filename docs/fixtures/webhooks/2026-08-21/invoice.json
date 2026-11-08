@@ -1,0 +1,152 @@
+[
+  {
+    "id": "evt_example_invoice_created",
+    "name": "invoice.created",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "inv_example",
+        "billing_customer_id": "bcus_example",
+        "subscription_id": "sub_example",
+        "linked_payment_account_id": "acct_example",
+        "payment_source_id": "psrc_example",
+        "currency": "USD",
+        "status": "DRAFT",
+        "payment_status": "UNPAID",
+        "amount_due": 10,
+        "total_amount": 10,
+        "total_tax_amount": 0,
+        "paid_out_of_band": false,
+        "applied_discounts": [],
+        "total_discount_amounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false
+      }
+    }
+  },
+  {
+    "id": "evt_example_invoice_finalized",
+    "name": "invoice.finalized",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "inv_example",
+        "billing_customer_id": "bcus_example",
+        "subscription_id": "sub_example",
+        "linked_payment_account_id": "acct_example",
+        "payment_source_id": "psrc_example",
+        "currency": "USD",
+        "status": "FINALIZED",
+        "payment_status": "UNPAID",
+        "amount_due": 10,
+        "total_amount": 10,
+        "total_tax_amount": 0,
+        "paid_out_of_band": false,
+        "applied_discounts": [],
+        "total_discount_amounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false,
+        "finalized_at": "2026-11-08T10:00:00Z"
+      }
+    }
+  },
+  {
+    "id": "evt_example_invoice_updated",
+    "name": "invoice.updated",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "inv_example",
+        "billing_customer_id": "bcus_example",
+        "subscription_id": "sub_example",
+        "linked_payment_account_id": "acct_example",
+        "payment_source_id": "psrc_example",
+        "currency": "USD",
+        "status": "FINALIZED",
+        "payment_status": "UNPAID",
+        "amount_due": 10,
+        "total_amount": 10,
+        "total_tax_amount": 0,
+        "paid_out_of_band": false,
+        "applied_discounts": [],
+        "total_discount_amounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false,
+        "past_payment_attempt_count": 1,
+        "remaining_payment_attempt_count": 2
+      }
+    }
+  },
+  {
+    "id": "evt_example_invoice_payment_paid",
+    "name": "invoice.payment.paid",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "inv_example",
+        "billing_customer_id": "bcus_example",
+        "subscription_id": "sub_example",
+        "linked_payment_account_id": "acct_example",
+        "payment_source_id": "psrc_example",
+        "currency": "USD",
+        "status": "FINALIZED",
+        "payment_status": "PAID",
+        "amount_due": 0,
+        "total_amount": 10,
+        "total_tax_amount": 0,
+        "paid_out_of_band": false,
+        "applied_discounts": [],
+        "total_discount_amounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false,
+        "paid_at": "2026-11-08T10:00:00Z"
+      }
+    }
+  },
+  {
+    "id": "evt_example_invoice_voided",
+    "name": "invoice.voided",
+    "org_id": "org_example",
+    "created_at": "2026-11-08T10:00:00Z",
+    "version": "2026-08-21",
+    "data": {
+      "object": {
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "id": "inv_example",
+        "billing_customer_id": "bcus_example",
+        "subscription_id": "sub_example",
+        "linked_payment_account_id": "acct_example",
+        "payment_source_id": "psrc_example",
+        "currency": "USD",
+        "status": "VOIDED",
+        "payment_status": "UNPAID",
+        "amount_due": 10,
+        "total_amount": 10,
+        "total_tax_amount": 0,
+        "paid_out_of_band": false,
+        "applied_discounts": [],
+        "total_discount_amounts": [],
+        "automatic_tax_status": "DISABLED",
+        "enable_automatic_tax": false,
+        "voided_at": "2026-11-08T10:00:00Z"
+      }
+    }
+  }
+]
