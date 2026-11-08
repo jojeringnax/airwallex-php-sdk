@@ -196,7 +196,8 @@ final readonly class HostedBrowser
         }
         $counters = ['blocked_requests', 'blocked_websockets', 'returns_intercepted',
             'proxy_rejections', 'proxy_connections', 'proxy_external_connections',
-            'verified_static_assets', 'integrity_rejections', 'verified_render_assets', 'bound_render_frames'];
+            'verified_static_assets', 'integrity_rejections', 'verified_render_assets', 'bound_render_frames',
+            'controller_asset_requests', 'verified_controller_assets', 'controller_replays_blocked'];
         foreach ($counters as $key) {
             if (isset($data[$key]) && is_int($data[$key]) && $data[$key] >= 0 && $data[$key] <= 1000000) {
                 $safe[$key] = $data[$key];
@@ -220,6 +221,10 @@ final readonly class HostedBrowser
                 }
             }
             $safe['render_frame_checks'] = $checks;
+        }
+        $controllerStatus = $data['controller_http_status'] ?? null;
+        if (is_int($controllerStatus) && $controllerStatus >= 100 && $controllerStatus <= 599) {
+            $safe['controller_http_status'] = $controllerStatus;
         }
         $payerStatus = $data['payer_http_status'] ?? null;
         if (is_int($payerStatus) && $payerStatus >= 100 && $payerStatus <= 599) {

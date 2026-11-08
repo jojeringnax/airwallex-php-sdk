@@ -15,6 +15,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let browser;
   let context;
   let mainPage;
+  let publicClientPromise;
+  let shuttingDown = false;
   let result;
   let failed = false;
   const pending = new Set();
@@ -26,12 +28,14 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   };
   const watchdog = setTimeout(() => {
     failed = true;
+    shuttingDown = true;
     if (context) void track(() => context.close());
     if (browser) void track(() => browser.close());
   }, render ? 40000 : 20000);
   watchdog.unref();
   const counts = { blocked_requests: 0, blocked_websockets: 0, returns_intercepted: 0,
-    verified_static_assets: 0, integrity_rejections: 0, verified_render_assets: 0, bound_render_frames: 0 };
+    verified_static_assets: 0, integrity_rejections: 0, verified_render_assets: 0, bound_render_frames: 0,
+    controller_asset_requests: 0, verified_controller_assets: 0, controller_replays_blocked: 0 };
   let observationDone;
   const observed = new Promise(resolve => { observationDone = resolve; });
   let observationStarted;
@@ -60,8 +64,23 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       }
     });
     await context.route('**/*', route => track(async () => {
+      if (shuttingDown) throw new Error('Browser preflight is shutting down.');
       const request = route.request();
-      let action = policy.decide(request.url(), request.method(), request.resourceType());
+      // Script admission and integrity share one immutable, non-null expected hash.
+      const script = request.resourceType() === 'script';
+      const expectedHash = script ? policy.assetHash(request.url(), request.method(), request.resourceType()) : null;
+      let action = script ? (expectedHash === null ? 'block' : 'allow')
+        : policy.decide(request.url(), request.method(), request.resourceType());
+      const controller = expectedHash !== null
+        && policy.isControllerTarget(request.url(), request.method(), request.resourceType());
+      if (controller) {
+        if (policy.claimControllerRequest(request.url(), request.method(), request.resourceType())) {
+          counts.controller_asset_requests++;
+        } else {
+          action = 'block';
+          counts.controller_replays_blocked++;
+        }
+      }
       let renderFrame = false;
       if (render && request.resourceType() === 'document' && action === 'block') {
         policy.noteRenderCheck('document_candidates');
@@ -138,13 +157,27 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       } else if (action === 'allow') {
         // continue() can follow redirects without re-running the route handler.
         // Fetch exactly this approved GET once, then deliver only a nonredirect response.
-        const headers = { ...request.headers() };
-        delete headers.referer;
-        const response = await route.fetch({
-          headers, maxRedirects: 0, maxRetries: 0, timeout: 10000,
-        });
+        // The public bootstrap receives no page credentials, cookies or private referrer.
+        const headers = controller ? { accept: '*/*', cookie: '', referer: '' } : { ...request.headers() };
+        if (!controller) delete headers.referer;
+        if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+        if (controller && !publicClientPromise) {
+          // Separate storage prevents even a public Set-Cookie from changing the browser's cookie jar.
+          publicClientPromise = playwright.request.newContext({
+            ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
+          });
+        }
+        const publicClient = controller ? await publicClientPromise : null;
+        if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+        const options = { headers, maxRedirects: 0, maxRetries: 0, timeout: 10000 };
+        const response = controller ? await publicClient.get(request.url(), options) : await route.fetch(options);
         try {
-          if (response.status() >= 300 && response.status() < 400) {
+          if (controller) {
+            const status = response.status();
+            if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error('Invalid public asset status.');
+            counts.controller_http_status = status;
+          }
+          if ((controller && response.status() !== 200) || (response.status() >= 300 && response.status() < 400)) {
             counts.blocked_requests++;
             if (renderFrame) policy.noteRenderCheck('document_redirect');
             await route.abort('blockedbyclient');
@@ -158,17 +191,21 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
               policy.noteRenderCheck('document_http_or_build_mismatch');
               throw new Error('The reviewed read-only frame document was not observed.');
             }
-            const expected = policy.assetHash(request.url(), request.method(), request.resourceType());
-            if (expected !== null) {
-              if (!assetMatches(body, expected)) {
+            if (expectedHash !== null) {
+              if (!assetMatches(body, expectedHash)) {
                 counts.integrity_rejections++;
                 await route.abort('blockedbyclient');
                 throw new Error('Browser script integrity did not match the reviewed build.');
               }
-              if (policy.isRenderAsset(request.url())) counts.verified_render_assets++;
+              if (controller) counts.verified_controller_assets++;
+              else if (policy.isRenderAsset(request.url())) counts.verified_render_assets++;
               else counts.verified_static_assets++;
             }
-            await route.fulfill({ response, body });
+            if (controller) {
+              const publicHeaders = Object.fromEntries(Object.entries(response.headers())
+                .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
+              await route.fulfill({ response, headers: publicHeaders, body });
+            } else await route.fulfill({ response, body });
             if (renderFrame) {
               counts.bound_render_frames++;
               policy.noteRenderCheck('fulfilled');
@@ -218,9 +255,14 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   } catch {
     failed = true;
   } finally {
+    shuttingDown = true;
     clearTimeout(watchdog);
     if (context) await track(() => context.close());
     if (browser) await track(() => browser.close());
+    if (publicClientPromise) await track(async () => {
+      const client = await publicClientPromise;
+      await client.dispose();
+    });
     await Promise.all([...pending]);
     if (proxy) await track(() => proxy.close());
     await track(() => fs.rm(directory, { recursive: true, force: true }));
