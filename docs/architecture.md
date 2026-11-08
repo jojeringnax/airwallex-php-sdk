@@ -1,6 +1,6 @@
 # Package architecture
 
-These decisions were accepted for [issue #2](https://github.com/jojeringnax/airwallex-php-sdk/issues/2). They establish package boundaries before implementation; the capability scope remains in [development planning](planning.md).
+The SDK consists of a framework-independent PHP core and a separate Laravel integration package. See [development planning](planning.md) for capability scope.
 
 ## Packages and runtime support
 
@@ -26,7 +26,7 @@ The selected interface dependency lines are `psr/http-client` 1.x, `psr/http-fac
 
 Token reuse uses in-memory storage by default, with an optional injected PSR-16 cache for reuse across processes. Both forms must isolate tokens by environment, credentials and applicable account context, and honor returned expiration. The cache backend belongs to the consuming application.
 
-Keep runtime dependencies focused on these interfaces. Concrete transport/cache implementations are consumer choices; Illuminate dependencies belong to the Laravel package. Any additional dependency needs justification during the work that requires it. Concrete implementation compatibility and Composer resolution will be validated during package bootstrap (#10 and #30).
+Keep runtime dependencies focused on these interfaces. Concrete transport/cache implementations are consumer choices; Illuminate dependencies belong to the Laravel package.
 
 ## State and persistence ownership
 
@@ -40,25 +40,17 @@ Keep runtime dependencies focused on these interfaces. Concrete transport/cache 
 
 The Laravel integration maintains local mappings and state through webhook synchronization and reconciliation. The application operates the required storage and workers and decides how observed billing state affects access. A local snapshot does not become the authority for remote financial state. Duplicate and out-of-order event handling remains part of synchronization work.
 
-Detailed Laravel schemas, tenant identities, application hooks and persistence interfaces remain subject to issue #7. API family authentication and connected-account ownership require independent verification in issues #3 and #4.
+Detailed Laravel persistence interfaces are tracked in [issue #7](https://github.com/jojeringnax/airwallex-php-sdk/issues/7); API family authentication and connected-account ownership are tracked in [issue #3](https://github.com/jojeringnax/airwallex-php-sdk/issues/3) and [issue #4](https://github.com/jojeringnax/airwallex-php-sdk/issues/4).
 
 ## Consumer walkthroughs
 
-These scenarios review the architecture without defining method signatures; representative public interface examples are addressed in issue #6.
+These scenarios illustrate the package boundaries. Public interface examples are tracked in [issue #6](https://github.com/jojeringnax/airwallex-php-sdk/issues/6).
 
 - **Plain PHP:** An application installs the core, supplies a PSR-18 client and PSR-17 factories, and configures an explicit environment and credential/account context. It uses in-memory token reuse or supplies a PSR-16 cache. It stores remote resource identifiers in its own persistence and applies its own access rules. No Laravel installation or SDK database is required.
 - **Laravel:** An application installs the integration package, which depends on the core. Framework bindings supply the transport and configured cache. The integration stores resource mappings and synchronized billing state, while the application runs webhook/reconciliation processing and decides access from that state. Requests for distinct connected accounts retain isolated authentication contexts.
-
-Both consumers use the core for remote operations; framework persistence and application policy remain outside that layer. Provider-specific operation semantics are deferred to the contract inventory rather than assumed by these scenarios.
 
 ## Compatibility policy
 
 Both packages use semantic versioning. During `0.x`, breaking changes must be documented with migration guidance; consumers should pin an appropriate minor release line. From `1.0`, breaking public interface changes require a major release. Supported runtime changes and breaking changes must be documented in release notes.
 
-The Laravel package declares the core versions it supports. Detailed release gates and the definition of the supported public surface remain in issue #9; public signatures and data representations remain in issue #6.
-
-## Validation and remaining work
-
-This decision record was reviewed against the plain PHP and Laravel scenarios above, the issue #2 acceptance criteria, and the published PHP, Laravel and PSR requirements. No executable package exists yet, so this is a documentation and dependency-requirement review, not a clean-install or runtime test result.
-
-The decisions needed by issue #2 are accepted. Implementation proceeds through the existing plan: contract verification (#3–#5), consumer interfaces (#6), Laravel persistence interfaces (#7), release policy (#9), and package bootstrap (#10/#30) at their respective prerequisites. Concrete HTTP/cache implementations, public signatures and storage schemas are not selected by this record.
+The Laravel package declares the core versions it supports. Detailed release gates and the definition of the supported public surface are tracked in [issue #9](https://github.com/jojeringnax/airwallex-php-sdk/issues/9).
