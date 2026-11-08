@@ -156,6 +156,11 @@ final class HostedSetupPreflightTest extends TestCase
                 if ($fault === 'browser_throws') {
                     throw new RuntimeException('PRIVATE_BROWSER_ERROR');
                 }
+                if ($fault === 'browser_safe_failure') {
+                    return ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+                        'browser_failure_phase' => 'method_get', 'bound_render_frames' => 1,
+                        'blocked_requests' => 3, 'private_error' => 'PRIVATE_BROWSER_ERROR'];
+                }
                 return ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
                     'card_entry_enabled' => false, 'test_mode_visible' => true,
                     'private_url' => $url, 'private_message' => 'PRIVATE_BROWSER_ERROR'];
@@ -251,6 +256,19 @@ final class HostedSetupPreflightTest extends TestCase
             self::assertSame(['checkout_0' => 'fail'], $result['cleanup']);
         }
         self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testFixedBrowserFailurePhaseSurvivesWhileOwnCleanupStillRuns(): void
+    {
+        $result = $this->execute('browser_safe_failure');
+        self::assertSame('fail', $result['result']);
+        self::assertSame('browser_read_only', $result['phase']);
+        self::assertIsArray($result['browser']);
+        self::assertSame('method_get', $result['browser']['browser_failure_phase']);
+        self::assertSame(1, $result['browser']['bound_render_frames']);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertSame(1, $this->cancels);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function testBrowserFailureStillCancelsOnlyItsCreatedCheckout(): void

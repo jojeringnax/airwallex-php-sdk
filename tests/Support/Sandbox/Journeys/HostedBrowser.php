@@ -147,6 +147,21 @@ final readonly class HostedBrowser
             throw new RuntimeException('Browser preflight returned invalid evidence.');
         }
         $safe = ['result' => $result, 'reason' => $reason, 'card_entry_enabled' => false];
+        $failurePhases = ['configuration', 'tooling_load', 'browser_startup', 'proxy_start', 'browser_launch',
+            'browser_context', 'page_setup', 'navigation', 'route_action', 'watchdog', 'visible_label',
+            'method_context', 'method_get', 'method_status', 'method_headers', 'method_body', 'method_fulfill',
+            'method_response_dispose', 'method_abort', 'websocket_close', 'dialog_dismiss',
+            'shutdown_browser_context', 'shutdown_browser', 'shutdown_request_context', 'shutdown_proxy',
+            'shutdown_directory', 'unclassified'];
+        foreach (['cardnumber', 'expiry', 'cvc'] as $field) {
+            foreach (['locator', 'count', 'visible', 'enabled'] as $step) {
+                $failurePhases[] = 'readiness_' . $field . '_' . $step;
+            }
+        }
+        if ($result === 'fail' && in_array($data['browser_failure_phase'] ?? null, $failurePhases, true)) {
+            $safe['browser_failure_phase'] = $data['browser_failure_phase'];
+        }
+
         if (in_array($data['candidate_origin'] ?? null, ['shared', 'sandbox'], true)) {
             $safe['candidate_origin'] = $data['candidate_origin'];
         }
@@ -214,7 +229,8 @@ final readonly class HostedBrowser
         }
         if ($observeConfig) {
             foreach (
-                ['method_config_requested', 'method_config_get_attempted', 'method_config_response_observed',
+                ['method_config_requested', 'method_config_get_attempted', 'method_config_send_started',
+                'method_config_response_observed',
                 'method_config_payload_delivered', 'method_config_pagination_known', 'method_config_has_more',
                 'method_config_card_advertised', 'card_readiness_observed', 'cardnumber_unique', 'cardnumber_visible',
                 'cardnumber_enabled', 'expiry_unique', 'expiry_visible', 'expiry_enabled',

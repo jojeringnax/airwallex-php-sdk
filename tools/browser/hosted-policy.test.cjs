@@ -173,7 +173,7 @@ test('CLI rejects invalid private input before loading browser tooling with fixe
     assert.equal(child.status, 1);
     assert.equal(child.stderr, '');
     assert.deepEqual(JSON.parse(child.stdout), {
-      result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false,
+      result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false, browser_failure_phase: 'configuration',
     });
   }
 });
@@ -304,7 +304,10 @@ for (const fault of ['none', 'abort', 'fetch', 'fulfill', 'dispose', 'websocket'
         assert.equal(output.result, 'blocked');
       } else {
         assert.equal(child.status, 1);
-        assert.deepEqual(output, { result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false });
+        assert.equal(output.result, 'fail');
+        assert.equal(output.reason, 'browser_preflight_failed');
+        assert.equal(typeof output.browser_failure_phase, 'string');
+        assert.doesNotMatch(JSON.stringify(output), /PRIVATE/u);
       }
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
@@ -792,7 +795,7 @@ function methodFixtureModule(fault) {
           headers() { if (fault === 'headers') fail(); return { 'set-cookie': 'PRIVATE_COOKIE',
             'content-length': fault === 'declared_oversized' ? '262145' : '100', 'content-type': 'application/json' }; },
           async body() { if (fault === 'body') fail();
-            return Buffer.from(fault === 'invalid_json' ? 'PRIVATE_INVALID' : fault === 'oversized' ? 'x'.repeat(262145)
+            return Buffer.from(['invalid_json', 'abort'].includes(fault) ? 'PRIVATE_INVALID' : fault === 'oversized' ? 'x'.repeat(262145)
               : JSON.stringify({ items: [{ name: 'card' }] })); },
           async dispose() { if (fault === 'response_dispose') fail(); } };
       }, async dispose() { fixture.disposed = true; if (fault === 'context_dispose') fail(); } };
@@ -807,7 +810,9 @@ function methodFixtureModule(fault) {
         locator(selector) {
           const match = /^input\\[name="(cardnumber|expiry|cvc)"\\]$/.exec(selector);
           if (!match || fault === 'locator') fail();
-          return { async count() { return 1; }, async isVisible() { return true; }, async isEnabled() { return match[1] !== 'cvc'; } };
+          return { async count() { if (fault === 'readiness_count') fail(); return 1; },
+            async isVisible() { if (fault === 'readiness_visible') fail(); return true; },
+            async isEnabled() { if (fault === 'readiness_enabled') fail(); return match[1] !== 'cvc'; } };
         } };
       const routed = (kind, sourceFrame) => handler({ request() { return {
         url: () => 'http://127.0.0.1:54321' + (kind === 'payer' ? '/billing/payer-web-api/checkout?ts=1794130000000'
@@ -842,7 +847,7 @@ function methodFixtureModule(fault) {
 
 for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 'http_503', 'invalid_json', 'oversized',
   'declared_oversized', 'context', 'get', 'headers', 'body', 'fulfill', 'response_dispose', 'context_dispose',
-  'abort', 'locator', 'delayed', 'wrong_frame']) {
+  'abort', 'locator', 'readiness_count', 'readiness_visible', 'readiness_enabled', 'delayed', 'wrong_frame']) {
   test(`bound configuration worker keeps once-only headers, response and private failure boundaries: ${fault}`, () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-method-module-fixture-'));
     try {
@@ -852,7 +857,7 @@ for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 
         const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
         inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
           ${JSON.stringify(expectedCheckout)}, true, true).then(result => process.stdout.write(JSON.stringify(result)))
-          .catch(() => { process.stdout.write(JSON.stringify({ result: 'fail',
+          .catch(error => { process.stdout.write(JSON.stringify({ ...error.evidence(),
             late_context_disposed: fixture.fixture.created && fixture.fixture.disposed,
             no_late_get: fixture.fixture.gets === 0 })); process.exitCode = 1; });`;
       const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
@@ -870,6 +875,13 @@ for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 
         assert.equal(output.denied_read_families.method_config, 1);
       } else {
         assert.equal(child.status, 1); assert.equal(output.result, 'fail');
+        const phase = { context: 'method_context', get: 'method_get', headers: 'method_headers', body: 'method_body',
+          fulfill: 'method_fulfill', response_dispose: 'method_response_dispose', context_dispose: 'shutdown_request_context',
+          abort: 'method_abort', locator: 'readiness_cardnumber_locator', readiness_count: 'readiness_cardnumber_count',
+          readiness_visible: 'readiness_cardnumber_visible', readiness_enabled: 'readiness_cardnumber_enabled', delayed: 'navigation' }[fault];
+        assert.equal(output.browser_failure_phase, phase);
+        assert.equal(output.method_config_get_attempted, true);
+        assert.equal(output.method_config_send_started, !['context', 'delayed'].includes(fault));
         if (fault === 'delayed') {
           assert.equal(output.late_context_disposed, true); assert.equal(output.no_late_get, true);
         }

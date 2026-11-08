@@ -7,6 +7,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { HostedPolicy, egressProxy, assetMatches } = require('./hosted-policy.cjs');
 
+// Contains only evidence constructed from fixed local labels/counts, never a caught Error.
+class PreflightFailure extends Error {
+  #safe;
+  constructor(safe) { super('Browser preflight failed safely.'); this.#safe = Object.freeze(safe); }
+  evidence() { return { ...this.#safe }; }
+}
+let startupPhase = 'configuration';
+
 async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false) {
   const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
@@ -21,15 +29,22 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let shuttingDown = false;
   let result;
   let failed = false;
+  let firstFailure;
+  let methodSendStarted = false;
+  const markFailure = phase => { failed = true; firstFailure ??= phase; };
+  const step = async (phase, action) => {
+    try { return await action(); }
+    catch { markFailure(phase); throw new Error('Browser preflight failed safely.'); }
+  };
   const pending = new Set();
-  const track = action => {
-    const safe = Promise.resolve().then(action).catch(() => { failed = true; });
+  const track = (action, phase = 'route_action') => {
+    const safe = Promise.resolve().then(action).catch(() => { markFailure(phase); });
     pending.add(safe);
     void safe.then(() => pending.delete(safe));
     return safe;
   };
   const watchdog = setTimeout(() => {
-    failed = true;
+    markFailure('watchdog');
     shuttingDown = true;
     if (context) void track(() => context.close());
     if (browser) void track(() => browser.close());
@@ -47,18 +62,18 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let payer = { payer_observation: 'not_observed', payer_response_observed: false,
     payer_mode_matches: false, payer_currency_matches: false };
   try {
-    proxy = await egressProxy(policy);
-    browser = await playwright.chromium.launch({
+    proxy = await step('proxy_start', () => egressProxy(policy));
+    browser = await step('browser_launch', () => playwright.chromium.launch({
       channel: 'chrome', headless: true, timeout: 15000,
       proxy: { server: proxy.server, bypass: '' },
       env: { PATH: process.env.PATH ?? '', LANG: 'en_US.UTF-8', TMPDIR: directory },
       args: ['--proxy-bypass-list=<-loopback>', '--disable-quic',
         '--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--disable-breakpad'],
-    });
-    context = await browser.newContext({
+    }));
+    context = await step('browser_context', () => browser.newContext({
       ignoreHTTPSErrors: false, serviceWorkers: 'block', acceptDownloads: false,
       permissions: [],
-    });
+    }));
     await context.addInitScript(() => {
       for (const name of ['Worker', 'SharedWorker']) {
         Object.defineProperty(globalThis, name, {
@@ -129,38 +144,42 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         let delivered = false;
         try {
           if (shuttingDown) throw new Error('Browser preflight is shutting down.');
-          if (!methodClientPromise) methodClientPromise = playwright.request.newContext({
+          if (!methodClientPromise) methodClientPromise = step('method_context', () => playwright.request.newContext({
             ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
-          });
+          }));
           const client = await methodClientPromise;
           if (shuttingDown) throw new Error('Browser preflight is shutting down.');
-          const response = await client.get(request.url(), { headers: methodHeaders,
-            maxRedirects: 0, maxRetries: 0, timeout: 10000 });
+          methodSendStarted = true;
+          const response = await step('method_get', () => client.get(request.url(), { headers: methodHeaders,
+            maxRedirects: 0, maxRetries: 0, timeout: 10000 }));
           try {
-            const status = response.status();
-            if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error('Invalid method status.');
+            const status = await step('method_status', () => {
+              const status = response.status();
+              if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error('Invalid method status.');
+              return status;
+            });
             method.method_config_response_observed = true;
             method.method_config_http_status = status;
             if (status >= 300 && status < 400) method.method_config_observation = 'redirect_rejected';
             else if (status !== 200) method.method_config_observation = 'http_rejected';
             else {
-              const declared = response.headers()['content-length'];
+              const declared = (await step('method_headers', () => response.headers()))['content-length'];
               if (declared !== undefined && (!/^[0-9]+$/u.test(declared) || Number(declared) > 262144)) {
                 method.method_config_observation = 'invalid_response';
               } else {
-                const body = await response.body();
+                const body = await step('method_body', () => response.body());
                 method = { ...method, ...policy.observeMethodConfig(body) };
                 if (policy.mayDeliverMethodConfig()) {
-                  const headers = Object.fromEntries(Object.entries(response.headers())
+                  const headers = Object.fromEntries(Object.entries(await step('method_headers', () => response.headers()))
                     .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
-                  await route.fulfill({ response, headers, body });
+                  await step('method_fulfill', () => route.fulfill({ response, headers, body }));
                   method.method_config_payload_delivered = true;
                   delivered = true;
                 }
               }
             }
-          } finally { await response.dispose(); }
-        } finally { if (!delivered) await route.abort('blockedbyclient'); }
+          } finally { await step('method_response_dispose', () => response.dispose()); }
+        } finally { if (!delivered) await step('method_abort', () => route.abort('blockedbyclient')); }
       } else if (payerFromMainPage
         && policy.claimPayerRequest(request.url(), request.method(), request.resourceType(),
         request.headers(), request.postData())) {
@@ -271,18 +290,18 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     }));
     await context.routeWebSocket(/.*/, socket => {
       counts.blocked_websockets++;
-      return track(() => socket.close()); // No connectToServer: no remote handshake.
+      return track(() => socket.close(), 'websocket_close'); // No connectToServer: no remote handshake.
     });
     context.on('page', opened => {
       try {
-        opened.on('dialog', dialog => { void track(() => dialog.dismiss()); });
-      } catch { failed = true; }
+        opened.on('dialog', dialog => { void track(() => dialog.dismiss(), 'dialog_dismiss'); });
+      } catch { markFailure('page_setup'); }
     });
-    const page = await context.newPage();
+    const page = await step('page_setup', () => context.newPage());
     mainPage = page;
     page.setDefaultTimeout(3000);
     page.setDefaultNavigationTimeout(10000);
-    await page.goto(initial, { waitUntil: 'domcontentloaded' });
+    await step('navigation', () => page.goto(initial, { waitUntil: 'domcontentloaded' }));
     if (policy.requestScopeVerified()) {
       let timer;
       await Promise.race([started, new Promise(resolve => { timer = setTimeout(resolve, 5000); })]);
@@ -295,16 +314,17 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       readiness = { card_readiness_observed: false };
       if (boundFrame) {
         for (const name of ['cardnumber', 'expiry', 'cvc']) {
-          const field = boundFrame.locator(`input[name="${name}"]`);
-          const count = await field.count();
+          const field = await step(`readiness_${name}_locator`, () => boundFrame.locator(`input[name="${name}"]`));
+          const count = await step(`readiness_${name}_count`, () => field.count());
           readiness[`${name}_unique`] = count === 1;
-          readiness[`${name}_visible`] = count === 1 && await field.isVisible();
-          readiness[`${name}_enabled`] = count === 1 && await field.isEnabled();
+          readiness[`${name}_visible`] = count === 1 && await step(`readiness_${name}_visible`, () => field.isVisible());
+          readiness[`${name}_enabled`] = count === 1 && await step(`readiness_${name}_enabled`, () => field.isEnabled());
         }
         readiness.card_readiness_observed = true;
       }
     }
-    const visible = await page.getByText(/^(test mode|sandbox)$/iu, { exact: true }).first().isVisible();
+    const visible = await step('visible_label', () =>
+      page.getByText(/^(test mode|sandbox)$/iu, { exact: true }).first().isVisible());
     if (exercise !== null) await exercise(page, context);
     result = {
       result: fixtureOrigin === null ? 'blocked' : 'pass',
@@ -319,21 +339,28 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       proxy_external_connections: proxy.counts.externalConnected,
     };
   } catch {
-    failed = true;
+    markFailure('unclassified');
   } finally {
     shuttingDown = true;
     clearTimeout(watchdog);
-    if (context) await track(() => context.close());
-    if (browser) await track(() => browser.close());
+    if (context) await track(() => context.close(), 'shutdown_browser_context');
+    if (browser) await track(() => browser.close(), 'shutdown_browser');
     for (const promise of [publicClientPromise, methodClientPromise]) if (promise) await track(async () => {
       const client = await promise;
       await client.dispose();
-    });
+    }, 'shutdown_request_context');
     await Promise.all([...pending]);
-    if (proxy) await track(() => proxy.close());
-    await track(() => fs.rm(directory, { recursive: true, force: true }));
+    if (proxy) await track(() => proxy.close(), 'shutdown_proxy');
+    await track(() => fs.rm(directory, { recursive: true, force: true }), 'shutdown_directory');
   }
-  if (failed || result === undefined) throw new Error('Browser preflight failed safely.');
+  if (failed || result === undefined) throw new PreflightFailure({
+    result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false,
+    browser_failure_phase: firstFailure ?? 'unclassified', ...counts,
+    ...policy.renderEvidence(), ...policy.methodEvidence(),
+    ...(payer.payer_http_status === undefined ? {} : { payer_http_status: payer.payer_http_status }),
+    ...(method.method_config_http_status === undefined ? {} : { method_config_http_status: method.method_config_http_status }),
+    ...(observeConfig ? { method_config_send_started: methodSendStarted } : {}),
+  });
   return { ...result, ...counts, ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
@@ -358,13 +385,18 @@ async function main() {
   }
   // Reject non-provider input before requiring any browser module or launching Chrome.
   new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false);
-  const result = await inspect(input.url, require(process.argv[2]), null, null, input.expected, input.render ?? false, input.observeConfig ?? false);
+  startupPhase = 'tooling_load';
+  const playwright = require(process.argv[2]);
+  startupPhase = 'browser_startup';
+  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
 if (require.main === module) {
-  main().catch(() => {
-    process.stdout.write('{"result":"fail","reason":"browser_preflight_failed","card_entry_enabled":false}\n');
+  main().catch(error => {
+    const safe = error instanceof PreflightFailure ? error.evidence() : { result: 'fail',
+      reason: 'browser_preflight_failed', card_entry_enabled: false, browser_failure_phase: startupPhase };
+    process.stdout.write(JSON.stringify(safe) + '\n');
     process.exitCode = 1;
   });
 }

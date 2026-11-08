@@ -46,7 +46,8 @@ async function smoke(playwright) {
               const options = { mode: 'recurring', currency: data.currency,
                 customer_id: data.setupModeDetails.billingCustomerExternalId,
                 client_secret: data.setupModeDetails.externalCustomerClientSecret,
-                observeConfig: new URL(location.href).searchParams.has('config') };
+                observeConfig: new URL(location.href).searchParams.has('config'),
+                detachFixture: new URL(location.href).searchParams.has('detach') };
               if (new URL(location.href).searchParams.get('wrongframe')) options.customer_id = 'PRIVATE_OTHER';
               const frame = document.createElement('iframe');
               frame.src = location.origin + '/render-frame#/elements/dropin?' + new URLSearchParams({
@@ -115,6 +116,7 @@ async function smoke(playwright) {
                   if (name === 'cvc') input.disabled = true;
                   document.body.append(input);
                 }
+                if (options.detachFixture) setTimeout(() => window.frameElement.remove(), 1000);
                 return Promise.all([target, '/country', '/api/v1/pa/customers/PRIVATE',
                   '/api/v1/pa/payment_consents', '/api/v1/pa/PRIVATE', '/billing/payer-web-api/checkout/status']
                   .map(url => fetch(url, { headers }).catch(() => {})));
@@ -308,15 +310,26 @@ async function smoke(playwright) {
         || Object.values(configured.denied_read_families).some(count => count !== 1)) {
       throw new Error('Local bound method-config/readiness boundary failed.');
     }
+    let detached = false;
+    try {
+      await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&detach=1',
+        playwright, origin, null, expected, true, true);
+    } catch (error) {
+      const evidence = error.evidence();
+      detached = evidence.browser_failure_phase === 'readiness_cardnumber_count'
+        && evidence.method_config_http_status === 200 && evidence.method_config_send_started === true
+        && evidence.bound_render_frames === 1 && !JSON.stringify(evidence).includes('PRIVATE');
+    }
+    if (!detached || hits.forbidden !== 0) throw new Error('Local detached-frame failure evidence was lost.');
     const deniedConfig = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1',
       playwright, origin, null, expected, true);
-    if (hits.method !== methodBefore + 1 || Object.hasOwn(deniedConfig, 'method_config_requested')) {
+    if (hits.method !== methodBefore + 2 || Object.hasOwn(deniedConfig, 'method_config_requested')) {
       throw new Error('Local default rendering admitted a method read.');
     }
     methodReply = 'redirect';
     const redirectedConfig = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1',
       playwright, origin, null, expected, true, true);
-    if (hits.method !== methodBefore + 2 || redirectedConfig.method_config_http_status !== 302
+    if (hits.method !== methodBefore + 3 || redirectedConfig.method_config_http_status !== 302
         || redirectedConfig.method_config_observation !== 'redirect_rejected'
         || redirectedConfig.method_config_payload_delivered || redirectedConfig.cardnumber_unique
         || hits.forbidden !== 0) throw new Error('Local method redirect escaped.');
@@ -338,7 +351,7 @@ async function smoke(playwright) {
       payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true,
       public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
       altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
-      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true };
+      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_failure_diagnostics_verified: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

@@ -154,6 +154,32 @@ final class HostedBrowserTest extends TestCase
         HostedBrowser::sanitize($data, true);
     }
 
+    public function testFailedChildKeepsOnlyClosedPhaseCountersAndStatus(): void
+    {
+        $bridge = $this->bridge(<<<'PHP'
+        echo '{"result":"fail","reason":"browser_preflight_failed","card_entry_enabled":false,
+          "browser_failure_phase":"readiness_cardnumber_count","method_config_requested":true,
+          "method_config_get_attempted":true,"method_config_send_started":true,"method_config_http_status":200,
+          "bound_render_frames":1,"blocked_requests":17,"message":"PRIVATE_URL_SECRET"}';
+        exit(1);
+        PHP);
+        $safe = $bridge->inspect('https://checkout.sandbox.airwallex.com/pay?s=PRIVATE_SESSION', [
+            'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
+        ], true, true);
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('readiness_cardnumber_count', $safe['browser_failure_phase']);
+        self::assertSame(200, $safe['method_config_http_status']);
+        self::assertSame(1, $safe['bound_render_frames']);
+        self::assertTrue($safe['method_config_send_started']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        $data = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'browser_failure_phase' => 'PRIVATE_PROVIDER_PATH'];
+        self::assertArrayNotHasKey('browser_failure_phase', HostedBrowser::sanitize($data));
+        $data['result'] = 'blocked';
+        $data['browser_failure_phase'] = 'navigation';
+        self::assertArrayNotHasKey('browser_failure_phase', HostedBrowser::sanitize($data));
+    }
+
     /** @return iterable<string,array{string}> */
     public static function unsafeChildren(): iterable
     {
