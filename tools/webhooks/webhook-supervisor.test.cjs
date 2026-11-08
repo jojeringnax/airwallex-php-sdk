@@ -16,9 +16,10 @@ function fixture() {
     duration_ms: 1000, live: true, binary: '/SYNTHETIC_PRIVATE_RUNTIME' };
 }
 class FakeChild extends EventEmitter {
-  constructor(lines, exits = true) {
+  constructor(lines, exits = true, startupDelayMs = 0) {
     super(); this.stdout = new PassThrough(); this.stderr = new PassThrough(); this.signals = []; this.exits = exits;
-    queueMicrotask(() => this.stderr.write(lines));
+    if (startupDelayMs > 0) setTimeout(() => this.stderr.write(lines), startupDelayMs);
+    else queueMicrotask(() => this.stderr.write(lines));
   }
   kill(signal) {
     this.signals.push(signal);
@@ -27,7 +28,7 @@ class FakeChild extends EventEmitter {
   }
 }
 const LINES = 'INF https://synthetic-private.trycloudflare.com |\nINF Starting metrics server on 127.0.0.1:12345/metrics\n';
-const options = child => ({ verifyBinary: () => {}, spawn: () => child, ready: async () => true, startupMs: 100 });
+const options = child => ({ verifyBinary: () => {}, spawn: () => child, ready: async () => true, startupMs: 1000 });
 async function tidy(supervisor, folder) {
   if (supervisor) await supervisor.stop(); fs.rmSync(folder, { recursive: true, force: true });
 }
@@ -138,7 +139,7 @@ test('a partial capture interrupted during shutdown remains a failed observation
 });
 
 test('failed log close is fixed failure rather than successful cleanup', async () => {
-  const config = fixture(); const child = new FakeChild(LINES); let supervisor;
+  const config = fixture(); const child = new FakeChild(LINES, true, 150); let supervisor;
   const logIo = { async open(...args) {
     const file = await fs.promises.open(...args);
     return new Proxy(file, { get(target, key) {

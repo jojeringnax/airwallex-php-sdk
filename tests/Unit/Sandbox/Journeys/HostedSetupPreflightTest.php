@@ -146,6 +146,7 @@ final class HostedSetupPreflightTest extends TestCase
                 ?HostedRiskJournal $riskJournal,
                 bool $observeParentCountry,
                 bool $observeCurrencySettings,
+                bool $selectCard,
             ) use (
                 $fault,
                 $options
@@ -160,6 +161,7 @@ final class HostedSetupPreflightTest extends TestCase
                     ($options['observe-one-currency-settings'] ?? false) === true,
                     $observeCurrencySettings
                 );
+                self::assertSame(($options['select-one-native-card'] ?? false) === true, $selectCard);
                 self::assertSame([
                     'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
                 ], $expected);
@@ -197,6 +199,15 @@ final class HostedSetupPreflightTest extends TestCase
                     ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_parent_country']['body_hash']);
                 } else {
                     self::assertArrayNotHasKey('preflight_parent_country', $state['actions']);
+                }
+                if ($selectCard) {
+                    self::assertIsArray($state['actions']['preflight_native_card_choice']);
+                    self::assertSame(hash('sha256', json_encode($expected + [
+                        'action' => 'one_unforced_native_card_radio', 'scope' => 'original_qualified_dropin_document',
+                        'financial_authority' => false, 'capture_window_max_ms' => 5500,
+                    ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_native_card_choice']['body_hash']);
+                } else {
+                    self::assertArrayNotHasKey('preflight_native_card_choice', $state['actions']);
                 }
                 self::assertIsArray($state['actions']['preflight_payer_read']);
                 self::assertSame(hash('sha256', json_encode($expected + [
@@ -254,6 +265,9 @@ final class HostedSetupPreflightTest extends TestCase
                 }
                 return ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
                     'card_entry_enabled' => false, 'test_mode_visible' => true,
+                    ...($selectCard ? ['native_card_selection_requested' => true,
+                        'native_card_selection' => 'withheld', 'native_card_action_attempts' => 0,
+                        'native_card_action_invoked' => false] : []),
                     'private_url' => $url, 'private_message' => 'PRIVATE_BROWSER_ERROR'];
             },
         );
@@ -296,8 +310,9 @@ final class HostedSetupPreflightTest extends TestCase
             self::assertStringNotContainsString($private, $encoded);
         }
         self::assertIsArray($result['browser_tool_hashes']);
-        self::assertCount(11, $result['browser_tool_hashes']);
+        self::assertCount(12, $result['browser_tool_hashes']);
         self::assertArrayHasKey('hosted-currency-settings.cjs', $result['browser_tool_hashes']);
+        self::assertArrayHasKey('hosted-card-choice.cjs', $result['browser_tool_hashes']);
         self::assertArrayHasKey('hosted-parent-country.cjs', $result['browser_tool_hashes']);
         foreach (['policy', 'journal', 'relay', 'observer'] as $helper) {
             self::assertArrayHasKey('hosted-risk-' . $helper . '.cjs', $result['browser_tool_hashes']);
@@ -362,6 +377,28 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertSame(1, $this->cancels);
         self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
         self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testNativeCardChoiceAddsOnePrivateNonfinancialIntentAndPreservesOwnedCleanup(): void
+    {
+        $options = $this->options();
+        foreach (
+            ['render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
+            'observe-risk-bootstrap', 'observe-parent-country', 'observe-one-currency-settings',
+            'select-one-native-card'] as $flag
+        ) {
+            $options[$flag] = true;
+        }
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['native_card_selection_requested']);
+        self::assertSame('blocked', $result['result']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertIsArray($result['browser']);
+        self::assertSame('withheld', $result['browser']['native_card_selection']);
+        self::assertSame(0, $result['browser']['native_card_action_attempts']);
+        self::assertFalse($result['browser']['card_entry_enabled']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function testParentCountryHasItsOwnPrivateSlotBeforeBrowserHandoffAndNoFinancialPermission(): void
@@ -537,6 +574,8 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'currency invalid flag' => ['observe-one-currency-settings', 'PRIVATE_MODE'];
         yield 'parent without normal' => ['observe-parent-country', true];
         yield 'parent invalid flag' => ['observe-parent-country', 'PRIVATE_MODE'];
+        yield 'Card choice missing normal' => ['select-one-native-card', true];
+        yield 'Card choice arbitrary value' => ['select-one-native-card', 'PRIVATE_MODE'];
         yield 'risk missing normal' => ['observe-risk-bootstrap', true];
         yield 'risk arbitrary value' => ['observe-risk-bootstrap', 'PRIVATE_MODE'];
     }
@@ -560,6 +599,9 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'normal missing method' => [['--render-owned-data', '--observe-normal-reads']];
         yield 'normal value' => [['--observe-normal-reads=true']];
         yield 'normal duplicate' => [['--observe-normal-reads', '--observe-normal-reads']];
+        yield 'Card missing gates' => [['--select-one-native-card']];
+        yield 'Card value' => [['--select-one-native-card=true']];
+        yield 'Card duplicate' => [['--select-one-native-card', '--select-one-native-card']];
         yield 'risk missing gates' => [['--observe-risk-bootstrap']];
         yield 'risk value' => [['--observe-risk-bootstrap=true']];
         yield 'risk duplicate' => [['--observe-risk-bootstrap', '--observe-risk-bootstrap']];
