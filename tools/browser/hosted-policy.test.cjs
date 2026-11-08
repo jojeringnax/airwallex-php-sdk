@@ -1293,6 +1293,8 @@ for (const mode of ['request_failure', 'deadline', 'context_closed', 'shutdown',
       if (mode === 'context_closed') source = source
         .replace("if (fault === 'normal_get' ||", "fixture.browserClosed(); if (fault === 'normal_get' ||");
       if (mode === 'shutdown') source = source
+        .replace('timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args)',
+          "timeout(() => { if (delay === 8000) fixture.now = 8000; callback(...args); }, delay === 8000 ? 10 : [5000, 5500, 10000].includes(delay) ? 1 : delay)")
         .replace("if (fault === 'normal_get' ||", "await new Promise((_, reject) => { fixture.rejectGet = () => reject(new Error('PRIVATE_PENDING_URL')); }); if (fault === 'normal_get' ||")
         .replace('          await normalPending;', '          while (!fixture.normalGets) await new Promise(resolve => setImmediate(resolve)); fail();')
         .replace('fixture.disposed = true;', 'if (normal && fixture.rejectGet) fixture.rejectGet(); fixture.disposed = true;');
@@ -1312,7 +1314,7 @@ for (const mode of ['request_failure', 'deadline', 'context_closed', 'shutdown',
       assert.equal(failure.role, 'checkout_status');
       assert.equal(failure.phase, mode === 'scope' ? 'normal_scope' : mode.startsWith('body') ? 'normal_body'
         : mode.startsWith('status') ? 'normal_status' : 'normal_get');
-      assert.equal(failure.deadline_fired, mode === 'deadline');
+      assert.equal(failure.deadline_fired, ['deadline', 'shutdown'].includes(mode));
       assert.equal(failure.shutdown_started, ['deadline', 'shutdown'].includes(mode));
       assert.equal(failure.browser_context_closed, ['deadline', 'shutdown', 'context_closed'].includes(mode));
       assert.equal(failure.browser_context_close_started, ['deadline', 'shutdown'].includes(mode));
@@ -1363,3 +1365,88 @@ test('a delivered Customer response remains a matched fact when later disposal f
     assert.equal(safe.normal_read_failure.phase, 'normal_response_dispose');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+function normalDrainFixture(mode) {
+  return normalFixtureModule('success')
+    .replace('globalThis.setTimeout = (callback, delay, ...args) => timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args);',
+      `globalThis.setTimeout = (callback, delay, ...args) => {
+        if (delay === 8000) fixture.deadline = callback;
+        return timeout(callback, delay >= 500 ? delay / 100 : delay, ...args);
+      };`)
+    .replace('fixture.normalCreated = true;', `fixture.normalCreated = true; fixture.now = 5000;
+      if (${JSON.stringify(mode)} === 'context') await new Promise(resolve => timeout(resolve, 15));`)
+    .replace('fixture.normalGets++;', `fixture.normalGets++;
+      await new Promise((resolve, reject) => {
+        fixture.rejectNormal = () => reject(new Error('PRIVATE_PENDING_READ'));
+        timeout(() => {
+          fixture.now = ${mode === 'deadline' ? 8000 : 6000};
+          if (${JSON.stringify(mode)} === 'deadline') fixture.deadline();
+          if (${JSON.stringify(mode)} === 'transport') reject(new Error('PRIVATE_TRANSPORT'));
+          else if (${JSON.stringify(mode)} !== 'deadline') resolve();
+        }, 15);
+      });`)
+    .replace('          await normalPending;', `          fixture.normalPending = normalPending;
+          while (!fixture.${mode === 'context' ? 'normalCreated' : 'normalGets'}) await new Promise(resolve => setImmediate(resolve));`)
+    .replace("if (fault === 'readiness_count') fail(); return 1;", "if (fault === 'readiness_count') fail(); return fixture.statusDelivered ? 1 : 0;")
+    .replace("kind === 'normal' ? '/billing/payer-web-api/checkout/status'", "kind === 'normal' ? '/billing/payer-web-api/checkout/status' : kind === 'late_customer' ? '/api/v1/pa/customers/PRIVATE_EXTERNAL_CUSTOMER'")
+    .replace("if (kind === 'normal' && (fault", `if (kind === 'normal') {
+      fixture.statusDelivered = true;
+      if (${JSON.stringify(mode)} === 'late_admission') await routed('late_customer', frame);
+    } if (kind === 'normal' && (fault`)
+    .replace('async dispose() {\n      if (normal', `async dispose() {
+      if (normal && ${JSON.stringify(mode)} === 'dispose') {
+        await new Promise(resolve => timeout(resolve, 10)); fixture.now = 7000;
+      }
+      if (normal && ${JSON.stringify(mode)} === 'dispose_failure') fail();
+      if (normal`)
+    .replace("async body() { if (normal && fault", `async body() {
+      if (normal && ${JSON.stringify(mode)} === 'stalled_body') await new Promise((_, reject) => {
+        fixture.rejectBody = reject;
+        timeout(() => { fixture.now = 8000; fixture.deadline(); }, 10);
+      });
+      if (normal && ${JSON.stringify(mode)} === 'changed_source') fixture.mainUrl += '#PRIVATE_CHANGED';
+      if (normal && fault`)
+    .replace('fixture.disposed = true;', `if (normal && fixture.rejectNormal) fixture.rejectNormal();
+      if (normal && fixture.rejectBody) fixture.rejectBody(new Error('PRIVATE_BODY')); fixture.disposed = true;`);
+}
+
+for (const mode of ['complete', 'transport', 'deadline', 'context', 'dispose', 'dispose_failure', 'stalled_body', 'changed_source', 'late_admission']) {
+  test('already sent five-second status drains within its original bound: ' + mode, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-drain-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, normalDrainFixture(mode));
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = data => process.stdout.write(JSON.stringify({ ...data, fixture_gets: fixture.fixture.normalGets,
+          late_delivered: fixture.fixture.statusDelivered === true }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.status, 0); assert.equal(child.stderr, '');
+      const output = JSON.parse(child.stdout);
+      const delivered = ['complete', 'dispose', 'dispose_failure', 'late_admission'].includes(mode);
+      assert.equal(output.result, ['complete', 'dispose', 'changed_source', 'late_admission'].includes(mode) ? 'pass' : 'fail', JSON.stringify(output.normal_read_failure));
+      assert.equal(output.fixture_gets, mode === 'context' ? 0 : 1);
+      assert.equal(output.normal_checkout_status_sends, mode === 'context' ? 0 : 1);
+      assert.equal(output.normal_checkout_status_delivered, delivered ? 1 : 0);
+      assert.equal(output.normal_checkout_status_poisoned, !['complete', 'dispose', 'late_admission'].includes(mode));
+      assert.equal(output.late_delivered, delivered);
+      if (mode === 'late_admission') assert.equal(output.normal_customer_attempts, 0);
+      for (const field of ['cardnumber', 'expiry', 'cvc']) assert.equal(output[field + '_unique'], false);
+      if (['complete', 'dispose', 'changed_source', 'late_admission'].includes(mode)) {
+        assert.equal(Object.hasOwn(output, 'normal_read_failure'), false);
+      } else {
+        const failure = output.normal_read_failure;
+        assert.equal(failure.phase, mode === 'context' ? 'normal_scope' : mode === 'dispose_failure'
+          ? 'normal_response_dispose' : mode === 'stalled_body' ? 'normal_body' : 'normal_get');
+        if (mode === 'transport') {
+          assert.equal(failure.shutdown_started, false); assert.equal(failure.browser_context_closed, false);
+          assert.equal(failure.window_remaining_ms, 2000);
+        }
+        if (['deadline', 'stalled_body'].includes(mode)) assert.equal(failure.deadline_fired, true);
+      }
+      assert.doesNotMatch(child.stdout, /PRIVATE|https?:|Error:/u);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}

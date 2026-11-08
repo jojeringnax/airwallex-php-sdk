@@ -27,6 +27,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let methodClientPromise;
   const normalClientPromises = new Set();
   const normalClientStates = new Map();
+  const normalInFlight = new Set();
+  let normalAdmissionClosed = false;
   let normalWindowTimer;
   let normalDeadlineFired = false;
   let browserContextCloseStarted = false;
@@ -67,6 +69,25 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     pending.add(safe);
     void safe.then(() => pending.delete(safe));
     return safe;
+  };
+  const expireNormalWindow = () => {
+    if (normalDeadlineFired) return;
+    normalDeadlineFired = true;
+    policy.closeNormalWindow();
+    markFailure('normal_observation_deadline');
+    shuttingDown = true;
+    if (context) { browserContextCloseStarted = true; void track(() => context.close(), 'shutdown_browser_context'); }
+  };
+  const drainSentNormalReads = async () => {
+    if (!observeNormal || shuttingDown || normalInFlight.size === 0) return;
+    const remaining = policy.normalWindowRemaining();
+    if (remaining <= 0) { expireNormalWindow(); return; }
+    let timer;
+    try {
+      await Promise.race([Promise.all([...normalInFlight]), new Promise(resolve => {
+        timer = setTimeout(() => { expireNormalWindow(); resolve(); }, remaining);
+      })]);
+    } finally { clearTimeout(timer); }
   };
   const watchdog = setTimeout(() => {
     markFailure('watchdog');
@@ -111,6 +132,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await context.route('**/*', route => track(async () => {
       if (shuttingDown) throw new Error('Browser preflight is shutting down.');
       const request = route.request();
+      if (normalAdmissionClosed) {
+        counts.blocked_requests++;
+        policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
+        await route.abort('blockedbyclient');
+        return;
+      }
       // Script admission and integrity share one immutable, non-null expected hash.
       const script = request.resourceType() === 'script';
       const expectedHash = script ? policy.assetHash(request.url(), request.method(), request.resourceType()) : null;
@@ -191,6 +218,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           } catch { return false; }
         };
         let delivered = false;
+        let activeRead, finishRead;
         const readStarted = performance.now();
         const clientState = { disposeStarted: false, disposed: false };
         let requestStarted, requestTimeout;
@@ -216,7 +244,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           catch { readFailurePhase ??= phase; captureFailure(phase); throw new Error('The normal read did not complete safely.'); }
         };
         try {
-          if (shuttingDown || !policy.normalSendAllowed(role) || !originalSource()) {
+          if (shuttingDown || normalAdmissionClosed || !policy.normalSendAllowed(role) || !originalSource()) {
             throw new Error('The normal read scope ended.');
           }
           // One isolated storage context per send; no response cookie can cross polls or families.
@@ -228,10 +256,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           const client = await construction;
           readPhase = 'normal_scope';
           const remaining = policy.normalWindowRemaining();
-          if (shuttingDown || remaining <= 0 || !policy.normalSendAllowed(role) || !originalSource()) {
+          if (shuttingDown || normalAdmissionClosed || remaining <= 0 || !policy.normalSendAllowed(role) || !originalSource()) {
             throw new Error('The normal read scope ended.');
           }
           normal[key + 'sends']++;
+          activeRead = new Promise(resolve => { finishRead = resolve; });
+          normalInFlight.add(activeRead);
           requestTimeout = Math.max(1, Math.min(10000, Math.floor(remaining)));
           requestStarted = performance.now();
           const response = await readStep('normal_get', () => client.get(request.url(), {
@@ -280,20 +310,22 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           if (!delivered) normal[key + 'observation'] = 'unavailable';
           throw new Error('The normal read did not complete safely.');
         } finally {
-          if (!delivered) {
-            policy.failNormalRead(role);
-            await step('normal_abort', () => route.abort('blockedbyclient'));
-          }
+          try {
+            if (!delivered) {
+              policy.failNormalRead(role);
+              await step('normal_abort', () => route.abort('blockedbyclient'));
+            }
+          } finally { if (activeRead) { normalInFlight.delete(activeRead); finishRead(); } }
         }
       } else if (methodHeaders !== null) {
         let delivered = false;
         try {
-          if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+          if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
           if (!methodClientPromise) methodClientPromise = step('method_context', () => playwright.request.newContext({
             ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
           }));
           const client = await methodClientPromise;
-          if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+          if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
           methodSendStarted = true;
           const response = await step('method_get', () => client.get(request.url(), { headers: methodHeaders,
             maxRedirects: 0, maxRetries: 0, timeout: 10000 }));
@@ -353,13 +385,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
               payer = { ...payer, ...policy.observePayer(body) };
               if (policy.mayDeliverPayer()) {
                 policy.startNormalWindow();
-                if (observeNormal) normalWindowTimer = setTimeout(() => {
-                  normalDeadlineFired = true;
-                  policy.closeNormalWindow();
-                  markFailure('normal_observation_deadline');
-                  shuttingDown = true;
-                  if (context) { browserContextCloseStarted = true; void track(() => context.close(), 'shutdown_browser_context'); }
-                }, policy.normalWindowRemaining());
+                if (observeNormal) normalWindowTimer = setTimeout(expireNormalWindow, policy.normalWindowRemaining());
                 await route.fulfill({ response, body });
                 policy.markPayerDelivered();
                 delivered = true;
@@ -379,7 +405,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         // The public bootstrap receives no page credentials, cookies or private referrer.
         const headers = controller ? { accept: '*/*', cookie: '', referer: '' } : { ...request.headers() };
         if (!controller) delete headers.referer;
-        if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+        if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
         if (controller && !publicClientPromise) {
           // Separate storage prevents even a public Set-Cookie from changing the browser's cookie jar.
           publicClientPromise = playwright.request.newContext({
@@ -387,7 +413,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           });
         }
         const publicClient = controller ? await publicClientPromise : null;
-        if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+        if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
         const options = { headers, maxRedirects: 0, maxRetries: 0, timeout: 10000 };
         const response = controller ? await publicClient.get(request.url(), options) : await route.fetch(options);
         try {
@@ -515,7 +541,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     if (observeNormal) {
       normal.normal_read_inspection_completed = readiness.card_readiness_observed === true
         && policy.normalWindowRemaining() > 500;
-      policy.closeNormalWindow(); // Stop normal sends before any post-inspection code or shutdown awaits.
+      normalAdmissionClosed = true; // No new request or late context-construction send after the fixed snapshot.
+      await drainSentNormalReads(); // Only already sent reads retain the original <=8s delivery window.
+      policy.closeNormalWindow();
     }
     const visible = await step('visible_label', () =>
       page.getByText(/^(test mode|sandbox)$/iu, { exact: true }).first().isVisible());
@@ -535,6 +563,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   } catch {
     markFailure('unclassified');
   } finally {
+    if (observeNormal) { normalAdmissionClosed = true; await drainSentNormalReads(); }
     shuttingDown = true;
     policy.closeNormalWindow();
     clearTimeout(normalWindowTimer);
