@@ -12,7 +12,7 @@ use RuntimeException;
 use SensitiveParameter;
 use Throwable;
 
-/** A fresh one-time Intent and one documented customer GET, with no HTML/form automation. */
+/** A fresh one-time Intent with bounded customer reads and no HTML/form automation. */
 final class AlipayRedirectPreflight
 {
     private const string AMOUNT = '1.23';
@@ -43,6 +43,7 @@ final class AlipayRedirectPreflight
         AlipayRedirect $redirect,
         ?Closure $sleep = null,
         int $readAttempts = 7,
+        bool $readOneSandboxMock = false,
     ): array {
         if ($session->isOrganization() || $readAttempts < 1 || $readAttempts > 7) {
             throw new RuntimeException('Alipay preflight requires account context and bounded observations.');
@@ -50,7 +51,8 @@ final class AlipayRedirectPreflight
         $ledger->assertContext($session->contextFingerprint());
         $journey = new self($session, $ledger, $sleep ?? static fn (int $n) => sleep($n), $readAttempts);
         $safe = ['scenario' => 'alipay-redirect-preflight', 'api_version' => '2026-08-21',
-            'result' => 'blocked', 'reason' => 'customer_interaction_not_automated', 'navigation_attempted' => false];
+            'result' => 'blocked', 'reason' => 'customer_interaction_not_automated', 'navigation_attempted' => false,
+            'read_one_sandbox_mock' => $readOneSandboxMock];
         try {
             $journey->create();
             $journey->stage = 'intent_confirm';
@@ -74,20 +76,45 @@ final class AlipayRedirectPreflight
                 // A local intent only: never add an invented request identity or auth header to this customer GET.
                 $safe['navigation_attempted'] = true;
                 try {
-                    $safe['navigation'] = $redirect->inspect($next['url']);
+                    $reserve = $readOneSandboxMock ? static function (#[SensitiveParameter] string $url) use (
+                        $journey,
+                        $ledger,
+                        $session,
+                    ): void {
+                        $journey->stage = 'customer_sandbox_mock_get';
+                        $ledger->requestId('redirect_mock_navigation', ['url' => $url], $session->contextFingerprint());
+                    } : null;
+                    $safe['navigation'] = $redirect->inspect($next['url'], $reserve);
                 } catch (Throwable) {
                     $journey->unsafe = true;
                     ++$journey->ambiguous;
                     throw new RuntimeException('The customer GET needs independent reconciliation.');
                 }
-                if ($safe['navigation']['http_status'] >= 500) {
+                if ($safe['navigation']['mock_read_reservation_failed'] === true) {
+                    $safe['result'] = 'fail';
+                    $safe['reason'] = 'mock_navigation_not_durable';
+                }
+                if ($safe['navigation']['mock_read_failed'] === true) {
                     $journey->unsafe = true;
                     ++$journey->ambiguous;
                     $safe['result'] = 'fail';
-                    $safe['reason'] = 'customer_read_server_failure';
-                } elseif ($safe['navigation']['http_status'] >= 400) {
-                    $safe['result'] = 'fail';
-                    $safe['reason'] = 'customer_read_rejected';
+                    $safe['reason'] = 'customer_read_ambiguous';
+                }
+                $statuses = [$safe['navigation']['http_status']];
+                $mock = $safe['navigation']['sandbox_mock'] ?? null;
+                if (is_array($mock)) {
+                    $statuses[] = $mock['http_status'];
+                }
+                foreach ($statuses as $status) {
+                    if (is_int($status) && $status >= 500) {
+                        $journey->unsafe = true;
+                        ++$journey->ambiguous;
+                        $safe['result'] = 'fail';
+                        $safe['reason'] = 'customer_read_server_failure';
+                    } elseif (is_int($status) && $status >= 400) {
+                        $safe['result'] = 'fail';
+                        $safe['reason'] = 'customer_read_rejected';
+                    }
                 }
             } else {
                 $safe['reason'] = 'redirect_contract_unverified';

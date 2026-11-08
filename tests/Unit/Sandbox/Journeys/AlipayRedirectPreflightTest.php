@@ -28,6 +28,8 @@ final class AlipayRedirectPreflightTest extends TestCase
     private RunLedger $ledger;
     private const string URL = 'https://api.sandbox.airwallex.com/pa/redirect/hk/synthetic_attempt'
         . '?checksum=PRIVATE_SESSION';
+    private const string MOCK = 'https://api.sandbox.airwallex.com/pa/sandbox/sg/mck_PRIVATE_MOCK'
+        . '?checksum=PRIVATE_MOCK_CHECKSUM';
 
     protected function setUp(): void
     {
@@ -55,8 +57,12 @@ final class AlipayRedirectPreflightTest extends TestCase
     }
 
     /** @return array<string,mixed> */
-    private function execute(string $fault = '', string $state = 'REQUIRES_CUSTOMER_ACTION', int $status = 200): array
-    {
+    private function execute(
+        string $fault = '',
+        string $state = 'REQUIRES_CUSTOMER_ACTION',
+        int $status = 200,
+        bool $readMock = false,
+    ): array {
         $this->provider->intercept = static function (RequestInterface $request) use ($fault): ?Response {
             $path = $request->getUri()->getPath();
             if (str_ends_with($path, '/confirm') && in_array($fault, ['confirm_400', 'confirm_500'], true)) {
@@ -121,7 +127,12 @@ final class AlipayRedirectPreflightTest extends TestCase
                 => is_array($action) && ($action['request_id'] ?? null) === ($body['request_id'] ?? null));
             self::assertCount(1, $persisted, 'Every mutation identity must exist durably before transmission.');
         };
-        $reader = new AlipayRedirect($this->reader(function (RequestInterface $request) use ($fault, $state, $status) {
+        $reader = new AlipayRedirect($this->reader(function (RequestInterface $request) use (
+            $fault,
+            $state,
+            $status,
+            $readMock,
+        ) {
             $this->customerGets[] = $request;
             $contents = file_get_contents($this->directory . '/' . $this->ledger->runId() . '/ledger.json');
             self::assertIsString($contents);
@@ -130,6 +141,23 @@ final class AlipayRedirectPreflightTest extends TestCase
             self::assertIsArray($durable);
             self::assertIsArray($durable['actions']);
             self::assertArrayHasKey('redirect_navigation', $durable['actions']);
+            if ($readMock && count($this->customerGets) === 1) {
+                self::assertArrayNotHasKey('redirect_mock_navigation', $durable['actions']);
+                return new Response(302, ['Location' => self::MOCK]);
+            }
+            if ($readMock) {
+                self::assertSame(self::MOCK, (string) $request->getUri());
+                self::assertArrayHasKey('redirect_mock_navigation', $durable['actions']);
+                $intent = $durable['actions']['redirect_mock_navigation'];
+                self::assertIsArray($intent);
+                self::assertSame(
+                    hash('sha256', json_encode(['url' => self::MOCK], JSON_THROW_ON_ERROR)),
+                    $intent['body_hash']
+                );
+                if ($fault === 'mock_ambiguous') {
+                    throw new RuntimeException('PRIVATE_MOCK_READ_ERROR');
+                }
+            }
             if ($fault === 'redirect_ambiguous') {
                 throw new RuntimeException('PRIVATE_AFTER_SEND');
             }
@@ -152,7 +180,7 @@ final class AlipayRedirectPreflightTest extends TestCase
                 '<!doctype html><form method="POST" action="PRIVATE_ACTION">PRIVATE_NAME</form>'
             );
         }));
-        return AlipayRedirectPreflight::execute($session, $this->ledger, $reader, static fn () => null, 1);
+        return AlipayRedirectPreflight::execute($session, $this->ledger, $reader, static fn () => null, 1, $readMock);
     }
 
     public function testFreshAndroidIntentAndOnePrivateCustomerGetWithOwnedCancellation(): void
@@ -332,7 +360,8 @@ final class AlipayRedirectPreflightTest extends TestCase
     {
         foreach (
             ['environment' => 'production', 'context' => 'organization', 'url' => self::URL,
-            'sdk-root' => '/private', 'ledger' => '/private', 'create-one-alipay-hk' => false] as $key => $value
+            'sdk-root' => '/private', 'ledger' => '/private', 'create-one-alipay-hk' => false,
+                'read-one-sandbox-mock' => 'true'] as $key => $value
         ) {
             $options = ['environment' => 'sandbox', 'credentials-file' => $this->directory . '/credentials',
                 'state-dir' => $this->directory, 'create-one-alipay-hk' => true];
@@ -344,7 +373,15 @@ final class AlipayRedirectPreflightTest extends TestCase
         self::assertCount(0, $this->provider->requests);
     }
 
-    public function testFreshCommandUsesSeparateCustomerTransportAndSafeSourceReceipt(): void
+    /** @return iterable<string,array{bool}> */
+    public static function mockOptions(): iterable
+    {
+        yield 'default' => [false];
+        yield 'explicit mock opt-in' => [true];
+    }
+
+    #[DataProvider('mockOptions')]
+    public function testFreshCommandUsesSeparateCustomerTransportAndSafeSourceReceipt(bool $readMock): void
     {
         $this->provider->response = static function (RequestInterface $request, array $data): array {
             if (str_ends_with($request->getUri()->getPath(), '/confirm')) {
@@ -352,23 +389,114 @@ final class AlipayRedirectPreflightTest extends TestCase
             }
             return $data;
         };
-        $customer = $this->reader(function (RequestInterface $request): ResponseInterface {
+        $customer = $this->reader(function (RequestInterface $request) use ($readMock): ResponseInterface {
             $this->customerGets[] = $request;
+            if ($readMock && count($this->customerGets) === 1) {
+                return new Response(302, ['Location' => self::MOCK]);
+            }
             return new Response(200, ['Content-Type' => 'text/html'], '<p>PRIVATE_PAGE</p>');
         });
         $safe = AlipayRedirectCommand::run([
             'environment' => 'sandbox', 'credentials-file' => $this->directory . '/credentials',
             'state-dir' => $this->directory, 'create-one-alipay-hk' => true,
-        ], $this->provider, $customer);
+        ] + ($readMock ? ['read-one-sandbox-mock' => true] : []), $this->provider, $customer);
         self::assertSame('blocked', $safe['result']);
         self::assertSame('cancelled', $safe['cleanup']);
-        self::assertCount(1, $this->customerGets);
+        self::assertCount($readMock ? 2 : 1, $this->customerGets);
+        self::assertSame($readMock, $safe['read_one_sandbox_mock']);
         self::assertFalse($this->customerGets[0]->hasHeader('Authorization'));
         self::assertIsArray($safe['source']);
         foreach (['base_commit', 'sdk_digest', 'harness_digest'] as $field) {
             self::assertIsString($safe['source'][$field]);
             self::assertMatchesRegularExpression('/^[a-f0-9]{40,64}$/D', $safe['source'][$field]);
         }
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    public function testOptInMockReadUsesItsOwnDurableIntentAndKeepsApplicationInteractionBlocked(): void
+    {
+        $safe = $this->execute(readMock: true);
+        self::assertTrue($safe['read_one_sandbox_mock']);
+        self::assertSame('blocked', $safe['result']);
+        self::assertSame('cancelled', $safe['cleanup']);
+        self::assertSame('customer_sandbox_mock_get', $safe['stage']);
+        self::assertCount(2, $this->customerGets);
+        self::assertSame(0, $safe['ambiguous_actions']);
+        self::assertFalse($safe['reconciliation_required']);
+        self::assertIsArray($safe['navigation']);
+        self::assertTrue($safe['navigation']['mock_read_attempted']);
+        self::assertIsArray($safe['navigation']['sandbox_mock']);
+        self::assertTrue($safe['navigation']['sandbox_mock']['post_form_present']);
+        self::assertFalse($safe['navigation']['sandbox_mock']['location_follow_allowed']);
+        foreach ($this->customerGets as $request) {
+            self::assertFalse($request->hasHeader('Authorization'));
+            self::assertFalse($request->hasHeader('Cookie'));
+            self::assertFalse($request->hasHeader('Referer'));
+        }
+        self::assertCount(3, $this->provider->mutationBodies);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return iterable<string,array{string,int,string,int}> */
+    public static function mockFailures(): iterable
+    {
+        yield 'definite rejection permits owned cancel' => ['', 400, 'cancelled', 0];
+        yield 'server failure suppresses financial cleanup' => ['', 503, 'pending', 1];
+        yield 'transport ambiguity suppresses financial cleanup' => ['mock_ambiguous', 200, 'pending', 1];
+    }
+
+    #[DataProvider('mockFailures')]
+    public function testMockFailureCannotReplayAnActionOrInventCompletion(
+        string $fault,
+        int $status,
+        string $cleanup,
+        int $ambiguous,
+    ): void {
+        $safe = $this->execute($fault, status: $status, readMock: true);
+        self::assertSame('fail', $safe['result']);
+        self::assertSame($cleanup, $safe['cleanup']);
+        self::assertSame($ambiguous, $safe['ambiguous_actions']);
+        self::assertCount(2, $this->customerGets);
+        self::assertCount($ambiguous === 0 ? 3 : 2, $this->provider->mutationBodies);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    public function testFailedMockReservationSendsNoSecondGetAndRequiresDurabilityReconciliation(): void
+    {
+        $configuration = Configuration::load('sandbox', $this->directory . '/credentials');
+        $session = new SandboxSession($configuration, 'account', $this->provider);
+        $health = new class {
+            public bool $healthy = true;
+        };
+        $ledger = RunLedger::create(
+            $session->contextFingerprint(),
+            $this->directory,
+            synchronize: static function ($stream) use ($health): bool {
+                return $health->healthy && fsync($stream);
+            }
+        );
+        $this->provider->response = static function (RequestInterface $request, array $data): array {
+            if (str_ends_with($request->getUri()->getPath(), '/confirm')) {
+                $data['next_action'] = ['type' => 'redirect', 'method' => 'GET', 'url' => self::URL];
+            }
+            return $data;
+        };
+        $customer = $this->reader(function (RequestInterface $request) use ($health): ResponseInterface {
+            $this->customerGets[] = $request;
+            $health->healthy = false;
+            return new Response(302, ['Location' => self::MOCK]);
+        });
+        $reader = new AlipayRedirect($customer);
+        $safe = AlipayRedirectPreflight::execute($session, $ledger, $reader, static fn () => null, 1, true);
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('mock_navigation_not_durable', $safe['reason']);
+        self::assertIsArray($safe['navigation']);
+        self::assertTrue($safe['navigation']['mock_read_reservation_failed']);
+        self::assertFalse($safe['navigation']['mock_read_attempted']);
+        self::assertSame(0, $safe['ambiguous_actions']);
+        self::assertTrue($safe['reconciliation_required']);
+        self::assertCount(1, $this->customerGets);
+        self::assertCount(2, $this->provider->mutationBodies);
         self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
     }
 
@@ -420,7 +548,8 @@ final class AlipayRedirectPreflightTest extends TestCase
     {
         foreach (
             [['--create-one-alipay-hk=false'], ['--sdk-root=/PRIVATE_ROOT'],
-            ['--create-one-alipay-hk', '--create-one-alipay-hk'], ['--environment=production']] as $extra
+            ['--create-one-alipay-hk', '--create-one-alipay-hk'], ['--environment=production'],
+            ['--read-one-sandbox-mock=false'], ['--read-one-sandbox-mock', '--read-one-sandbox-mock']] as $extra
         ) {
             $this->assertCliRejected($extra);
         }
