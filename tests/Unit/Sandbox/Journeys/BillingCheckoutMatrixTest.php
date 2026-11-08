@@ -80,7 +80,19 @@ final class BillingCheckoutMatrixTest extends TestCase
         self::assertSame(['fixture_price_1', 'fixture_price_2', 'fixture_product'], $fixture->archives);
         foreach ($fixture->requests as $request) {
             $path = $request->getUri()->getPath();
-            if (str_contains($path, '/billing_checkouts/') && str_ends_with($path, '/cancel')) {
+            if (str_ends_with($path, '/billing_checkouts/create')) {
+                $body = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+                self::assertIsArray($body);
+                if ($body['ui_mode'] === 'HOSTED') {
+                    self::assertSame('https://example.com', $body['success_url']);
+                    self::assertSame('https://example.com', $body['back_url']);
+                    self::assertArrayNotHasKey('return_url', $body);
+                } else {
+                    self::assertSame('https://example.com', $body['return_url']);
+                    self::assertArrayNotHasKey('success_url', $body);
+                    self::assertArrayNotHasKey('back_url', $body);
+                }
+            } elseif (str_contains($path, '/billing_checkouts/') && str_ends_with($path, '/cancel')) {
                 self::assertSame('', (string) $request->getBody());
             } elseif (str_contains($path, '/billing_checkouts/') && str_ends_with($path, '/update')) {
                 self::assertStringNotContainsString('request_id', (string) $request->getBody());

@@ -64,6 +64,12 @@ final class BillingCheckoutMatrix
                             'metadata' => ['sdk_validation_run' => $ledger->runId()],
                         ];
                         $body = $expected;
+                        if ($ui === 'HOSTED') {
+                            $body['success_url'] = 'https://example.com';
+                            $body['back_url'] = 'https://example.com';
+                        } else {
+                            $body['return_url'] = 'https://example.com';
+                        }
                         if ($mode === 'SETUP') {
                             $body['currency'] = 'EUR';
                         } else {
