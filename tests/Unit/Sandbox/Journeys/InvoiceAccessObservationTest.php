@@ -217,6 +217,7 @@ final class InvoiceAccessObservationTest extends TestCase
     {
         $invoice = $this->invoice();
         $invoice[$field] = $value;
+        $invoice['pdf_url'] = InvoiceAccessPolicy::ORIGIN . '/opaque/PRIVATE.pdf?capability=PRIVATE';
         $links = new RecordingClient(new Client(['handler' => new MockHandler([])]));
         $result = InvoiceAccessCommand::run($this->options(), $this->sdk($invoice), $links);
         self::assertSame('fail', $result['result']);
@@ -251,10 +252,48 @@ final class InvoiceAccessObservationTest extends TestCase
         self::sanitized($result);
     }
 
+    public function testOnlySecondFreshOpaquePdfIsDurablyBoundAfterBothVerifiedOwnerReads(): void
+    {
+        $opaque = InvoiceAccessPolicy::ORIGIN . '/exports/PRIVATE%2fdocument.pdf'
+            . '?signature=PRIVATE+VALUE%3D&part=one&part=two';
+        $first = $this->invoice();
+        $first['pdf_url'] = InvoiceAccessPolicy::ORIGIN . '/old/PRIVATE.pdf?old=PRIVATE';
+        $second = $this->invoice();
+        $second['pdf_url'] = $opaque;
+        $sdk = $this->sdk($second, $first);
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            function (RequestInterface $request) use ($sdk, $opaque): Response {
+                self::assertCount(5, $sdk->requests); // Both exact owner-checked Invoice reads already completed.
+                self::assertSame($opaque, (string) $request->getUri());
+                self::assertSame('bytes=0-1023', $request->getHeaderLine('Range'));
+                foreach (['Authorization', 'Cookie', 'Referer', 'x-api-key', 'x-on-behalf-of'] as $header) {
+                    self::assertFalse($request->hasHeader($header));
+                }
+                $state = $this->journal();
+                self::assertIsArray($state['actions']);
+                $action = $state['actions']['invoice_pdf_prefix_read'] ?? null;
+                self::assertIsArray($action);
+                $binding = ['method' => 'GET', 'invoice_id' => 'PRIVATE_INVOICE',
+                    'prior_ledger_sha256' => hash_file('sha256', $this->prior),
+                    'url_sha256' => hash('sha256', $opaque), 'range' => 'bytes=0-1023'];
+                self::assertSame(hash('sha256', json_encode($binding, JSON_THROW_ON_ERROR)), $action['body_hash']);
+                return new Response(200, ['Content-Type' => 'application/pdf'], "%PDF-1.7\n");
+            },
+        ])]));
+        $result = InvoiceAccessCommand::run($this->options(payer: false), $sdk, $links);
+        self::assertSame('pass', $result['result']);
+        self::assertSame('admitted', $result['pdf_policy']);
+        self::assertTrue($result['owner_chain_verified']);
+        self::assertTrue($result['pdf_prefix_matched']);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
     public function testSecondOwnershipMismatchCannotReleaseAnEarlierValidCapability(): void
     {
         $second = $this->invoice();
         $second['billing_customer_id'] = 'PRIVATE_FOREIGN';
+        $second['pdf_url'] = InvoiceAccessPolicy::ORIGIN . '/opaque/PRIVATE.pdf?capability=PRIVATE';
         $links = new RecordingClient(new Client(['handler' => new MockHandler([])]));
         $result = InvoiceAccessCommand::run($this->options(), $this->sdk($second, $this->invoice()), $links);
         self::assertSame('fail', $result['result']);
@@ -391,7 +430,9 @@ final class InvoiceAccessObservationTest extends TestCase
         $links = new RecordingClient(new Client([
             'handler' => new MockHandler([new Response($status, $headers, $body)]),
         ]));
-        $result = InvoiceAccessCommand::run($this->options(payer: false), $this->sdk(), $links);
+        $invoice = $this->invoice();
+        $invoice['pdf_url'] = InvoiceAccessPolicy::ORIGIN . '/opaque/PRIVATE.pdf?signature=PRIVATE%3D';
+        $result = InvoiceAccessCommand::run($this->options(payer: false), $this->sdk($invoice), $links);
         self::assertSame($matched ? 'pass' : 'pending', $result['result']);
         self::assertSame($matched, $result['pdf_prefix_matched']);
         self::assertCount(1, $links->requests);

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys;
 
+use GuzzleHttp\Psr7\Uri;
 use SensitiveParameter;
+use Throwable;
 
 /** Closed first-party capability shapes; unknown links remain withheld, without rewriting. */
 final class InvoiceAccessPolicy
@@ -14,10 +16,10 @@ final class InvoiceAccessPolicy
 
     public static function pdf(#[SensitiveParameter] mixed $value): ?string
     {
-        return is_string($value) && self::token($value, '/billing/invoices/pdf') !== null ? $value : null;
+        return is_string($value) && self::pdfPolicy($value) === 'admitted' ? $value : null;
     }
 
-    /** Closed withholding reason only; this never changes admission or returns URL components. */
+    /** Closed URI decision only; PDF path/query are opaque and this never returns URL components. */
     public static function pdfPolicy(#[SensitiveParameter] mixed $value): string
     {
         if (!is_string($value)) {
@@ -26,20 +28,29 @@ final class InvoiceAccessPolicy
         if (strlen($value) > 32768) {
             return 'oversize';
         }
-        if (preg_match('/[^\x21-\x7e]|[\\\\#]/', $value) === 1) {
+        if (
+            preg_match('/[^\x21-\x7e]|[\\\\#]/', $value) === 1
+            || preg_match('/%(?:0[0-9a-f]|1[0-9a-f]|7f|5c)/i', $value) === 1
+        ) {
             return 'lexical';
         }
-        if (!str_starts_with($value, self::ORIGIN . '/')) {
-            return 'origin';
+        if (preg_match('/%(?![a-fA-F0-9]{2})/', $value) === 1) {
+            return 'uri';
         }
-        $path = explode('?', substr($value, strlen(self::ORIGIN)), 2)[0];
-        if ($path !== '/billing/invoices/pdf') {
-            return 'path';
+        try {
+            $parts = parse_url($value);
+            if (
+                !is_array($parts) || ($parts['scheme'] ?? null) !== 'https'
+                || ($parts['host'] ?? null) !== 'invoice.sandbox.airwallex.com'
+                || isset($parts['port']) || isset($parts['user']) || isset($parts['pass'])
+                || isset($parts['fragment'])
+            ) {
+                return 'origin';
+            }
+            return (string) new Uri($value) === $value ? 'admitted' : 'uri';
+        } catch (Throwable) {
+            return 'uri';
         }
-        if (!str_starts_with($value, self::ORIGIN . $path . '?s=') || strpbrk($value, '&+') !== false) {
-            return 'query';
-        }
-        return self::pdf($value) === null ? 'capability' : 'admitted';
     }
 
     public static function hostedToken(#[SensitiveParameter] mixed $value): ?string
@@ -61,7 +72,7 @@ final class InvoiceAccessPolicy
             return null;
         }
         $token = rawurldecode($encoded);
-        // This is an opaque bounded capability, with no PDF JWT/expiry interpretation.
+        // This is an opaque bounded hosted capability, with no JWT/expiry interpretation.
         return strlen($token) <= 8192 && preg_match('/^[A-Za-z0-9._~+\/=-]+$/D', $token) === 1 ? $token : null;
     }
 }

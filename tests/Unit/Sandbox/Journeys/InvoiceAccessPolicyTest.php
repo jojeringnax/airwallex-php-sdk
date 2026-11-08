@@ -29,6 +29,11 @@ final class InvoiceAccessPolicyTest extends TestCase
     {
         $prefix = InvoiceAccessPolicy::ORIGIN . '/billing/invoices/pdf';
         yield 'admitted exact' => [$prefix . '?s=PRIVATE%3D', 'admitted'];
+        yield 'no query' => [InvoiceAccessPolicy::ORIGIN . '/PRIVATE/download.pdf', 'admitted'];
+        yield 'encoded CRLF' => [$prefix . '?opaque=PRIVATE%0d%0a', 'lexical'];
+        yield 'encoded DEL' => [$prefix . '?opaque=PRIVATE%7F', 'lexical'];
+        yield 'encoded backslash' => [$prefix . '?opaque=PRIVATE%5cVALUE', 'lexical'];
+        yield 'normalization' => [$prefix . '?opaque=PRIVATE<value', 'uri'];
         yield 'missing or null' => [null, 'absent_or_null'];
         yield 'wrong type' => [new stdClass(), 'wrong_type'];
         yield 'oversize' => [$prefix . '?s=' . str_repeat('a', 32769), 'oversize'];
@@ -40,16 +45,16 @@ final class InvoiceAccessPolicyTest extends TestCase
         yield 'userinfo' => ['https://PRIVATE@invoice.sandbox.airwallex.com/billing/invoices/pdf?s=x', 'origin'];
         yield 'port' => [InvoiceAccessPolicy::ORIGIN . ':443/billing/invoices/pdf?s=x', 'origin'];
         yield 'relative' => ['/billing/invoices/pdf?s=PRIVATE', 'origin'];
-        yield 'unknown path' => [InvoiceAccessPolicy::ORIGIN . '/PRIVATE_PATH?s=PRIVATE', 'path'];
-        yield 'encoded path' => [InvoiceAccessPolicy::ORIGIN . '/billing/invoices/%70df?s=PRIVATE', 'path'];
-        yield 'unknown query' => [$prefix . '?PRIVATE=PRIVATE', 'query'];
-        yield 'encoded key' => [$prefix . '?%73=PRIVATE', 'query'];
-        yield 'duplicate key' => [$prefix . '?s=PRIVATE&s=PRIVATE', 'query'];
-        yield 'literal plus' => [$prefix . '?s=PRIVATE+PRIVATE', 'query'];
-        yield 'missing token' => [$prefix . '?s=', 'capability'];
-        yield 'malformed escape' => [$prefix . '?s=PRIVATE%ZZ', 'capability'];
-        yield 'encoded control' => [$prefix . '?s=PRIVATE%00', 'capability'];
-        yield 'capability size' => [$prefix . '?s=' . str_repeat('a', 8193), 'capability'];
+        yield 'opaque path' => [InvoiceAccessPolicy::ORIGIN . '/PRIVATE_PATH?s=PRIVATE', 'admitted'];
+        yield 'encoded path' => [InvoiceAccessPolicy::ORIGIN . '/billing/invoices/%70df?s=PRIVATE', 'admitted'];
+        yield 'opaque query' => [$prefix . '?PRIVATE=PRIVATE', 'admitted'];
+        yield 'encoded key' => [$prefix . '?%73=PRIVATE', 'admitted'];
+        yield 'opaque repeated query' => [$prefix . '?s=PRIVATE&s=PRIVATE', 'admitted'];
+        yield 'literal plus' => [$prefix . '?s=PRIVATE+PRIVATE', 'admitted'];
+        yield 'opaque empty value' => [$prefix . '?s=', 'admitted'];
+        yield 'malformed escape' => [$prefix . '?s=PRIVATE%ZZ', 'uri'];
+        yield 'encoded control' => [$prefix . '?s=PRIVATE%00', 'lexical'];
+        yield 'bounded longer opaque query' => [$prefix . '?s=' . str_repeat('a', 8193), 'admitted'];
     }
 
     #[DataProvider('pdfPolicies')]
@@ -92,13 +97,8 @@ final class InvoiceAccessPolicyTest extends TestCase
     }
 
     #[DataProvider('withheld')]
-    public function testUnknownShapesStayWithheldWithoutRewritingOrExpiryInference(mixed $value): void
+    public function testPayerShapesStayWithheldWithoutRewritingOrExpiryInference(mixed $value): void
     {
         self::assertNull(InvoiceAccessPolicy::hostedToken($value));
-        if (is_string($value)) {
-            $value = str_replace('/pay?', '/billing/invoices/pdf?', $value);
-        }
-        self::assertNull(InvoiceAccessPolicy::pdf($value));
-        self::assertNotSame('admitted', InvoiceAccessPolicy::pdfPolicy($value));
     }
 }
