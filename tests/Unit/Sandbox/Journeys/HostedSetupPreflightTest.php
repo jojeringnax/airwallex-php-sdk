@@ -121,8 +121,9 @@ final class HostedSetupPreflightTest extends TestCase
             $options ?? $this->options(),
             static fn (Configuration $config, string $context): SandboxSession
                 => new SandboxSession($config, $context, $transport),
-            function (string $url, array $expected, bool $render) use ($fault, $options): array {
+            function (string $url, array $expected, bool $render, bool $observeConfig) use ($fault, $options): array {
                 self::assertSame(($options['render-owned-data'] ?? false) === true, $render);
+                self::assertSame(($options['observe-one-method-config'] ?? false) === true, $observeConfig);
                 self::assertSame([
                     'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
                 ], $expected);
@@ -138,11 +139,27 @@ final class HostedSetupPreflightTest extends TestCase
                 self::assertSame(hash('sha256', json_encode($expected + [
                     'method' => 'GET', 'path' => '/billing/payer-web-api/checkout',
                 ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_payer_read']['body_hash']);
+                if ($observeConfig) {
+                    self::assertIsArray($state['actions']['preflight_method_config_read']);
+                    self::assertSame(hash('sha256', json_encode($expected + [
+                        'method' => 'GET', 'path' => '/api/v1/pa/config/payment_method_types',
+                        'query' => ['page_num' => 0, 'page_size' => 200, 'active' => true,
+                            'transaction_currency' => 'EUR', '__verification_methods' => true],
+                        'browser_api_version' => '2024-06-14', 'scope' => 'verified_own_dropin_frame',
+                    ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_method_config_read']['body_hash']);
+                } else {
+                    self::assertArrayNotHasKey('preflight_method_config_read', $state['actions']);
+                }
                 self::assertStringNotContainsString('PRIVATE_SYNTHETIC_SESSION', $contents);
                 $this->browserCalls++;
                 self::assertSame('https://checkout.airwallex.com/pay?s=PRIVATE_SYNTHETIC_SESSION', $url);
                 if ($fault === 'browser_throws') {
                     throw new RuntimeException('PRIVATE_BROWSER_ERROR');
+                }
+                if ($fault === 'browser_safe_failure') {
+                    return ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+                        'browser_failure_phase' => 'method_get', 'bound_render_frames' => 1,
+                        'blocked_requests' => 3, 'private_error' => 'PRIVATE_BROWSER_ERROR'];
                 }
                 return ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
                     'card_entry_enabled' => false, 'test_mode_visible' => true,
@@ -203,6 +220,19 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertSame(['customers' => 1, 'checkouts' => 1], $result['created_counts']);
     }
 
+    public function testMethodReadIntentIsDurableBeforePrivateBrowserHandoff(): void
+    {
+        $options = $this->options();
+        $options['render-owned-data'] = true;
+        $options['observe-one-method-config'] = true;
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['method_config_requested']);
+        self::assertSame('blocked', $result['result']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(1, $this->cancels);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
     /** @return iterable<string,array{string}> */
     public static function mismatches(): iterable
     {
@@ -226,6 +256,19 @@ final class HostedSetupPreflightTest extends TestCase
             self::assertSame(['checkout_0' => 'fail'], $result['cleanup']);
         }
         self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testFixedBrowserFailurePhaseSurvivesWhileOwnCleanupStillRuns(): void
+    {
+        $result = $this->execute('browser_safe_failure');
+        self::assertSame('fail', $result['result']);
+        self::assertSame('browser_read_only', $result['phase']);
+        self::assertIsArray($result['browser']);
+        self::assertSame('method_get', $result['browser']['browser_failure_phase']);
+        self::assertSame(1, $result['browser']['bound_render_frames']);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertSame(1, $this->cancels);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function testBrowserFailureStillCancelsOnlyItsCreatedCheckout(): void
@@ -287,6 +330,8 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'SDK root injection' => ['sdk-root', '/private/fixture-root'];
         yield 'node absent' => ['node-bin', '/nonexistent-fixture-node'];
         yield 'invalid render mode' => ['render-owned-data', 'PRIVATE_MODE'];
+        yield 'method without render' => ['observe-one-method-config', true];
+        yield 'invalid method mode' => ['observe-one-method-config', 'PRIVATE_MODE'];
     }
 
     #[DataProvider('invalidOptions')]
@@ -299,6 +344,52 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertSame('configuration', $result['phase']);
         self::assertSame([], $this->requests);
         self::assertSame(0, $this->browserCalls);
+    }
+
+    /** @return iterable<string,array{list<string>}> */
+    public static function invalidMethodFlags(): iterable
+    {
+        yield 'requires rendering' => [['--observe-one-method-config']];
+        yield 'rejects a flag value' => [['--render-owned-data', '--observe-one-method-config=true']];
+        yield 'rejects duplicate flags' => [['--render-owned-data', '--observe-one-method-config',
+            '--observe-one-method-config']];
+    }
+
+    /** @param list<string> $flags */
+    #[DataProvider('invalidMethodFlags')]
+    public function testRealCliRejectsInvalidMethodFlagsBeforeConfigurationReads(array $flags): void
+    {
+        $process = proc_open([
+            PHP_BINARY, dirname(__DIR__, 4) . '/tools/hosted-setup-preflight.php', '--environment=sandbox',
+            '--credentials-file=/DO-NOT-READ-PRIVATE-fixture', '--state-dir=/DO-NOT-WRITE-PRIVATE-fixture',
+            '--node-bin=/NONEXISTENT-fixture', '--playwright-module=/NONEXISTENT-fixture',
+            '--create-one-hosted-setup', ...$flags,
+        ], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        [$outputPipe, $errorPipe] = self::outputPipes($pipes);
+        $output = stream_get_contents($outputPipe);
+        $errors = stream_get_contents($errorPipe);
+        fclose($outputPipe);
+        fclose($errorPipe);
+        self::assertSame(1, proc_close($process));
+        self::assertSame('', $errors);
+        self::assertIsString($output);
+        $safe = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($safe);
+        self::assertSame('configuration', $safe['phase']);
+        self::assertSame('fail', $safe['result']);
+        self::assertArrayNotHasKey('source', $safe);
+        self::assertArrayNotHasKey('context_fingerprint', $safe);
+        self::assertStringNotContainsString('PRIVATE', $output);
+    }
+
+    /** @return array{resource,resource} */
+    private static function outputPipes(mixed $pipes): array
+    {
+        if (!is_array($pipes) || !is_resource($pipes[1] ?? null) || !is_resource($pipes[2] ?? null)) {
+            throw new RuntimeException('Synthetic command pipes are unavailable.');
+        }
+        return [$pipes[1], $pipes[2]];
     }
 
     /** @param array<array-key,mixed> $data */

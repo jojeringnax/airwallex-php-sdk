@@ -173,7 +173,7 @@ test('CLI rejects invalid private input before loading browser tooling with fixe
     assert.equal(child.status, 1);
     assert.equal(child.stderr, '');
     assert.deepEqual(JSON.parse(child.stdout), {
-      result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false,
+      result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false, browser_failure_phase: 'configuration',
     });
   }
 });
@@ -304,7 +304,10 @@ for (const fault of ['none', 'abort', 'fetch', 'fulfill', 'dispose', 'websocket'
         assert.equal(output.result, 'blocked');
       } else {
         assert.equal(child.status, 1);
-        assert.deepEqual(output, { result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false });
+        assert.equal(output.result, 'fail');
+        assert.equal(output.reason, 'browser_preflight_failed');
+        assert.equal(typeof output.browser_failure_phase, 'string');
+        assert.doesNotMatch(JSON.stringify(output), /PRIVATE/u);
       }
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
@@ -638,6 +641,298 @@ for (const fault of ['controller_success', 'controller_redirect', 'controller_ht
       } else {
         assert.equal(child.status, 1);
         assert.deepEqual(result, { result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false });
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+const methodUrl = 'https://checkout.sandbox.airwallex.com/api/v1/pa/config/payment_method_types?'
+  + 'active=true&page_num=0&page_size=200&transaction_currency=EUR&__verification_methods=true';
+const methodHeaders = { 'client-secret': 'PRIVATE_CLIENT_SECRET', 'content-type': 'application/json',
+  'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout', 'awx-tracker': 'SYNTHETIC_TRACKER',
+  'x-cloud-trace-context': '0123456789abcdef0123456789abcdef' };
+function methodPolicy(options = {}) {
+  const origin = options.origin ?? 'https://checkout.sandbox.airwallex.com';
+  const policy = new HostedPolicy(origin + '/pay?s=' + sessionToken(), null, expectedCheckout,
+    options.render ?? true, options.observe ?? true);
+  policy.claimPayerRequest(origin + '/billing/payer-web-api/checkout?ts=1794130000000', 'GET', 'fetch',
+    { authorization: 'Bearer ' + sessionToken() });
+  policy.observePayer(Buffer.from(JSON.stringify(privatePayer)));
+  if (policy.mayDeliverPayer()) policy.markPayerDelivered();
+  if (options.frame !== false && policy.claimRenderFrame(privateFrame())) policy.markRenderFrameDelivered();
+  return policy;
+}
+
+test('one method-config read requires explicit opt-in, matched payer and delivered bound frame', () => {
+  assert.throws(() => new HostedPolicy(initial, null, expectedCheckout, false, true));
+  for (const options of [{ observe: false }, { observe: false, render: false }, { frame: false },
+    { origin: 'https://checkout.airwallex.com' }]) {
+    assert.equal(methodPolicy(options).claimMethodConfig(methodUrl, 'GET', 'fetch', methodHeaders), null);
+  }
+  const policy = methodPolicy();
+  const headers = policy.claimMethodConfig(methodUrl, 'GET', 'fetch', { ...methodHeaders,
+    cookie: 'PRIVATE_COOKIE', referer: 'PRIVATE_URL', baggage: 'PRIVATE_TRACE' });
+  assert.deepEqual(headers, { accept: 'application/json, text/plain, */*', cookie: '', referer: '', ...methodHeaders });
+  assert.equal(policy.claimMethodConfig(methodUrl, 'GET', 'xhr', methodHeaders), null);
+  assert.equal(policy.methodEvidence().method_config_get_attempted, true);
+  assert.equal(policy.bindingEvidence().financial_routing_verified, false);
+  assert.doesNotMatch(util.inspect(policy, { depth: null }), /PRIVATE/u);
+});
+
+test('method getter rejects unknown routes, query variants, auth contexts, versions and secrets before attempt', () => {
+  for (const args of [
+    [methodUrl.replace('checkout.sandbox', 'checkout'), 'GET', 'fetch', methodHeaders],
+    [methodUrl.replace('payment_method_types', 'banks'), 'GET', 'fetch', methodHeaders],
+    [methodUrl.replace('page_num=0', 'page_num=1'), 'GET', 'fetch', methodHeaders],
+    [methodUrl.replace('page_size=200', 'page_size=100'), 'GET', 'fetch', methodHeaders],
+    [methodUrl.replace('EUR', 'USD'), 'GET', 'fetch', methodHeaders],
+    [methodUrl + '&page_num=0', 'GET', 'fetch', methodHeaders],
+    [methodUrl + '&unknown=PRIVATE', 'GET', 'fetch', methodHeaders],
+    [methodUrl + '&country_code=unknown', 'GET', 'fetch', methodHeaders],
+    [methodUrl + '&payment_intent_id=PRIVATE', 'GET', 'fetch', methodHeaders],
+    [methodUrl + '#', 'GET', 'fetch', methodHeaders],
+    [methodUrl, 'POST', 'fetch', methodHeaders], [methodUrl, 'GET', 'document', methodHeaders],
+    [methodUrl, 'GET', 'fetch', methodHeaders, 'PRIVATE_BODY'],
+    ...['client-secret', 'x-api-version', 'content-type', 'x-client-ip-source', 'x-device-type', 'awx-tracker', 'x-cloud-trace-context']
+      .map(key => [methodUrl, 'GET', 'fetch', { ...methodHeaders, [key]: 'PRIVATE_INVALID\n' }]),
+    ...['authorization', 'x-on-behalf-of', 'x-auth-token', 'x-tax-region', 'x-tax-calculation-identifier', 'x-pan', 'x-unreviewed-context']
+      .map(key => [methodUrl, 'GET', 'fetch', { ...methodHeaders, [key]: 'PRIVATE_CONTEXT' }]),
+  ]) {
+    const policy = methodPolicy();
+    assert.equal(policy.claimMethodConfig(...args), null);
+    assert.equal(policy.methodEvidence().method_config_get_attempted, false);
+  }
+  for (const trace of [undefined, '', 'ABCDEF0123456789abcdef0123456789ab', '0'.repeat(31), '0'.repeat(33)]) {
+    const policy = methodPolicy();
+    assert.equal(policy.claimMethodConfig(methodUrl, 'GET', 'fetch', { ...methodHeaders,
+      'x-cloud-trace-context': trace }), null);
+    assert.equal(policy.methodEvidence().method_config_get_attempted, false);
+  }
+  for (const country of ['', '&country_code=DE']) {
+    const policy = methodPolicy();
+    assert.notEqual(policy.claimMethodConfig(methodUrl + country, 'GET', 'xhr',
+      { ...methodHeaders, 'x-device-type': 'desktop' }), null);
+  }
+});
+
+test('optional Intent query correlates only with the privately observed frame, without invented country echo', () => {
+  const policy = new HostedPolicy('https://checkout.sandbox.airwallex.com/pay?s=' + sessionToken(),
+    null, expectedCheckout, true, true);
+  policy.claimPayerRequest(payerUrl, 'GET', 'fetch', { authorization: 'Bearer ' + sessionToken() });
+  policy.observePayer(Buffer.from(JSON.stringify({ ...privatePayer, setupModeDetails: {
+    ...privatePayer.setupModeDetails, billingTransactionExternalId: 'PRIVATE_OWN_INTENT' } })));
+  policy.markPayerDelivered();
+  assert.equal(policy.claimRenderFrame(privateFrame({ intent_id: 'PRIVATE_OWN_INTENT' })), true);
+  policy.markRenderFrameDelivered();
+  assert.equal(policy.claimMethodConfig(methodUrl + '&payment_intent_id=PRIVATE_OTHER', 'GET', 'fetch', methodHeaders), null);
+  assert.notEqual(policy.claimMethodConfig(methodUrl + '&payment_intent_id=PRIVATE_OWN_INTENT', 'GET', 'fetch', methodHeaders), null);
+});
+
+test('bounded first method page preserves missing pagination uncertainty and never infers activation', () => {
+  for (const data of [{ items: [] }, { items: [{ name: 'card' }] }, { items: [], has_more: true },
+    { items: [{ name: 'PRIVATE_OTHER', metadata: { PRIVATE_KEY: 'PRIVATE_VALUE' } }], has_more: false }]) {
+    const policy = methodPolicy();
+    policy.claimMethodConfig(methodUrl, 'GET', 'fetch', methodHeaders);
+    const observed = policy.observeMethodConfig(Buffer.from(JSON.stringify(data)));
+    assert.equal(observed.method_config_observation, 'matched');
+    assert.equal(observed.method_config_pagination_known, Object.hasOwn(data, 'has_more'));
+    assert.equal(observed.method_config_has_more, data.has_more === true);
+    assert.equal(observed.method_config_card_advertised, data.items.some(item => item.name === 'card'));
+    assert.equal(policy.mayDeliverMethodConfig(), true);
+    assert.doesNotMatch(JSON.stringify(observed), /PRIVATE/u);
+  }
+  for (const body of ['null', '[]', '{}', '{"items":[null]}', '{"items":[],"has_more":"false"}',
+    JSON.stringify({ items: Array(201).fill({}) }), 'x'.repeat(262145),
+    '{"items":[],"nested":' + '['.repeat(33) + '0' + ']'.repeat(33) + '}', Buffer.from([0xff])]) {
+    const policy = methodPolicy(); policy.claimMethodConfig(methodUrl, 'GET', 'fetch', methodHeaders);
+    assert.equal(policy.observeMethodConfig(Buffer.from(body)).method_config_observation, 'invalid_response');
+    assert.equal(policy.mayDeliverMethodConfig(), false);
+  }
+});
+
+test('closed denied-read families expose only detached bounded counters under the observation opt-in', () => {
+  const policy = methodPolicy();
+  for (const path of ['/api/v1/pa/config/payment_method_types',
+    '/api/v1/pa/customers/PRIVATE', '/api/v1/pa/payment_consents',
+    '/billing/payer-web-api/checkout/status', '/api/v1/pa/PRIVATE']) {
+    policy.noteDeniedRead('https://checkout.sandbox.airwallex.com' + path + '?PRIVATE_VALUE', 'GET', 'fetch');
+    assert.equal(policy.decide('https://checkout.sandbox.airwallex.com' + path, 'GET', 'fetch'), 'block');
+  }
+  policy.noteDeniedRead('https://www.sandbox.airwallex.com/country', 'GET', 'fetch');
+  assert.equal(policy.decide('https://www.sandbox.airwallex.com/country', 'GET', 'fetch'), 'block');
+  assert.equal(policy.allowsAuthority('www.sandbox.airwallex.com', 443), false);
+  for (const target of ['https://www.airwallex.com/country', 'https://www.sandbox.airwallex.com/country?PRIVATE',
+    'https://www.sandbox.airwallex.com/country#PRIVATE', 'https://unknown.invalid/country']) {
+    policy.noteDeniedRead(target, 'GET', 'fetch');
+  }
+  assert.deepEqual(policy.methodEvidence().denied_read_families,
+    { method_config: 1, country: 1, customer: 1, consent_list: 1, checkout_status: 1, other_pa: 1 });
+  const copy = policy.methodEvidence(); copy.denied_read_families.country = 999;
+  assert.equal(policy.methodEvidence().denied_read_families.country, 1);
+  assert.deepEqual(methodPolicy({ observe: false }).methodEvidence(), {});
+});
+
+function methodFixtureModule(fault) {
+  return `
+    'use strict';
+    const fault = ${JSON.stringify(fault)};
+    const fail = () => { throw new Error('PRIVATE_METHOD_URL_SECRET'); };
+    const timeout = globalThis.setTimeout;
+    globalThis.setTimeout = (callback, delay, ...args) => timeout(callback, [5000, 10000].includes(delay) ? 1 : delay, ...args);
+    const fixture = { created: false, disposed: false, gets: 0, detached: false };
+    module.exports = { fixture, request: { async newContext(options) {
+      if (fault === 'context' || options.ignoreHTTPSErrors !== false || !options.proxy) fail();
+      if (fault === 'delayed') await new Promise(resolve => setTimeout(resolve, 30));
+      fixture.created = true;
+      return { async get(url, options) {
+        fixture.gets++;
+        if (fault === 'get' || fixture.gets !== 1 || !url.startsWith('http://127.0.0.1:54321/api/v1/pa/config/payment_method_types?')
+            || options.headers.cookie !== '' || options.headers.referer !== '' || options.headers.authorization
+            || options.headers['client-secret'] !== 'PRIVATE_CLIENT_SECRET'
+            || options.headers['x-api-version'] !== '2024-06-14'
+            || options.headers['x-cloud-trace-context'] !== '0123456789abcdef0123456789abcdef' || options.maxRedirects !== 0 || options.maxRetries !== 0) fail();
+        return { status: () => fault.startsWith('http_') ? Number(fault.slice(5)) : fault === 'redirect' ? 302 : 200,
+          headers() { if (fault === 'headers') fail(); return { 'set-cookie': 'PRIVATE_COOKIE',
+            'content-length': fault === 'declared_oversized' ? '262145' : '100', 'content-type': 'application/json' }; },
+          async body() { if (fault === 'body') fail();
+            return Buffer.from(['invalid_json', 'abort'].includes(fault) ? 'PRIVATE_INVALID' : fault === 'oversized' ? 'x'.repeat(262145)
+              : JSON.stringify({ items: [{ name: 'card' }] })); },
+          async dispose() { if (fault === 'response_dispose') fail(); } };
+      }, async dispose() { fixture.disposed = true; if (fault === 'context_dispose') fail(); } };
+    } }, chromium: { async launch() {
+      let handler, opened;
+      const mainFrame = {};
+      let token;
+      const frame = { parentFrame: () => mainFrame, isDetached() {
+        if (fault === 'attachment_error') fail();
+        if (fault === 'attachment_invalid') return 'PRIVATE_INVALID';
+        return fixture.detached;
+      },
+        async frameElement() { return { async getAttribute() { return 'http://127.0.0.1:54321/render-frame#/elements/dropin?'
+          + new URLSearchParams({ appVersion: 'v2.56.0', lang: 'en', options: JSON.stringify({ mode: 'recurring', currency: 'EUR',
+            client_secret: 'PRIVATE_CLIENT_SECRET', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER' }) }); }, async dispose() {} }; },
+        locator(selector) {
+          const match = /^input\\[name="(cardnumber|expiry|cvc)"\\]$/.exec(selector);
+          if (!match || fault === 'locator') fail();
+          return { async count() {
+              if (fault === 'detached_mid_count' || (fault === 'detached_late_field' && match[1] === 'expiry')) {
+                fixture.detached = true; fail();
+              }
+              if (fault === 'detached_after_count') fixture.detached = true;
+              if (fault === 'readiness_count') fail(); return 1;
+            },
+            async isVisible() {
+              if (fault === 'detached_visible') { fixture.detached = true; fail(); }
+              if (fault === 'readiness_visible') fail(); return true;
+            },
+            async isEnabled() { if (fault === 'readiness_enabled') fail(); return match[1] !== 'cvc'; } };
+        } };
+      const routed = (kind, sourceFrame) => handler({ request() { return {
+        url: () => 'http://127.0.0.1:54321' + (kind === 'payer' ? '/billing/payer-web-api/checkout?ts=1794130000000'
+          : kind === 'frame' ? '/render-frame' : '/api/v1/pa/config/payment_method_types?active=true&page_num=0&page_size=200&transaction_currency=EUR&__verification_methods=true'),
+        method: () => 'GET', resourceType: () => kind === 'frame' ? 'document' : 'fetch', frame: () => sourceFrame,
+        postData: () => null, headers: () => kind === 'payer' ? { authorization: 'Bearer ' + token }
+          : kind === 'frame' ? {} : { 'client-secret': 'PRIVATE_CLIENT_SECRET', 'content-type': 'application/json',
+            'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout', 'x-cloud-trace-context': '0123456789abcdef0123456789abcdef',
+            cookie: 'PRIVATE_COOKIE', referer: 'PRIVATE_URL' } };
+      }, async abort() {
+          if (kind === 'method' && fault === 'detached_route_error') { fixture.detached = true; fail(); }
+          if (kind === 'method' && fault === 'abort') fail();
+        },
+        async fetch() { if (kind === 'method') fail(); return { status: () => 200,
+          async body() { return Buffer.from(kind === 'frame' ? '<!doctype html>' : JSON.stringify({ mode: 'SETUP', currency: 'EUR',
+            setupModeDetails: { externalCustomerClientSecret: 'PRIVATE_CLIENT_SECRET', billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER' } })); },
+          async dispose() {} }; },
+        async fulfill(options) { if (kind === 'method' && (fault === 'fulfill' || options.headers['set-cookie'])) fail(); },
+      });
+      const page = { mainFrame: () => mainFrame, setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on() {},
+        getByText() { return { first() { return { async isVisible() { return false; } }; } }; },
+        async goto(url) { token = new URL(url).searchParams.get('s');
+          await routed('payer', mainFrame); await routed('frame', frame);
+          const pending = routed('method', fault === 'wrong_frame' ? mainFrame : frame);
+          if (fault === 'delayed') { await Promise.resolve(); fail(); }
+          await pending;
+          await routed('method', frame); // Replay remains denied, including rejected or malformed outcomes.
+          if (fault === 'detached_before') fixture.detached = true;
+        } };
+      return { async newContext() { return { async addInitScript() {}, async route(_pattern, callback) { handler = callback; },
+        async routeWebSocket() {}, on(_event, callback) { opened = callback; }, async newPage() { opened(page); return page; },
+        async close() {} }; }, async close() {}, version: () => '157.0.0.0' };
+    } } };
+  `;
+}
+
+for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 'http_503', 'invalid_json', 'oversized',
+  'declared_oversized', 'context', 'get', 'headers', 'body', 'fulfill', 'response_dispose', 'context_dispose',
+  'abort', 'locator', 'readiness_count', 'readiness_visible', 'readiness_enabled', 'delayed', 'wrong_frame',
+  'attachment_error', 'attachment_invalid', 'detached_before', 'detached_mid_count', 'detached_after_count',
+  'detached_visible', 'detached_late_field', 'detached_route_error']) {
+  test(`bound configuration worker keeps once-only headers, response and private failure boundaries: ${fault}`, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-method-module-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, methodFixtureModule(fault));
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true).then(result => process.stdout.write(JSON.stringify(result)))
+          .catch(error => { process.stdout.write(JSON.stringify({ ...error.evidence(),
+            late_context_disposed: fixture.fixture.created && fixture.fixture.disposed,
+            no_late_get: fixture.fixture.gets === 0 })); process.exitCode = 1; });`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /PRIVATE_METHOD|PRIVATE_CLIENT|PRIVATE_EXTERNAL|PRIVATE_COOKIE/u);
+      const output = JSON.parse(child.stdout);
+      if (['detached_before', 'detached_mid_count', 'detached_after_count', 'detached_visible', 'detached_late_field'].includes(fault)) {
+        assert.equal(child.status, 0);
+        assert.equal(output.method_config_observation, 'matched');
+        assert.equal(output.method_config_http_status, 200);
+        assert.equal(output.method_config_payload_delivered, true);
+        assert.equal(output.method_config_card_advertised, true);
+        assert.equal(output.card_readiness_observed, false);
+        assert.equal(output.readiness_frame_detached, true);
+        assert.equal(output.readiness_attachment_field, fault === 'detached_late_field' ? 'expiry' : 'cardnumber');
+        assert.equal(output.readiness_frame_detached_before_count, fault === 'detached_before');
+        if (fault === 'detached_before') assert.equal(Object.hasOwn(output, 'readiness_frame_detached_after_count'), false);
+        else assert.equal(output.readiness_frame_detached_after_count, true);
+
+        assert.equal(output.card_readiness_unavailable_reason, 'frame_detached');
+        assert.equal(output.readiness_detach_stage, fault === 'detached_before' ? 'before_count' : 'after_count');
+        for (const field of ['cardnumber', 'expiry', 'cvc']) for (const suffix of ['unique', 'visible', 'enabled']) {
+          assert.equal(Object.hasOwn(output, field + '_' + suffix), false);
+        }
+      } else if (['success', 'redirect', 'invalid_json', 'oversized', 'declared_oversized', 'wrong_frame'].includes(fault) || fault.startsWith('http_')) {
+        assert.equal(child.status, 0);
+        assert.equal(output.method_config_get_attempted, true);
+        assert.equal(output.method_config_http_status, fault === 'redirect' ? 302 : fault.startsWith('http_') ? Number(fault.slice(5)) : 200);
+        assert.equal(output.method_config_payload_delivered, ['success', 'wrong_frame'].includes(fault));
+        assert.equal(output.method_config_pagination_known ?? false, false);
+        assert.equal(output.card_readiness_observed, true);
+        assert.equal(output.cardnumber_visible, true); assert.equal(output.cvc_enabled, false);
+        assert.equal(output.denied_read_families.method_config, 1);
+      } else {
+        assert.equal(child.status, 1); assert.equal(output.result, 'fail');
+        const phase = { context: 'method_context', get: 'method_get', headers: 'method_headers', body: 'method_body',
+          fulfill: 'method_fulfill', response_dispose: 'method_response_dispose', context_dispose: 'shutdown_request_context',
+          abort: 'method_abort', locator: 'readiness_cardnumber_locator', readiness_count: 'readiness_cardnumber_count',
+          readiness_visible: 'readiness_cardnumber_visible', readiness_enabled: 'readiness_cardnumber_enabled', delayed: 'navigation',
+          attachment_error: 'readiness_attachment', attachment_invalid: 'readiness_attachment', detached_route_error: 'route_action' }[fault];
+        assert.equal(output.browser_failure_phase, phase);
+        assert.equal(output.method_config_get_attempted, true);
+        assert.equal(output.method_config_send_started, !['context', 'delayed'].includes(fault));
+        if (['readiness_count', 'readiness_visible', 'readiness_enabled', 'attachment_error', 'attachment_invalid', 'detached_route_error'].includes(fault)) {
+          assert.equal(output.method_config_observation, 'matched');
+          assert.equal(output.method_config_card_advertised, true);
+          assert.equal(output.method_config_http_status, 200);
+          if (fault === 'readiness_count') {
+            assert.equal(output.readiness_frame_detached_before_count, false);
+            assert.equal(output.readiness_frame_detached_after_count, false);
+          }
+        }
+
+        if (fault === 'delayed') {
+          assert.equal(output.late_context_disposed, true); assert.equal(output.no_late_get, true);
+        }
       }
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
