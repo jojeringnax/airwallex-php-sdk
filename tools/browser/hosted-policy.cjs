@@ -535,6 +535,7 @@ class HostedPolicy {
   }
 
   observeNormalRead(role, body) {
+    let checkoutState = 'unavailable';
     try {
       const data = privateJson(body);
       if (role === 'customer') {
@@ -551,12 +552,15 @@ class HostedPolicy {
       } else if (role === 'country') {
         if (typeof data.countryCode !== 'string' || !/^[A-Z]{2}$/u.test(data.countryCode)) throw new Error();
       } else if (role === 'checkout_status') {
-        if (data.status !== 'ACTIVE') throw new Error();
+        // Hosted 2.286.0 Zt() returns this gateway object unchanged; SDK ACTIVE is a separate contract.
+        checkoutState = ['REQUESTED', 'PENDING', 'COMPLETED', 'EXPIRED'].includes(data.status)
+          ? data.status : typeof data.status === 'string' ? 'unlisted' : 'unavailable';
+        if (checkoutState !== 'REQUESTED') throw new Error();
       } else throw new Error();
-      return { matched: true };
+      return { matched: true, ...(role === 'checkout_status' ? { state: checkoutState } : {}) };
     } catch {
       this.failNormalRead(role);
-      return { matched: false };
+      return { matched: false, ...(role === 'checkout_status' ? { state: checkoutState } : {}) };
     }
   }
 

@@ -197,7 +197,7 @@ async function smoke(playwright) {
           const send = () => { response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*',
             'Set-Cookie': 'synthetic_normal_' + (status ? 'status' : country ? 'country' : consent ? 'consent' : 'customer')
               + '=PRIVATE_COOKIE; Path=/' });
-          response.end(JSON.stringify(status ? { status: 'ACTIVE' } : country ? { countryCode: 'DE' }
+          response.end(JSON.stringify(status ? { status: 'REQUESTED' } : country ? { countryCode: 'DE' }
             : consent ? { items: [] } : { id: 'PRIVATE_EXTERNAL_CUSTOMER' })); };
           if (status && normalStatusDelay > 0) setTimeout(send, normalStatusDelay);
           else send();
@@ -418,7 +418,8 @@ async function smoke(playwright) {
     if (!ordinary.normal_read_inspection_completed || !ordinary.cardnumber_visible || !ordinary.expiry_enabled
         || ordinary.cvc_enabled || !ordinary.normal_read_window_closed || ordinary.normal_checkout_status_poisoned
         || ordinary.normal_checkout_status_attempts !== 1 || ordinary.normal_checkout_status_sends !== 1
-        || ordinary.normal_checkout_status_delivered !== 1 || ordinary.normal_consent_list_items !== 0
+        || ordinary.normal_checkout_status_delivered !== 1 || ordinary.normal_checkout_status_state !== 'REQUESTED'
+        || ordinary.normal_consent_list_items !== 0
         || ordinary.normal_consent_list_pagination_known || ordinary.normal_consent_list_has_more
         || hits.reloadPages !== normalBefore.reloadPages + 1 || hits.status !== normalBefore.status + 1
         || hits.customer !== normalBefore.customer + 1 || hits.consent !== normalBefore.consent + 1

@@ -382,6 +382,18 @@ final readonly class HostedBrowser
                     throw new RuntimeException('Normal delivery lacked its validated response.');
                 }
             }
+            if (array_key_exists('normal_checkout_status_state', $data)) {
+                $state = $data['normal_checkout_status_state'];
+                if (
+                    !in_array($state, ['REQUESTED', 'PENDING', 'COMPLETED', 'EXPIRED', 'unlisted', 'unavailable'], true)
+                    || ($safe['normal_checkout_status_http_status'] ?? null) !== 200
+                    || ($safe['normal_checkout_status_sends'] ?? 0) < 1
+                    || (($safe['normal_checkout_status_observation'] ?? null) === 'matched' && $state !== 'REQUESTED')
+                ) {
+                    throw new RuntimeException('Browser Checkout state lacked its validated status read.');
+                }
+                $safe['normal_checkout_status_state'] = $state;
+            }
             $items = $data['normal_consent_list_items'] ?? null;
             if (is_int($items) && $items >= 0 && $items <= 100) {
                 $safe['normal_consent_list_items'] = $items;

@@ -208,6 +208,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       }
       if (normalRead !== null) {
         const { role, headers: outbound } = normalRead;
+        if (role === 'checkout_status') delete normal.normal_checkout_status_state;
         const key = 'normal_' + role + '_';
         const originalSource = () => {
           try {
@@ -290,6 +291,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
                 const body = await readStep('normal_body', () => response.body());
                 const observed = policy.observeNormalRead(role, body);
                 normal[key + 'observation'] = observed.matched ? 'matched' : 'invalid_response';
+                if (role === 'checkout_status') normal.normal_checkout_status_state = observed.state;
                 if (role === 'consent_list' && observed.matched) {
                   for (const fact of ['items', 'pagination_known', 'has_more']) normal[key + fact] = observed[fact];
                 }

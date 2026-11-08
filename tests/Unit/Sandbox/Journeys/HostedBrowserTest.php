@@ -126,6 +126,52 @@ final class HostedBrowserTest extends TestCase
         HostedBrowser::sanitize($data, true, true);
     }
 
+    /** @return iterable<string,array{string,bool}> */
+    public static function gatewayStates(): iterable
+    {
+        foreach (['REQUESTED', 'PENDING', 'COMPLETED', 'EXPIRED', 'unlisted', 'unavailable'] as $state) {
+            yield $state => [$state, $state === 'REQUESTED'];
+        }
+    }
+
+    #[DataProvider('gatewayStates')]
+    public function testWebStateAllowsPriorDeliveredPolls(string $state, bool $matched): void
+    {
+        $data = self::normalEvidence() + [
+            'normal_checkout_status_attempts' => 2, 'normal_checkout_status_sends' => 2,
+            'normal_checkout_status_delivered' => 1, 'normal_checkout_status_http_status' => 200,
+            'normal_checkout_status_observation' => $matched ? 'matched' : 'invalid_response',
+            'normal_checkout_status_state' => $state,
+        ];
+        $safe = HostedBrowser::sanitize($data, true, true, true);
+        self::assertSame($state, $safe['normal_checkout_status_state']);
+        self::assertSame(1, $safe['normal_checkout_status_delivered']);
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function unsafeGatewayStates(): iterable
+    {
+        foreach (['ACTIVE', 'OPEN', 'PRIVATE_STATE', true, null, []] as $index => $state) {
+            yield 'foreign or raw state ' . $index => ['normal_checkout_status_state', $state];
+        }
+        yield 'unproved HTTP response' => ['normal_checkout_status_http_status', 302];
+        yield 'unproved send' => ['normal_checkout_status_sends', 0];
+        yield 'unmatched state claimed matched' => ['normal_checkout_status_state', 'PENDING'];
+    }
+
+    #[DataProvider('unsafeGatewayStates')]
+    public function testGatewayClassificationCannotExposeForeignStatesOrInventItsProof(string $key, mixed $value): void
+    {
+        $data = self::normalEvidence() + [
+            'normal_checkout_status_attempts' => 1, 'normal_checkout_status_sends' => 1,
+            'normal_checkout_status_delivered' => 0, 'normal_checkout_status_http_status' => 200,
+            'normal_checkout_status_observation' => 'matched', 'normal_checkout_status_state' => 'REQUESTED',
+        ];
+        $data[$key] = $value;
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true);
+    }
+
     /** @return iterable<string,array{string,mixed}> */
     public static function unsafeNormalFacts(): iterable
     {
