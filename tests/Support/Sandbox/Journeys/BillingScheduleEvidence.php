@@ -17,6 +17,7 @@ final class BillingScheduleEvidence
     public const array CASES = [
         'flag-one-day', 'flag-seven-days', 'finite-ends', 'finite-duration', 'finite-remaining',
         'clear-all-pending', 'cancel-all', 'cancel-prorated', 'checkout-trial',
+        'remaining-active-only', 'flag-restore-end',
     ];
     private bool $ambiguous = false;
     private bool $cancelAttempted = false;
@@ -85,7 +86,7 @@ final class BillingScheduleEvidence
             'api_version' => '2026-08-21', 'result' => 'pass'];
         try {
             $journey->run();
-            if (in_array($case, ['finite-remaining', 'clear-all-pending'], true)) {
+            if (in_array($case, ['finite-remaining', 'clear-all-pending', 'remaining-active-only'], true)) {
                 $result['result'] = 'pending';
                 $result['reason'] = 'request_and_visible_fields_only';
             }
@@ -149,7 +150,8 @@ final class BillingScheduleEvidence
         } else {
             $body['duration'] = match ($this->case) {
                 'flag-one-day' => ['period' => 1, 'period_unit' => 'DAY'],
-                'flag-seven-days' => ['period' => 7, 'period_unit' => 'DAY'],
+                'flag-seven-days', 'remaining-active-only', 'flag-restore-end'
+                    => ['period' => 7, 'period_unit' => 'DAY'],
                 default => ['period' => 1, 'period_unit' => 'MONTH'],
             };
         }
@@ -194,7 +196,11 @@ final class BillingScheduleEvidence
                 $this->observations['trial_observed_without_payment_action'] = true;
             } else {
                 $active = $this->readState('active_observed', 'ACTIVE');
-                if (str_starts_with($this->case, 'flag-')) {
+                if ($this->case === 'remaining-active-only') {
+                    $this->remainingActive($active);
+                } elseif ($this->case === 'flag-restore-end') {
+                    $this->restoreFlagEnd($active);
+                } elseif (str_starts_with($this->case, 'flag-')) {
                     $this->flags($active);
                 } else {
                     $this->cancel($this->case === 'cancel-all' ? 'ALL' : 'PRORATED', 'case_cancel');
@@ -319,6 +325,81 @@ final class BillingScheduleEvidence
         $cleared = $this->readState('flag_false_observed', 'ACTIVE', ['cancel_at_period_end' => false]);
         $this->observations['flag_false_observed'] = true;
         $this->recordSchedule('after_flag', $cleared);
+        $this->observations['indefinite_renewal_unverified'] = true;
+    }
+
+    /** @param array<array-key,mixed> $active */
+    private function originalFiniteEnd(array $active): string
+    {
+        $this->phase = 'save_original_finite_end';
+        self::fields($active, ['duration' => ['period' => 7, 'period_unit' => 'DAY']]);
+        $end = $active['ends_at'] ?? null;
+        $now = ($this->clock)();
+        if (!is_string($end) || !is_int($now) || $now < 0 || $now > PHP_INT_MAX - 8 * 86400) {
+            throw new ProtocolException('The fresh seven-day control has no safe visible future end.');
+        }
+        if (
+            self::compareInstants($end, gmdate('Y-m-d\TH:i:s\Z', $now)) <= 0
+            || self::compareInstants($end, gmdate('Y-m-d\TH:i:s\Z', $now + 8 * 86400)) > 0
+        ) {
+            throw new ProtocolException('The fresh seven-day control has no safe visible future end.');
+        }
+        $this->ledger->recordObservation('supplemental_original_end', [
+            'subscription_id' => $this->subscription, 'ends_at' => $end,
+        ], self::contextFingerprint($this->session, $this->collector));
+        $this->observations['original_finite_end_saved'] = true;
+        return $end;
+    }
+
+    /** @param array<array-key,mixed> $resource */
+    private function boundedEnd(array $resource, string $original): bool
+    {
+        $end = $resource['ends_at'] ?? null;
+        $now = ($this->clock)();
+        return is_string($end) && is_int($now) && $now >= 0
+            && self::compareInstants($end, gmdate('Y-m-d\TH:i:s\Z', $now)) > 0
+            && self::compareInstants($end, $original) <= 0;
+    }
+
+    /** @param array<array-key,mixed> $active */
+    private function remainingActive(array $active): void
+    {
+        $end = $this->originalFiniteEnd($active);
+        $this->recordSchedule('before_active_remaining', $active);
+        $this->update('update_remaining_active_only', [
+            'remaining_duration' => ['period' => 1, 'period_unit' => 'DAY'],
+        ]);
+        $observed = $this->observe('active_remaining_finite_observed', fn (array $resource): bool
+            => ($resource['status'] ?? null) === 'ACTIVE' && $this->boundedEnd($resource, $end));
+        $this->recordSchedule('after_active_remaining', $observed);
+        $this->observations['remaining_visible_finite_end'] = true;
+        $this->observations['remaining_timing_unverified'] = true;
+    }
+
+    /** @param array<array-key,mixed> $active */
+    private function restoreFlagEnd(array $active): void
+    {
+        $end = $this->originalFiniteEnd($active);
+        $period = $active['current_period_ends_at'] ?? null;
+        if (!is_string($period) || self::compareInstants($end, $period) <= 0) {
+            throw new ProtocolException('The saved end must extend beyond the current daily billing period.');
+        }
+        $body = ['cancel_at_period_end' => false, 'ends_at' => $end];
+        // Prepare the exact finite restoration before scheduling the earlier period-end cancellation.
+        $this->phase = 'prepare_finite_restore';
+        $this->reserve('restore_finite_end', 'subscription_update', $this->subscription, $body);
+        $this->recordSchedule('before_restore', $active);
+        $this->update('restore_schedule_true', ['cancel_at_period_end' => true]);
+        $scheduled = $this->observe('restore_true_observed', fn (array $resource): bool
+            => ($resource['status'] ?? null) === 'ACTIVE' && ($resource['cancel_at_period_end'] ?? null) === true
+                && $this->boundedEnd($resource, $end));
+        $this->recordSchedule('scheduled_restore', $scheduled);
+        $this->update('restore_finite_end', $body);
+        $restored = $this->observe('restored_flag_and_end', fn (array $resource): bool
+            => ($resource['status'] ?? null) === 'ACTIVE' && ($resource['cancel_at_period_end'] ?? null) === false
+                && $this->boundedEnd($resource, $end) && self::sameInstant($resource['ends_at'] ?? null, $end));
+        $this->recordSchedule('after_restore', $restored);
+        $this->observations['finite_flag_restoration_observed'] = true;
         $this->observations['indefinite_renewal_unverified'] = true;
     }
 

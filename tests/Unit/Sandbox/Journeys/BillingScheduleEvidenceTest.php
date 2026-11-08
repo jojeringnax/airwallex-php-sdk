@@ -104,7 +104,9 @@ final class BillingScheduleEvidenceTest extends TestCase
         };
         $result = $this->runCase($case, $ledger);
         self::assertSame(
-            in_array($case, ['finite-remaining', 'clear-all-pending'], true) ? 'pending' : 'pass',
+            in_array($case, [
+                'finite-remaining', 'clear-all-pending', 'remaining-active-only',
+            ], true) ? 'pending' : 'pass',
             $result['result'],
             json_encode($result, JSON_THROW_ON_ERROR)
         );
@@ -709,5 +711,247 @@ final class BillingScheduleEvidenceTest extends TestCase
         }
         self::assertStringNotContainsString('foreign', json_encode($result, JSON_THROW_ON_ERROR));
         self::assertStringNotContainsString('private_bookmark', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testActiveRemainingRequestOmitsAllClearingFieldsAndDoesNotRequireAnEchoOrExactMapping(): void
+    {
+        $this->http->intercept = static function (
+            RequestInterface $request,
+            BillingScheduleProvider $http,
+        ): ?ResponseInterface {
+            if ($request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/update')) {
+                $body = BillingScheduleProvider::body($request);
+                if (isset($body['remaining_duration'])) {
+                    $base = dirname($request->getUri()->getPath());
+                    self::assertSame('ACTIVE', $http->objects[$base]['status']);
+                    self::assertSame(['period' => 7, 'period_unit' => 'DAY'], $http->objects[$base]['duration']);
+                    self::assertIsString($body['request_id']);
+                    unset($body['request_id']);
+                    self::assertSame(['remaining_duration' => ['period' => 1, 'period_unit' => 'DAY']], $body);
+                    // Deliberately not a one-day mapping: the harness only observes a still-bounded end.
+                    $http->objects[$base]['ends_at'] = '2028-01-03T00:00:00Z';
+                    return BillingScheduleProvider::response(['id' => $http->objects[$base]['id']]);
+                }
+            }
+                return null;
+        };
+        $result = $this->runCase('remaining-active-only');
+        self::assertSame('pending', $result['result']);
+        self::assertSame('request_and_visible_fields_only', $result['reason']);
+        self::assertIsArray($result['observations']);
+        self::assertTrue($result['observations']['remaining_visible_finite_end']);
+        self::assertTrue($result['observations']['remaining_timing_unverified']);
+        self::assertTrue($result['cancellation_verified']);
+    }
+
+    public function testFiniteRestoreUsesTheExactPrivateSavedTimestampAndReservedActionBeforeSettingTrue(): void
+    {
+        $original = '2028-01-08T01:00:00.123456789012+01:00';
+        $captured = false;
+        $reserved = null;
+        $this->http->intercept = function (RequestInterface $request, BillingScheduleProvider $http)
+ use ($original, &$captured, &$reserved): ?ResponseInterface {
+                $path = $request->getUri()->getPath();
+            if (
+                $request->getMethod() === 'GET' && isset($http->objects[$path])
+                    && ($http->objects[$path]['status'] ?? null) === 'ACTIVE' && !$captured
+            ) {
+                $http->objects[$path]['ends_at'] = $original;
+                $captured = true;
+            }
+            if (
+                $request->getMethod() === 'POST' && str_contains($path, '/subscriptions/')
+                    && str_ends_with($path, '/update')
+            ) {
+                $body = BillingScheduleProvider::body($request);
+                if (($body['cancel_at_period_end'] ?? null) === true) {
+                    $files = glob($this->directory . '/*/ledger.json') ?: [];
+                    $state = json_decode((string) file_get_contents($files[0]), true, flags: JSON_THROW_ON_ERROR);
+                    self::assertIsArray($state);
+                    $observations = $state['observations'];
+                    self::assertIsArray($observations);
+                    $saved = $observations['supplemental_original_end'];
+                    self::assertIsArray($saved);
+                    self::assertSame($original, $saved['ends_at']);
+                    $actions = $state['actions'];
+                    self::assertIsArray($actions);
+                    $intent = $actions['restore_finite_end'];
+                    self::assertIsArray($intent);
+                    $reserved = $intent['request_id'];
+                } elseif (($body['cancel_at_period_end'] ?? null) === false) {
+                    self::assertSame($reserved, $body['request_id']);
+                    unset($body['request_id']);
+                    self::assertSame(['cancel_at_period_end' => false, 'ends_at' => $original], $body);
+                    self::assertSame('2028-01-02T00:00:00Z', $http->objects[dirname($path)]['ends_at']);
+                }
+            }
+                return null;
+        };
+        $result = $this->runCase('flag-restore-end');
+        self::assertSame('pass', $result['result']);
+        self::assertTrue($result['cancellation_verified']);
+        self::assertIsArray($result['observations']);
+        self::assertTrue($result['observations']['finite_flag_restoration_observed']);
+        self::assertTrue($result['observations']['before_restore_end_after_current_period']);
+        self::assertTrue($result['observations']['scheduled_restore_end_matches_current_period']);
+        self::assertTrue($result['observations']['after_restore_end_after_current_period']);
+        self::assertStringNotContainsString($original, json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertNotNull($reserved);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function partialRestores(): iterable
+    {
+        foreach (['flag_only', 'end_only', 'neither'] as $kind) {
+            yield $kind => [$kind];
+        }
+    }
+
+    #[DataProvider('partialRestores')]
+    public function testRestoreRequiresBothFalseAndTheOriginalFiniteEndWithoutRepeatingTheMutation(string $kind): void
+    {
+        $restores = 0;
+        $this->http->intercept = static function (RequestInterface $request, BillingScheduleProvider $http)
+ use ($kind, &$restores): ?ResponseInterface {
+            if ($request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/update')) {
+                $body = BillingScheduleProvider::body($request);
+                if (($body['cancel_at_period_end'] ?? null) === false && isset($body['ends_at'])) {
+                    ++$restores;
+                    $base = dirname($request->getUri()->getPath());
+                    if ($kind === 'flag_only') {
+                        $http->objects[$base]['cancel_at_period_end'] = false;
+                    } elseif ($kind === 'end_only') {
+                        $http->objects[$base]['ends_at'] = $body['ends_at'];
+                    }
+                    return BillingScheduleProvider::response(['id' => $http->objects[$base]['id']]);
+                }
+            }
+                return null;
+        };
+        $result = $this->runCase('flag-restore-end');
+        self::assertSame('pending', $result['result']);
+        self::assertSame('restored_flag_and_end', $result['phase']);
+        self::assertSame(1, $restores);
+        self::assertTrue($result['cancellation_verified']);
+        self::assertIsArray($result['observations']);
+        self::assertArrayNotHasKey('finite_flag_restoration_observed', $result['observations']);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function unsafeOriginalEnds(): iterable
+    {
+        yield 'past end' => ['2027-12-31T00:00:00Z'];
+        yield 'exceeds safety bound' => ['2028-02-01T00:00:00Z'];
+        yield 'fraction beyond safety bound' => ['2028-01-09T00:00:00.000000000001Z'];
+        yield 'invalid offset' => ['2028-01-08T00:00:00+24:00'];
+        yield 'natural final period' => ['2028-01-02T00:00:00Z'];
+    }
+
+    #[DataProvider('unsafeOriginalEnds')]
+    public function testRestoreCannotSetTheEndingFlagWithoutAnEstablishedSafeNonfinalOriginalEnd(string $end): void
+    {
+        $this->http->intercept = static function (RequestInterface $request, BillingScheduleProvider $http)
+ use ($end): ?ResponseInterface {
+                $path = $request->getUri()->getPath();
+            if (
+                $request->getMethod() === 'GET' && isset($http->objects[$path])
+                    && ($http->objects[$path]['status'] ?? null) === 'ACTIVE'
+            ) {
+                return BillingScheduleProvider::response(array_replace($http->objects[$path], ['ends_at' => $end]));
+            }
+                return null;
+        };
+        $result = $this->runCase('flag-restore-end');
+        self::assertSame('fail', $result['result']);
+        self::assertTrue($result['cancellation_verified']);
+        foreach ($this->mutationsEnding('/update') as $request) {
+            self::assertArrayNotHasKey('cancel_at_period_end', BillingScheduleProvider::body($request));
+        }
+    }
+
+    public function testUnboundedRemainingReadbackIsPendingAndCancelsBeforeAnyArchive(): void
+    {
+        $this->http->intercept = static function (
+            RequestInterface $request,
+            BillingScheduleProvider $http,
+        ): ?ResponseInterface {
+            if ($request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/update')) {
+                $body = BillingScheduleProvider::body($request);
+                if (isset($body['remaining_duration'])) {
+                    $base = dirname($request->getUri()->getPath());
+                    unset($http->objects[$base]['duration'], $http->objects[$base]['ends_at']);
+                    return BillingScheduleProvider::response(['id' => $http->objects[$base]['id']]);
+                }
+            }
+                return null;
+        };
+        $result = $this->runCase('remaining-active-only');
+        self::assertSame('pending', $result['result']);
+        self::assertSame('active_remaining_finite_observed', $result['phase']);
+        self::assertTrue($result['cancellation_verified']);
+        self::assertFalse($result['temporary_indefinite_possible']);
+        self::assertIsArray($result['observations']);
+        self::assertArrayNotHasKey('remaining_visible_finite_end', $result['observations']);
+    }
+
+    public function testFailurePersistingTheFiniteRestoreIntentPreventsSchedulingTrue(): void
+    {
+        $ledger = $this->ledger(function ($stream): bool {
+            foreach (glob($this->directory . '/*/ledger.json.writing') ?: [] as $file) {
+                $json = file_get_contents($file);
+                if (!is_string($json) || str_contains($json, '"restore_finite_end"')) {
+                    return false;
+                }
+            }
+            return true;
+        });
+        $result = $this->runCase('flag-restore-end', $ledger);
+        self::assertSame('fail', $result['result']);
+        self::assertSame('prepare_finite_restore', $result['phase']);
+        self::assertTrue($result['reconciliation_required']);
+        foreach ($this->mutationsEnding('/update') as $request) {
+            self::assertArrayNotHasKey('cancel_at_period_end', BillingScheduleProvider::body($request));
+        }
+        self::assertCount(0, $this->mutationsEnding('/cancel'));
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function supplementalCases(): iterable
+    {
+        yield 'remaining-only' => ['remaining-active-only'];
+        yield 'restore finite end' => ['flag-restore-end'];
+    }
+
+    #[DataProvider('supplementalCases')]
+    public function testSupplementalRejectedSentMutationRetainsResourcesWithoutAReplayOrCleanup(string $case): void
+    {
+        $rejected = false;
+        $this->http->intercept = static function (RequestInterface $request) use (&$rejected): ?ResponseInterface {
+            $path = $request->getUri()->getPath();
+            if ($request->getMethod() === 'POST' && str_ends_with($path, '/update')) {
+                $body = BillingScheduleProvider::body($request);
+                if (
+                    isset($body['remaining_duration'])
+                    || (($body['cancel_at_period_end'] ?? null) === false && isset($body['ends_at']))
+                ) {
+                    self::assertFalse($rejected);
+                    $rejected = true;
+                    return new Response(400, [], '{"code":"validation_error","source":"ends_at",'
+                        . '"message":"PRIVATE_PROVIDER_TEXT"}');
+                }
+            }
+            if ($rejected && $request->getMethod() === 'POST') {
+                self::fail('A mutation followed the rejected uncertain action.');
+            }
+            return null;
+        };
+        $result = $this->runCase($case);
+        self::assertTrue($rejected);
+        self::assertSame('fail', $result['result']);
+        self::assertTrue($result['ambiguous_mutation']);
+        self::assertSame(['writes' => 'skipped_ambiguous'], $result['cleanup']);
+        self::assertTrue($result['reconciliation_required']);
+        self::assertCount(0, $this->mutationsEnding('/cancel'));
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 }
