@@ -71,7 +71,7 @@ $checkout = $billing->billing()->checkouts()->create([
 $checkoutState = $billing->billing()->checkouts()->retrieve($checkout['id']);
 ```
 
-Authorize the local buyer before every call; organization credentials can access multiple buyers. A hosted checkout's active `url` is the redirect target. With `ui_mode=EMBEDDED` or `ELEMENTS`, deliver `client_secret` only to the authorized browser for the corresponding Airwallex.js integration; keep it out of logs. PHP does not mount browser components. Neither redirect nor browser callback proves payment completion: retrieve provider state and reconcile verified events. See [checkout boundaries](billing-capabilities.md#checkout-ui-contracts) for one-hour expiry and nullable response fields.
+Authorize the local buyer before every call; organization credentials can access multiple buyers. A hosted checkout's active `url` is the redirect target. With `ui_mode=EMBEDDED` or `ELEMENTS`, deliver `client_secret` only to the authorized browser for the corresponding Airwallex.js integration; keep it out of logs. PHP does not mount browser components. Neither redirect nor browser callback proves payment completion: retrieve provider state and reconcile verified events. See [checkout boundaries](billing-capabilities.md#checkout-ui-contracts) for expiry/timestamp evidence and nullable response fields.
 
 The same `checkouts()->create()` shape covers the following modes, each with a fresh persisted request ID. UI mode is independent of the business mode; mode-specific contracts and deterministic coverage are documented in [Billing resources](billing-resources.md).
 
@@ -158,6 +158,23 @@ $hostedUrl = $invoice['hosted_url'] ?? null;
 ```
 
 Cancellation modes, scheduled-end constraints and the schedule-reversal evidence gate follow [trials, cancellation and grace](billing-capabilities.md#trials-cancellation-and-grace). The public surface excludes pause, resume and cancelled-reactivation methods; the application selects its access-grace policy.
+
+For the observed **ACTIVE, finite EUR OUT_OF_BAND** case, preserve the original future `ends_at` before requesting the ending flag. The [executed finite recipes](../examples/billing-lifecycle.php) make that ordering explicit:
+
+```php
+$recipes = require 'examples/billing-lifecycle.php';
+$scheduled = $recipes['schedule_finite_end'](
+    $billing, $subscriptionId, $billingCustomerId, $legalEntityId,
+    '<persisted-schedule-request-id>', '<separate-persisted-restore-request-id>',
+    $persistPrivateSnapshot, // Application callback: commit the supplied snapshot durably or throw.
+);
+// A later authorized buyer action loads that same private pre-scheduling snapshot from storage.
+$restored = $recipes['restore_finite_end']($billing, $storedPrivateSnapshot);
+```
+
+The snapshot contains the exact original end, owner mapping and both distinct action IDs. Commit it before the true update; that update can shorten the visible end, so do not reconstruct the old end afterward. After verifying the same owned ACTIVE state with the flag true, restoration sends only `request_id`, `cancel_at_period_end=false` and that exact saved `ends_at`; it omits `duration` and `remaining_duration`. The recipe retrieves once and requires the same owner, ACTIVE, false and the same end instant without losing fractional precision. Missing, mismatched or still-pending readback stops the recipe. Continue reconciliation with explicit GETs and application action records; never replay a sent restoration because a response was rejected, lost or not yet observed.
+
+The [observed provider case](billing-capabilities.md#trials-cancellation-and-grace) used a daily Price and a seven-day lifetime whose original end lay beyond the first daily period. The application must verify its own intended Price/lifetime and authorize both actions; the recipe does not establish another configuration's eligibility. This is finite-state restoration, not a guarantee for false alone, other states or collection methods, all schedule-field combinations or indefinite renewal. It never reactivates a CANCELLED Subscription or changes application access policy.
 
 A draft invoice may have null PDF; authorize document access before returning any link. Download, storage and email belong to consumers. Re-fetching current data does not promise expired-link renewal; preserve the [expiry evidence gap](billing-capabilities.md#invoice-access-and-delivery). No hosted Billing portal-session method is defined.
 
