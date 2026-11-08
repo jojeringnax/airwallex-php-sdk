@@ -1,0 +1,254 @@
+[
+  {
+    "id": "event_synthetic_payment_attempt_authentication_failed",
+    "name": "payment_attempt.authentication_failed",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "FAILED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_authentication_redirected",
+    "name": "payment_attempt.authentication_redirected",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "AUTHENTICATION_REDIRECTED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_authorization_failed",
+    "name": "payment_attempt.authorization_failed",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "FAILED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_authorized",
+    "name": "payment_attempt.authorized",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "AUTHORIZED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_cancelled",
+    "name": "payment_attempt.cancelled",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "CANCELLED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_capture_failed",
+    "name": "payment_attempt.capture_failed",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "AUTHORIZED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_capture_requested",
+    "name": "payment_attempt.capture_requested",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "CAPTURE_REQUESTED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_expired",
+    "name": "payment_attempt.expired",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "EXPIRED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_failed_to_process",
+    "name": "payment_attempt.failed_to_process",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "FAILED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_paid",
+    "name": "payment_attempt.paid",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "PAID",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_pending_authorization",
+    "name": "payment_attempt.pending_authorization",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "PENDING_AUTHORIZATION",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_received",
+    "name": "payment_attempt.received",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "RECEIVED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_risk_declined",
+    "name": "payment_attempt.risk_declined",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "FAILED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_attempt_settled",
+    "name": "payment_attempt.settled",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_attempt_synthetic",
+        "status": "SETTLED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic"
+      }
+    }
+  }
+]

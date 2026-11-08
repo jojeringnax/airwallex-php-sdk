@@ -70,6 +70,58 @@
         "payment_method.disabled",
         "payment_method.updated"
       ]
+    },
+    {
+      "file": "payment_intent.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/payments/payment_intents/retrieve",
+      "retrieve_path": "/api/v1/pa/payment_intents/{id}",
+      "schema": "#/components/schemas/PaymentIntentSingle",
+      "event_names": [
+        "payment_intent.cancelled",
+        "payment_intent.created",
+        "payment_intent.payment_failed",
+        "payment_intent.pending",
+        "payment_intent.pending_review",
+        "payment_intent.requires_capture",
+        "payment_intent.requires_customer_action",
+        "payment_intent.requires_payment_method",
+        "payment_intent.succeeded",
+        "payment_intent.updated"
+      ]
+    },
+    {
+      "file": "payment_attempt.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/payments/payment_attempts/retrieve",
+      "retrieve_path": "/api/v1/pa/payment_attempts/{id}",
+      "schema": "#/components/schemas/PaymentAttempt",
+      "event_names": [
+        "payment_attempt.authentication_failed",
+        "payment_attempt.authentication_redirected",
+        "payment_attempt.authorization_failed",
+        "payment_attempt.authorized",
+        "payment_attempt.cancelled",
+        "payment_attempt.capture_failed",
+        "payment_attempt.capture_requested",
+        "payment_attempt.expired",
+        "payment_attempt.failed_to_process",
+        "payment_attempt.paid",
+        "payment_attempt.pending_authorization",
+        "payment_attempt.received",
+        "payment_attempt.risk_declined",
+        "payment_attempt.settled"
+      ]
+    },
+    {
+      "file": "refund.json",
+      "resource_reference": "https://www.airwallex.com/docs/api/payments/refunds/retrieve",
+      "retrieve_path": "/api/v1/pa/refunds/{id}",
+      "schema": "#/components/schemas/Refund",
+      "event_names": [
+        "refund.accepted",
+        "refund.failed",
+        "refund.received",
+        "refund.settled"
+      ]
     }
   ],
   "payment_source": {

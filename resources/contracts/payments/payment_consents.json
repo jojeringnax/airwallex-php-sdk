@@ -1,0 +1,2606 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/payments/payment_consents",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "f3dcbacb0453ce7a4808b6e97305dac6"
+  },
+  "annotations": [
+    "schemas/PaymentConsent/metadata: string dictionary from documented 500-character values",
+    "schemas/TermsOfUse/total_billing_cycles: explicit null means indefinite mandate",
+    "endpoints/createPaymentConsent/requestBody/content/application/json/schema/metadata: string dictionary from documented 500-character values",
+    "endpoints/createPaymentConsent/requestBody/content/application/json/schema/properties/terms_of_use/total_billing_cycles: explicit null means indefinite mandate",
+    "endpoints/updatePaymentConsent/requestBody/content/application/json/schema/metadata: string dictionary from documented 500-character values",
+    "/properties/terms_of_use/properties/payment_amount_type: enum from selected request field description",
+    "/properties/terms_of_use/properties/payment_schedule/properties/period_unit: enum from selected request field description",
+    "/properties/payment_method/properties/alipaycn/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/alipayhk/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/applepay/properties/payment_data_type: enum from selected request field description",
+    "/properties/payment_method/properties/applepay/properties/tokenized_card/properties/authentication_method/properties/type: enum from selected request field description",
+    "/properties/payment_method/properties/bacs_direct_debit/properties/address/properties/country_code: enum from selected request field description",
+    "/properties/payment_method/properties/card/properties/external_three_ds/properties/three_ds_exemption: enum from selected request field description",
+    "/properties/payment_method/properties/card/properties/number_type: enum from selected request field description",
+    "/properties/payment_method/properties/dana/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/gcash/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/googlepay/properties/external_three_ds/properties/three_ds_exemption: enum from selected request field description",
+    "/properties/payment_method/properties/googlepay/properties/payment_data_type: enum from selected request field description",
+    "/properties/payment_method/properties/googlepay/properties/tokenized_card/properties/authentication_method/properties/type: enum from selected request field description",
+    "/properties/payment_method/properties/kakaopay/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/rabbit_line_pay/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/sepa_direct_debit/properties/country_code: enum from selected request field description",
+    "/properties/payment_method/properties/tng/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/truemoney/properties/os_type: enum from selected request field description",
+    "/properties/payment_method/properties/wechatpay/properties/flow: enum from selected request field description",
+    "/properties/verification_options/properties/googlepay/properties/external_three_ds/properties/three_ds_exemption: enum from selected request field description",
+    "verify/payment_method/alipaycn/os_type: required-when from selected request field description",
+    "verify/payment_method/alipayhk/os_type: required-when from selected request field description",
+    "verify/payment_method/dana/os_type: required-when from selected request field description",
+    "verify/payment_method/gcash/os_type: required-when from selected request field description",
+    "verify/payment_method/kakaopay/os_type: required-when from selected request field description",
+    "verify/payment_method/rabbit_line_pay/os_type: required-when from selected request field description",
+    "verify/payment_method/tng/os_type: required-when from selected request field description",
+    "verify/payment_method/truemoney/os_type: required-when from selected request field description",
+    "verify/payment_method/wechatpay/open_id: required-when from selected request field description"
+  ],
+  "endpoints": {
+    "createPaymentConsent": {
+      "apiPath": "/api/v1/pa/payment_consents/create",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "customer_id",
+                "next_triggered_by",
+                "request_id"
+              ],
+              "properties": {
+                "connected_account_id": {
+                  "type": "string"
+                },
+                "customer_id": {
+                  "type": "string"
+                },
+                "merchant_trigger_reason": {
+                  "type": "string",
+                  "enum": [
+                    "installments",
+                    "scheduled",
+                    "unscheduled"
+                  ]
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "next_triggered_by": {
+                  "type": "string",
+                  "enum": [
+                    "customer",
+                    "merchant"
+                  ]
+                },
+                "request_id": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "terms_of_use": {
+                  "type": "object",
+                  "required": [
+                    "payment_amount_type"
+                  ],
+                  "properties": {
+                    "billing_cycle_charge_day": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "end_date": {
+                      "type": "string"
+                    },
+                    "first_payment_amount": {
+                      "type": "number"
+                    },
+                    "fixed_payment_amount": {
+                      "type": "number"
+                    },
+                    "max_payment_amount": {
+                      "type": "number"
+                    },
+                    "min_payment_amount": {
+                      "type": "number"
+                    },
+                    "payment_amount_type": {
+                      "type": "string",
+                      "enum": [
+                        "FIXED",
+                        "VARIABLE"
+                      ]
+                    },
+                    "payment_currency": {
+                      "type": "string"
+                    },
+                    "payment_schedule": {
+                      "type": "object",
+                      "properties": {
+                        "period": {
+                          "type": "integer",
+                          "format": "int32"
+                        },
+                        "period_unit": {
+                          "type": "string",
+                          "enum": [
+                            "DAY",
+                            "WEEK",
+                            "MONTH",
+                            "YEAR"
+                          ]
+                        }
+                      }
+                    },
+                    "start_date": {
+                      "type": "string"
+                    },
+                    "total_billing_cycles": {
+                      "type": "integer",
+                      "format": "int32",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConsent"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "retrievePaymentConsent": {
+      "apiPath": "/api/v1/pa/payment_consents/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConsent"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "listPaymentConsents": {
+      "apiPath": "/api/v1/pa/payment_consents",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "customer_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "from_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "merchant_trigger_reason",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "next_triggered_by",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page_num",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "payment_method_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "status",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "to_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PaymentConsent"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": true
+    },
+    "updatePaymentConsent": {
+      "apiPath": "/api/v1/pa/payment_consents/{id}/update",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "request_id"
+              ],
+              "properties": {
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "request_id": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConsent"
+              }
+            }
+          }
+        },
+        "201": {},
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "verify": {
+      "apiPath": "/api/v1/pa/payment_consents/{id}/verify",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "request_id"
+              ],
+              "properties": {
+                "descriptor": {
+                  "type": "string"
+                },
+                "device_data": {
+                  "type": "object",
+                  "properties": {
+                    "accept_header": {
+                      "type": "string"
+                    },
+                    "browser": {
+                      "type": "object",
+                      "properties": {
+                        "java_enabled": {
+                          "type": "boolean"
+                        },
+                        "javascript_enabled": {
+                          "type": "boolean"
+                        },
+                        "user_agent": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "device_id": {
+                      "type": "string"
+                    },
+                    "ip_address": {
+                      "type": "string"
+                    },
+                    "language": {
+                      "type": "string"
+                    },
+                    "location": {
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "type": "string"
+                        },
+                        "lon": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "mobile": {
+                      "type": "object",
+                      "properties": {
+                        "device_model": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string"
+                        },
+                        "os_version": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "screen_color_depth": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "screen_height": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "screen_width": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "timezone": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "payment_method": {
+                  "type": "object",
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "ach_direct_debit": {
+                      "type": "object",
+                      "properties": {
+                        "aba_routing_number": {
+                          "type": "string"
+                        },
+                        "account_number": {
+                          "type": "string"
+                        },
+                        "business_account": {
+                          "type": "boolean"
+                        },
+                        "mandate_version": {
+                          "type": "string"
+                        },
+                        "owner_email": {
+                          "type": "string"
+                        },
+                        "owner_name": {
+                          "type": "string"
+                        },
+                        "verification_method": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "alipaycn": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "alipayhk": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "applepay": {
+                      "type": "object",
+                      "properties": {
+                        "billing": {
+                          "type": "object",
+                          "properties": {
+                            "address": {
+                              "type": "object",
+                              "required": [
+                                "country_code"
+                              ],
+                              "properties": {
+                                "city": {
+                                  "type": "string",
+                                  "maxLength": 100
+                                },
+                                "country_code": {
+                                  "type": "string"
+                                },
+                                "postcode": {
+                                  "type": "string",
+                                  "maxLength": 10
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "maxLength": 100
+                                },
+                                "street": {
+                                  "type": "string",
+                                  "maxLength": 1000
+                                }
+                              }
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "first_name": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "last_name": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "phone_number": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "encrypted_payment_token": {
+                          "type": "string"
+                        },
+                        "payment_data_type": {
+                          "type": "string",
+                          "enum": [
+                            "tokenized_card",
+                            "encrypted_payment_token"
+                          ]
+                        },
+                        "tokenized_card": {
+                          "type": "object",
+                          "required": [
+                            "expiry_month",
+                            "expiry_year",
+                            "number"
+                          ],
+                          "properties": {
+                            "authentication_method": {
+                              "type": "object",
+                              "required": [
+                                "type"
+                              ],
+                              "properties": {
+                                "emv": {
+                                  "type": "object",
+                                  "required": [
+                                    "emv_data"
+                                  ],
+                                  "properties": {
+                                    "emv_data": {
+                                      "type": "string"
+                                    },
+                                    "encrypted_pin_data": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "three_ds": {
+                                  "type": "object",
+                                  "required": [
+                                    "online_payment_cryptogram"
+                                  ],
+                                  "properties": {
+                                    "eci_indicator": {
+                                      "type": "string"
+                                    },
+                                    "online_payment_cryptogram": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "emv",
+                                    "three_ds"
+                                  ]
+                                }
+                              }
+                            },
+                            "device_manufacturer_identifier": {
+                              "type": "string"
+                            },
+                            "expiry_month": {
+                              "type": "string"
+                            },
+                            "expiry_year": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "number": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "bacs_direct_debit": {
+                      "type": "object",
+                      "properties": {
+                        "account_number": {
+                          "type": "string"
+                        },
+                        "address": {
+                          "type": "object",
+                          "required": [
+                            "line1",
+                            "postcode",
+                            "town"
+                          ],
+                          "properties": {
+                            "country_code": {
+                              "type": "string",
+                              "enum": [
+                                "GB",
+                                "US"
+                              ]
+                            },
+                            "line1": {
+                              "type": "string"
+                            },
+                            "line2": {
+                              "type": "string"
+                            },
+                            "postcode": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string"
+                            },
+                            "town": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "bank_name": {
+                          "type": "string"
+                        },
+                        "business_account": {
+                          "type": "boolean"
+                        },
+                        "mandate_version": {
+                          "type": "string"
+                        },
+                        "owner_email": {
+                          "type": "string"
+                        },
+                        "owner_name": {
+                          "type": "string"
+                        },
+                        "sort_code": {
+                          "type": "string"
+                        },
+                        "verification_method": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "becs_direct_debit": {
+                      "type": "object",
+                      "required": [
+                        "account_number",
+                        "bsb_number",
+                        "owner_email",
+                        "owner_name"
+                      ],
+                      "properties": {
+                        "account_number": {
+                          "type": "string"
+                        },
+                        "bsb_number": {
+                          "type": "string"
+                        },
+                        "business_account": {
+                          "type": "boolean"
+                        },
+                        "mandate_version": {
+                          "type": "string"
+                        },
+                        "owner_email": {
+                          "type": "string"
+                        },
+                        "owner_name": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "card": {
+                      "type": "object",
+                      "properties": {
+                        "additional_info": {
+                          "type": "object",
+                          "properties": {
+                            "merchant_verification_value": {
+                              "type": "string"
+                            },
+                            "token_requestor_id": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "billing": {
+                          "type": "object",
+                          "properties": {
+                            "address": {
+                              "type": "object",
+                              "required": [
+                                "country_code"
+                              ],
+                              "properties": {
+                                "city": {
+                                  "type": "string",
+                                  "maxLength": 100
+                                },
+                                "country_code": {
+                                  "type": "string"
+                                },
+                                "postcode": {
+                                  "type": "string",
+                                  "maxLength": 10
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "maxLength": 100
+                                },
+                                "street": {
+                                  "type": "string",
+                                  "maxLength": 1000
+                                }
+                              }
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "first_name": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "last_name": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "phone_number": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "cryptogram": {
+                          "type": "string",
+                          "maxLength": 28
+                        },
+                        "cvc": {
+                          "type": "string"
+                        },
+                        "expiry_month": {
+                          "type": "string"
+                        },
+                        "expiry_year": {
+                          "type": "string"
+                        },
+                        "external_three_ds": {
+                          "type": "object",
+                          "properties": {
+                            "authentication_value": {
+                              "type": "string"
+                            },
+                            "ds_transaction_id": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "eci": {
+                              "type": "string"
+                            },
+                            "three_ds_exemption": {
+                              "type": "string",
+                              "enum": [
+                                "TRA",
+                                "LVP",
+                                "ANONYMOUS"
+                              ]
+                            },
+                            "three_ds_server_transaction_id": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 128
+                        },
+                        "number": {
+                          "type": "string"
+                        },
+                        "number_type": {
+                          "type": "string",
+                          "enum": [
+                            "PAN",
+                            "EXTERNAL_NETWORK_TOKEN"
+                          ]
+                        },
+                        "three_ds_action": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "dana": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "eft_direct_debit": {
+                      "type": "object",
+                      "properties": {
+                        "account_number": {
+                          "type": "string"
+                        },
+                        "business_account": {
+                          "type": "boolean"
+                        },
+                        "institution_number": {
+                          "type": "string"
+                        },
+                        "mandate_version": {
+                          "type": "string"
+                        },
+                        "owner_email": {
+                          "type": "string"
+                        },
+                        "owner_name": {
+                          "type": "string"
+                        },
+                        "transit_number": {
+                          "type": "string"
+                        },
+                        "verification_method": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "gcash": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "googlepay": {
+                      "type": "object",
+                      "properties": {
+                        "billing": {
+                          "type": "object",
+                          "properties": {
+                            "address": {
+                              "type": "object",
+                              "required": [
+                                "country_code"
+                              ],
+                              "properties": {
+                                "city": {
+                                  "type": "string",
+                                  "maxLength": 100
+                                },
+                                "country_code": {
+                                  "type": "string"
+                                },
+                                "postcode": {
+                                  "type": "string",
+                                  "maxLength": 10
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "maxLength": 100
+                                },
+                                "street": {
+                                  "type": "string",
+                                  "maxLength": 1000
+                                }
+                              }
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "first_name": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "last_name": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "phone_number": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "encrypted_payment_token": {
+                          "type": "string"
+                        },
+                        "external_three_ds": {
+                          "type": "object",
+                          "properties": {
+                            "authentication_value": {
+                              "type": "string"
+                            },
+                            "ds_transaction_id": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "eci": {
+                              "type": "string"
+                            },
+                            "three_ds_exemption": {
+                              "type": "string",
+                              "enum": [
+                                "TRA",
+                                "LVP",
+                                "ANONYMOUS"
+                              ]
+                            },
+                            "three_ds_server_transaction_id": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "payment_data_type": {
+                          "type": "string",
+                          "enum": [
+                            "tokenized_card",
+                            "encrypted_payment_token"
+                          ]
+                        },
+                        "tokenized_card": {
+                          "type": "object",
+                          "required": [
+                            "expiry_month",
+                            "expiry_year",
+                            "number"
+                          ],
+                          "properties": {
+                            "authentication_method": {
+                              "type": "object",
+                              "required": [
+                                "type"
+                              ],
+                              "properties": {
+                                "emv": {
+                                  "type": "object",
+                                  "required": [
+                                    "emv_data"
+                                  ],
+                                  "properties": {
+                                    "emv_data": {
+                                      "type": "string"
+                                    },
+                                    "encrypted_pin_data": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "three_ds": {
+                                  "type": "object",
+                                  "required": [
+                                    "online_payment_cryptogram"
+                                  ],
+                                  "properties": {
+                                    "eci_indicator": {
+                                      "type": "string"
+                                    },
+                                    "online_payment_cryptogram": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "emv",
+                                    "three_ds"
+                                  ]
+                                }
+                              }
+                            },
+                            "device_manufacturer_identifier": {
+                              "type": "string"
+                            },
+                            "expiry_month": {
+                              "type": "string"
+                            },
+                            "expiry_year": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "number": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kakaopay": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "payto": {
+                      "type": "object",
+                      "properties": {
+                        "bsb": {
+                          "type": "object",
+                          "required": [
+                            "account_name",
+                            "account_number",
+                            "bsb_number"
+                          ],
+                          "properties": {
+                            "account_name": {
+                              "type": "string"
+                            },
+                            "account_number": {
+                              "type": "string"
+                            },
+                            "bsb_number": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "pay_id": {
+                          "type": "object",
+                          "properties": {
+                            "australian_business_number": {
+                              "type": "string"
+                            },
+                            "organisation_id": {
+                              "type": "string"
+                            },
+                            "owner_email": {
+                              "type": "string"
+                            },
+                            "payer_name": {
+                              "type": "string"
+                            },
+                            "phone_number": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "rabbit_line_pay": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "sepa_direct_debit": {
+                      "type": "object",
+                      "properties": {
+                        "address": {
+                          "type": "object",
+                          "required": [
+                            "postcode",
+                            "street",
+                            "town"
+                          ],
+                          "properties": {
+                            "country_code": {
+                              "type": "string"
+                            },
+                            "postcode": {
+                              "type": "string"
+                            },
+                            "street": {
+                              "type": "string"
+                            },
+                            "town": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "bank_name": {
+                          "type": "string"
+                        },
+                        "business_account": {
+                          "type": "boolean"
+                        },
+                        "country_code": {
+                          "type": "string",
+                          "enum": [
+                            "GB",
+                            "AT",
+                            "BE",
+                            "DE",
+                            "ES",
+                            "FI",
+                            "FR",
+                            "IE",
+                            "IT",
+                            "LT",
+                            "NL",
+                            "PL",
+                            "PT",
+                            "SE"
+                          ]
+                        },
+                        "iban": {
+                          "type": "string"
+                        },
+                        "mandate_version": {
+                          "type": "string"
+                        },
+                        "owner_email": {
+                          "type": "string"
+                        },
+                        "owner_name": {
+                          "type": "string"
+                        },
+                        "verification_method": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "tng": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "truemoney": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "flow": {
+                          "type": "string"
+                        },
+                        "os_type": {
+                          "type": "string",
+                          "enum": [
+                            "ios",
+                            "android"
+                          ],
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mobile_web",
+                                  "mobile_app"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "wechatpay": {
+                      "type": "object",
+                      "required": [
+                        "flow"
+                      ],
+                      "properties": {
+                        "channel": {
+                          "type": "string",
+                          "enum": [
+                            "pos",
+                            "ecom"
+                          ],
+                          "x-enumDescriptions": {
+                            "pos": "A point-of-sale (POS) transaction.",
+                            "ecom": "A online e-commerce transaction."
+                          }
+                        },
+                        "flow": {
+                          "type": "string",
+                          "enum": [
+                            "qrcode",
+                            "official_account",
+                            "mini_program",
+                            "mobile_app",
+                            "mobile_web"
+                          ]
+                        },
+                        "open_id": {
+                          "type": "string",
+                          "sdkRequiredWhen": {
+                            "all": [
+                              {
+                                "field": "flow",
+                                "values": [
+                                  "mini_program"
+                                ],
+                                "negated": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "request_id": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "return_url": {
+                  "type": "string"
+                },
+                "risk_control_options": {
+                  "type": "object",
+                  "properties": {
+                    "skip_risk_processing": {
+                      "type": "boolean"
+                    },
+                    "tra_applicable": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "verification_options": {
+                  "type": "object",
+                  "properties": {
+                    "applepay": {
+                      "type": "object",
+                      "required": [
+                        "currency"
+                      ],
+                      "properties": {
+                        "amount": {
+                          "type": "number"
+                        },
+                        "currency": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "card": {
+                      "type": "object",
+                      "required": [
+                        "currency"
+                      ],
+                      "properties": {
+                        "amount": {
+                          "type": "number"
+                        },
+                        "currency": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "googlepay": {
+                      "type": "object",
+                      "required": [
+                        "currency"
+                      ],
+                      "properties": {
+                        "amount": {
+                          "type": "number"
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "external_three_ds": {
+                          "type": "object",
+                          "properties": {
+                            "authentication_value": {
+                              "type": "string"
+                            },
+                            "ds_transaction_id": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "eci": {
+                              "type": "string"
+                            },
+                            "three_ds_exemption": {
+                              "type": "string",
+                              "enum": [
+                                "TRA",
+                                "LVP",
+                                "ANONYMOUS"
+                              ]
+                            },
+                            "three_ds_server_transaction_id": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "version": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "three_ds_action": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "wechatpay": {
+                      "type": "object",
+                      "properties": {
+                        "currency": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConsent"
+              }
+            }
+          }
+        },
+        "201": {},
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "verifyContinue": {
+      "apiPath": "/api/v1/pa/payment_consents/{id}/verify_continue",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "request_id"
+              ],
+              "properties": {
+                "micro_deposit": {
+                  "type": "object",
+                  "properties": {
+                    "amounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                "request_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "retry_micro_debit",
+                    "verify_micro_deposits"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConsent"
+              }
+            }
+          }
+        },
+        "201": {},
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "paymentConsents_disable": {
+      "apiPath": "/api/v1/pa/payment_consents/{id}/disable",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "request_id"
+              ],
+              "properties": {
+                "request_id": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConsent"
+              }
+            }
+          }
+        },
+        "201": {},
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    }
+  },
+  "schemas": {
+    "PaymentConsent": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "customer_id",
+        "id",
+        "next_triggered_by",
+        "request_id",
+        "status",
+        "updated_at"
+      ],
+      "properties": {
+        "client_secret": {
+          "type": "string"
+        },
+        "connected_account_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "disable_reason": {
+          "type": "string"
+        },
+        "failure_reason": {
+          "$ref": "#/components/schemas/FailureReason"
+        },
+        "id": {
+          "type": "string"
+        },
+        "initial_payment_intent_id": {
+          "type": "string"
+        },
+        "mandate": {
+          "$ref": "#/components/schemas/Payment_Acceptance_Mandate"
+        },
+        "merchant_trigger_reason": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "next_action": {
+          "$ref": "#/components/schemas/PaymentConsentNextAction"
+        },
+        "next_triggered_by": {
+          "type": "string"
+        },
+        "payment_method": {
+          "$ref": "#/components/schemas/PaymentMethodDetailsForConsent"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "terms_of_use": {
+          "$ref": "#/components/schemas/TermsOfUse"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "FailureReason": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "Payment_Acceptance_Mandate": {
+      "type": "object",
+      "properties": {
+        "accepted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "bacs_direct_debit": {
+          "$ref": "#/components/schemas/BacsDirectDebitMandate"
+        },
+        "sepa_direct_debit": {
+          "$ref": "#/components/schemas/SepaDirectDebitMandate"
+        },
+        "type": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "BacsDirectDebitMandate": {
+      "type": "object",
+      "properties": {
+        "ddi_reference": {
+          "type": "string"
+        },
+        "service_user_number": {
+          "type": "string"
+        }
+      }
+    },
+    "SepaDirectDebitMandate": {
+      "type": "object",
+      "properties": {
+        "creditor_identifier": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        }
+      }
+    },
+    "PaymentConsentNextAction": {
+      "type": "object",
+      "properties": {
+        "content_type": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object"
+        },
+        "email": {
+          "type": "string"
+        },
+        "fallback_url": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "micro_deposit_count": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "package_name": {
+          "type": "string"
+        },
+        "qrcode": {
+          "type": "string"
+        },
+        "remaining_attempts": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "PaymentMethodDetailsForConsent": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "ach_direct_debit": {
+          "$ref": "#/components/schemas/AchDirectDebit"
+        },
+        "alipaycn": {
+          "$ref": "#/components/schemas/Alipaycn"
+        },
+        "alipayhk": {
+          "$ref": "#/components/schemas/AlipayConnect"
+        },
+        "applepay": {
+          "$ref": "#/components/schemas/Applepay"
+        },
+        "bacs_direct_debit": {
+          "$ref": "#/components/schemas/BacsDirectDebit"
+        },
+        "becs_direct_debit": {
+          "$ref": "#/components/schemas/BecsDirectDebit"
+        },
+        "card": {
+          "$ref": "#/components/schemas/Payment_Acceptance_Card"
+        },
+        "dana": {
+          "$ref": "#/components/schemas/AlipayConnect"
+        },
+        "eft_direct_debit": {
+          "$ref": "#/components/schemas/EftDirectDebit"
+        },
+        "gcash": {
+          "$ref": "#/components/schemas/AlipayConnect"
+        },
+        "googlepay": {
+          "$ref": "#/components/schemas/Googlepay"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kakaopay": {
+          "$ref": "#/components/schemas/AlipayConnect"
+        },
+        "payto": {
+          "$ref": "#/components/schemas/Payto"
+        },
+        "sepa_direct_debit": {
+          "$ref": "#/components/schemas/SepaDirectDebit"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "AchDirectDebit": {
+      "type": "object",
+      "properties": {
+        "aba_routing_number": {
+          "type": "string"
+        },
+        "account_number": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        }
+      }
+    },
+    "MicroDebitResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "MicroDepositResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "Alipaycn": {
+      "type": "object",
+      "properties": {
+        "flow": {
+          "type": "string"
+        },
+        "os_type": {
+          "type": "string"
+        },
+        "shopper_login_id": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "pos",
+            "ecom"
+          ],
+          "x-enumDescriptions": {
+            "pos": "A point-of-sale (POS) transaction.",
+            "ecom": "A online e-commerce transaction."
+          }
+        }
+      }
+    },
+    "AlipayConnect": {
+      "type": "object",
+      "properties": {
+        "flow": {
+          "type": "string"
+        },
+        "os_type": {
+          "type": "string"
+        },
+        "shopper_login_id": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "pos",
+            "ecom"
+          ],
+          "x-enumDescriptions": {
+            "pos": "A point-of-sale (POS) transaction.",
+            "ecom": "A online e-commerce transaction."
+          }
+        }
+      }
+    },
+    "Applepay": {
+      "type": "object",
+      "properties": {
+        "billing": {
+          "$ref": "#/components/schemas/Billing"
+        },
+        "lifecycle_id": {
+          "type": "string"
+        },
+        "payment_data_type": {
+          "type": "string"
+        },
+        "tokenized_card": {
+          "$ref": "#/components/schemas/TokenizedCard"
+        }
+      }
+    },
+    "Billing": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/components/schemas/Payment_Acceptance_Address"
+        },
+        "date_of_birth": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "last_name": {
+          "type": "string"
+        },
+        "phone_number": {
+          "type": "string"
+        }
+      }
+    },
+    "Payment_Acceptance_Address": {
+      "type": "object",
+      "required": [
+        "country_code"
+      ],
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "street": {
+          "type": "string"
+        }
+      }
+    },
+    "TokenizedCard": {
+      "type": "object",
+      "required": [
+        "expiry_month",
+        "expiry_year"
+      ],
+      "properties": {
+        "authentication_method": {
+          "$ref": "#/components/schemas/AuthenticationMethod"
+        },
+        "bin": {
+          "type": "string"
+        },
+        "brand": {
+          "type": "string"
+        },
+        "device_manufacturer_identifier": {
+          "type": "string"
+        },
+        "expiry_month": {
+          "type": "string"
+        },
+        "expiry_year": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "is_commercial": {
+          "type": "boolean"
+        },
+        "issuer_country_code": {
+          "type": "string"
+        },
+        "issuer_name": {
+          "type": "string"
+        },
+        "last4": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "AuthenticationMethod": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "emv": {
+          "$ref": "#/components/schemas/Emv"
+        },
+        "three_ds": {
+          "$ref": "#/components/schemas/ThreeDomainSecure"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "Emv": {
+      "type": "object",
+      "required": [
+        "emv_data"
+      ],
+      "properties": {
+        "emv_data": {
+          "type": "string"
+        },
+        "encrypted_pin_data": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreeDomainSecure": {
+      "type": "object",
+      "required": [
+        "online_payment_cryptogram"
+      ],
+      "properties": {
+        "eci_indicator": {
+          "type": "string"
+        },
+        "online_payment_cryptogram": {
+          "type": "string"
+        }
+      }
+    },
+    "BacsDirectDebit": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "address": {
+          "$ref": "#/components/schemas/BacsDirectDebitAddress"
+        },
+        "bank_name": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        },
+        "sort_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BacsDirectDebitAddress": {
+      "type": "object",
+      "required": [
+        "line1",
+        "postcode",
+        "town"
+      ],
+      "properties": {
+        "country_code": {
+          "type": "string"
+        },
+        "line1": {
+          "type": "string"
+        },
+        "line2": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "town": {
+          "type": "string"
+        }
+      }
+    },
+    "BecsDirectDebit": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bsb_number": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        }
+      }
+    },
+    "Payment_Acceptance_Card": {
+      "type": "object",
+      "properties": {
+        "additional_info": {
+          "$ref": "#/components/schemas/CardAdditionalInfo"
+        },
+        "billing": {
+          "$ref": "#/components/schemas/Billing"
+        },
+        "bin": {
+          "type": "string"
+        },
+        "brand": {
+          "type": "string"
+        },
+        "card_type": {
+          "type": "string"
+        },
+        "expiry_month": {
+          "type": "string"
+        },
+        "expiry_year": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "is_commercial": {
+          "type": "boolean"
+        },
+        "issuer_country_code": {
+          "type": "string"
+        },
+        "issuer_name": {
+          "type": "string"
+        },
+        "korean_card": {
+          "$ref": "#/components/schemas/KoreanCardData"
+        },
+        "last4": {
+          "type": "string"
+        },
+        "lifecycle_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "number_type": {
+          "type": "string"
+        }
+      }
+    },
+    "CardAdditionalInfo": {
+      "type": "object",
+      "properties": {
+        "merchant_verification_value": {
+          "type": "string"
+        },
+        "token_requestor_id": {
+          "type": "string"
+        }
+      }
+    },
+    "KoreanCardData": {
+      "type": "object",
+      "properties": {
+        "business_number": {
+          "type": "string"
+        },
+        "date_of_birth": {
+          "type": "string"
+        },
+        "password_first2": {
+          "type": "string"
+        }
+      }
+    },
+    "EftDirectDebit": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "institution_number": {
+          "type": "string"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        },
+        "transit_number": {
+          "type": "string"
+        }
+      }
+    },
+    "Googlepay": {
+      "type": "object",
+      "properties": {
+        "billing": {
+          "$ref": "#/components/schemas/Billing"
+        },
+        "lifecycle_id": {
+          "type": "string"
+        },
+        "payment_data_type": {
+          "type": "string"
+        },
+        "tokenized_card": {
+          "$ref": "#/components/schemas/TokenizedCard"
+        }
+      }
+    },
+    "Payto": {
+      "type": "object",
+      "properties": {
+        "bsb": {
+          "$ref": "#/components/schemas/Bsb"
+        },
+        "pay_id": {
+          "$ref": "#/components/schemas/PayId"
+        }
+      }
+    },
+    "Bsb": {
+      "type": "object",
+      "properties": {
+        "account_name": {
+          "type": "string"
+        },
+        "account_number": {
+          "type": "string"
+        },
+        "bsb_number": {
+          "type": "string"
+        }
+      }
+    },
+    "PayId": {
+      "type": "object",
+      "properties": {
+        "australian_business_number": {
+          "type": "string"
+        },
+        "organisation_id": {
+          "type": "string"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "phone_number": {
+          "type": "string"
+        }
+      }
+    },
+    "SepaDirectDebit": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/components/schemas/SepaDirectDebitAddress"
+        },
+        "bank_name": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "iban": {
+          "type": "string"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        }
+      }
+    },
+    "SepaDirectDebitAddress": {
+      "type": "object",
+      "required": [
+        "postcode",
+        "street",
+        "town"
+      ],
+      "properties": {
+        "country_code": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "street": {
+          "type": "string"
+        },
+        "town": {
+          "type": "string"
+        }
+      }
+    },
+    "TermsOfUse": {
+      "type": "object",
+      "required": [
+        "payment_amount_type"
+      ],
+      "properties": {
+        "billing_cycle_charge_day": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "first_payment_amount": {
+          "type": "number"
+        },
+        "fixed_payment_amount": {
+          "type": "number"
+        },
+        "max_payment_amount": {
+          "type": "number"
+        },
+        "min_payment_amount": {
+          "type": "number"
+        },
+        "payment_amount_type": {
+          "type": "string"
+        },
+        "payment_currency": {
+          "type": "string"
+        },
+        "payment_schedule": {
+          "$ref": "#/components/schemas/PaymentSchedule"
+        },
+        "start_date": {
+          "type": "string"
+        },
+        "total_billing_cycles": {
+          "type": "integer",
+          "format": "int32",
+          "nullable": true
+        }
+      }
+    },
+    "PaymentSchedule": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "period_unit": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

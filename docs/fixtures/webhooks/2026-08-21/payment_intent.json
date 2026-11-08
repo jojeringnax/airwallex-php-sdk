@@ -1,0 +1,297 @@
+[
+  {
+    "id": "event_synthetic_payment_intent_cancelled",
+    "name": "payment_intent.cancelled",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-cancelled",
+        "status": "CANCELLED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_created",
+    "name": "payment_intent.created",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-created",
+        "status": "REQUIRES_PAYMENT_METHOD",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_payment_failed",
+    "name": "payment_intent.payment_failed",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-payment_failed",
+        "status": "REQUIRES_PAYMENT_METHOD",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_pending",
+    "name": "payment_intent.pending",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-pending",
+        "status": "PENDING",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_pending_review",
+    "name": "payment_intent.pending_review",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-pending_review",
+        "status": "PENDING_REVIEW",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_requires_capture",
+    "name": "payment_intent.requires_capture",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-requires_capture",
+        "status": "REQUIRES_CAPTURE",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_requires_customer_action",
+    "name": "payment_intent.requires_customer_action",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-requires_customer_action",
+        "status": "REQUIRES_CUSTOMER_ACTION",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        },
+        "next_action": {
+          "type": "redirect",
+          "url": "https://example.test/synthetic-action",
+          "method": "GET"
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_requires_payment_method",
+    "name": "payment_intent.requires_payment_method",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-requires_payment_method",
+        "status": "REQUIRES_PAYMENT_METHOD",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_succeeded",
+    "name": "payment_intent.succeeded",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-succeeded",
+        "status": "SUCCEEDED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 19.90,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_payment_intent_updated",
+    "name": "payment_intent.updated",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "payment_intent_synthetic",
+        "request_id": "synthetic-request-updated",
+        "status": "REQUIRES_PAYMENT_METHOD",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "merchant_order_id": "synthetic-order",
+        "customer_id": "synthetic-payments-customer",
+        "captured_amount": 0,
+        "order": {
+          "products": [
+            {
+              "name": "Synthetic product",
+              "quantity": 2
+            }
+          ]
+        }
+      }
+    }
+  }
+]

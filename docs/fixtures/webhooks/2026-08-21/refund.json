@@ -1,0 +1,86 @@
+[
+  {
+    "id": "event_synthetic_refund_accepted",
+    "name": "refund.accepted",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "refund_synthetic",
+        "request_id": "synthetic-request-accepted",
+        "status": "ACCEPTED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic",
+        "payment_attempt_id": "payment_attempt_synthetic",
+        "reason": "synthetic requested refund"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_refund_failed",
+    "name": "refund.failed",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "refund_synthetic",
+        "request_id": "synthetic-request-failed",
+        "status": "FAILED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic",
+        "payment_attempt_id": "payment_attempt_synthetic",
+        "reason": "synthetic requested refund"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_refund_received",
+    "name": "refund.received",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "refund_synthetic",
+        "request_id": "synthetic-request-received",
+        "status": "RECEIVED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic",
+        "payment_attempt_id": "payment_attempt_synthetic",
+        "reason": "synthetic requested refund"
+      }
+    }
+  },
+  {
+    "id": "event_synthetic_refund_settled",
+    "name": "refund.settled",
+    "version": "2026-08-21",
+    "created_at": "2026-11-08T10:00:00Z",
+    "account_id": "account_synthetic",
+    "data": {
+      "object": {
+        "id": "refund_synthetic",
+        "request_id": "synthetic-request-settled",
+        "status": "SETTLED",
+        "amount": 19.90,
+        "currency": "EUR",
+        "created_at": "2026-11-08T10:00:00Z",
+        "updated_at": "2026-11-08T10:00:00Z",
+        "payment_intent_id": "payment_intent_synthetic",
+        "payment_attempt_id": "payment_attempt_synthetic",
+        "reason": "synthetic requested refund"
+      }
+    }
+  }
+]

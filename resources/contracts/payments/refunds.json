@@ -1,0 +1,314 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/payments/refunds",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "f3dcbacb0453ce7a4808b6e97305dac6"
+  },
+  "annotations": [],
+  "endpoints": {
+    "createRefund": {
+      "apiPath": "/api/v1/pa/refunds/create",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "request_id"
+              ],
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "payment_attempt_id": {
+                  "type": "string"
+                },
+                "payment_intent_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "request_id": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Refund"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "retrieveRefund": {
+      "apiPath": "/api/v1/pa/refunds/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Refund"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "listRefunds": {
+      "apiPath": "/api/v1/pa/refunds",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "connected_account_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "currency",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "from_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page_num",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "payment_attempt_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "payment_intent_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "status",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "to_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Refund"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": true
+    }
+  },
+  "schemas": {
+    "Refund": {
+      "type": "object",
+      "properties": {
+        "acquirer_reference_number": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "connected_account_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "failure_details": {
+          "$ref": "#/components/schemas/Payment_Acceptance_FailureDetails"
+        },
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "payment_attempt_id": {
+          "type": "string"
+        },
+        "payment_intent_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Payment_Acceptance_FailureDetails": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        },
+        "message": {
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

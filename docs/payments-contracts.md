@@ -1,0 +1,58 @@
+# Payments resource contracts
+
+The PHP resource methods below implement the accepted [Payments inventory](api-contracts.md#resource-inventory) at API **2026-08-21**. [Consumer interfaces](consumer-interfaces.md) own the shared signatures and lossless payload representation. These are account-owned operations, independent from organization Billing customers and sources.
+
+## Operations and authorization
+
+All paths below follow `/api/v1/pa`. The selected endpoint metadata independently reports `x-resourceLevel=account`, `x-oboSupported=true`, and `payment_acceptance:read` for reads or `payment_acceptance:write` for mutations. Authenticate using account-authorized API-key credentials and optional login account selection, or independently eligible platform delegation. See [account ownership](connected-account-contracts.md#credential-and-request-contexts) and [client configuration](client-configuration.md).
+
+| Resource accessor | Public operations | Path details and required input |
+| --- | --- | --- |
+| `customers()` | create, retrieve, list, update | `customers/create`, `customers/{id}`, `customers`, `customers/{id}/update`; create requires `merchant_customer_id` and `request_id`; update requires `request_id` |
+| `paymentConsents()` | create, retrieve, list, update, verify, continueVerification, disable | `payment_consents` with `/create`, `/{id}`, `/{id}/update`, `/{id}/verify`, `/{id}/verify_continue`, `/{id}/disable`; create requires `customer_id`, `next_triggered_by`, `request_id`; every other mutation requires `request_id` |
+| `paymentMethods()` | retrieve, list | `payment_methods/{id}` and `payment_methods`; no instrument creation/update convenience method |
+| `paymentIntents()` | create, retrieve, list, confirm, continueConfirmation, capture, cancel | `payment_intents` with `/create`, `/{id}`, `/{id}/confirm`, `/{id}/confirm_continue`, `/{id}/capture`, `/{id}/cancel`; create requires `amount`, `currency`, `merchant_order_id`, `request_id`; every action requires `request_id` |
+| `paymentAttempts()` | retrieve, list | `payment_attempts/{id}` and `payment_attempts` |
+| `refunds()` | create, retrieve, list | `refunds/create`, `refunds/{id}` and `refunds`; create requires `request_id` and an Intent or Attempt reference |
+
+Create/update/action calls send POST; retrieve/list send GET. These selected Payments actions all have JSON bodies; disabling a Consent is not bodyless. Omitted optional fields remain omitted. Create Client Secret, Method mutations, Intent update/incremental authorization, funds splitting, terminals and other product APIs have no public resource methods here. The shared provider Intent schema includes funds-split data, but the accepted scope rejects that operation field and enabling WeChat funds splitting locally.
+
+`connected_account_id` in Intent/Consent creation describes a platform-owned transaction. It is distinct from a delegated account owning the resource and cannot be combined with `x-on-behalf-of`; the SDK rejects that combination before authentication, including the corresponding list filter. Supplying a known account ID establishes no eligibility or authorization by itself. Cross-account resource rejection remains the provider's responsibility, exercised separately from deterministic header isolation.
+
+## Request schemas and financial representation
+
+[Bundled operation contracts](../resources/contracts/payments/) retain the selected accepted request/response structures, local component references, permissions and version provenance. Documentation sample values and prose are excluded from these runtime files; annotated enum, length and required-when constraints retain explicit request requirements from the selected field descriptions. Descriptive Method type lists do not override additional explicitly defined method branches. Unknown request fields fail locally; additional response keys and unknown strings remain available. The complete method-specific fields of each selected operation are retained, rather than using one generic Method payload for every action. In particular, one-step Intent creation has a narrower method shape than confirmation.
+
+Money and every schema `number` position use base-10 strings in PHP and exact JSON number tokens on the wire. This includes nested agreement amounts and micro-deposit arrays. Known integer positions remain integers within PHP range. The SDK performs no rounding, amount arithmetic, currency conversion or currency/method eligibility lookup; provider currency scale and account constraints remain authoritative. Numeric-looking metadata and IDs stay strings.
+
+Request identity remains consumer supplied. Descriptions constrain most `request_id` values to 64 characters; the selected Consent continuation description supplies no maximum, so the SDK imposes no invented cap there. Metadata accepts at most 50 string pairs, with keys up to 50 characters and values up to 500. Consent metadata's schema omits its dictionary value type; its documented character limits establish the string representation recorded as a bundle annotation. Explicit `terms_of_use.total_billing_cycles=null` is supported because its description defines an indefinite mandate. Other omitted/default-null descriptions do not establish arbitrary explicit-null request support.
+
+Typed schema validation and documented local conditional checks cover identity, metadata, selected method payload branches, wallet token branches, ACH/Bacs verification inputs, saved-Method trigger information, pre-authorization capture settings, agreement fields/period units, verification override amounts and continuation payloads. Explicit Method ID reuse retains its operation schema without demanding replacement credentials. Date filters require valid ISO8601 timestamps with explicit timezones and preserve the supplied precision/offset. Remote resource state, authorization windows, remaining refundable/capturable amounts and provider-specific eligibility are evaluated by Airwallex. A named call issues its operation without a hidden preliminary fetch or automatic follow-on financial action.
+
+## Instruments, confirmation and continuation
+
+Create a Payments Customer separately from its Billing Customer. Create a Consent with explicit `next_triggered_by=merchant` and applicable `merchant_trigger_reason` for an authorized subsequent charge. Verify using the operation's Method data or an existing Method ID; inspect `status` and `next_action`. The [saved-Consent recipe](../examples/payments-saved-consent.php) executes these accepted account and charge conventions against deterministic fakes. The application verifies buyer ownership and authorization before running it and persists every request identity.
+
+Card and wallet verification can require an authorized browser action. ACH verification can use micro-deposits or Plaid; the selected API places `verification_method` in the Method object. Some product examples instead show older option paths and legacy events; use selected schemas and the [versioned catalogue](webhook-contracts.md), rather than copying those aliases. Bacs can remain `PENDING`; PayTo can be `PAUSED`; neither state is silently treated as verified. Fields explicitly present in the schema, including PayTo, remain available even when an API descriptive type list omits them.
+
+`continueVerification()` accepts the selected `verify_micro_deposits` and `retry_micro_debit` forms. Micro-deposit amounts retain their exact decimal strings; a debit retry does not invent an amounts field. `continueConfirmation()` supports its independently documented micro-deposit or encrypted PIN continuation forms. Browser redirect/3DS actions remain browser integration work, rather than an invented server continuation payload. Return URLs may be application scheme URIs where the operation allows them; no universal HTTPS-only return-URL restriction is introduced.
+
+Manual capture requires explicit provider settings and a capturable authorization. Card `pre_auth` also requires `auto_capture=false`; card brand, method and authorization expiry restrictions remain provider enforced. Cancellation applies to the documented cancellable Intent states, and returning `PENDING`, a next action or a successful authorization does not prove capture or settlement. Attempt reads expose the provider's more detailed progress. Unknown status or next-action strings are preserved for consumer review.
+
+## Refunds, errors and replay
+
+A Refund refers to the original Intent or Attempt in the same effective account. Omit `amount` for the remaining captured/unrefunded amount; supply a decimal string for a partial refund. Provider method support, dispute state, refund age, available funds and remaining amount determine acceptance. `RECEIVED`, `ACCEPTED`, `SETTLED` and `FAILED` remain distinct; acceptance does not prove the shopper has received funds. Refunds return to the original instrument; alternate-destination transfers are outside this flow.
+
+The selected refund/capture contracts document `invalid_status_for_operation`, `amount_above_limit` and other endpoint-specific failures. Typed exceptions retain safe status/code/source; malformed errors and ambiguous transport outcomes follow [client diagnostics](client-configuration.md#responses-paging-and-failures). The SDK never retries a mutation or replaces its request identity. The Intent product guide explicitly describes returning the original create result when the same `request_id` is retried after a timeout, but supplies no replay window and establishes no replay contract for other mutations. Automatic mutation replay therefore remains disabled.
+
+All lists retain `items`/`has_more`, zero-based `page_num`, original filters and explicit account context, with one caller-selected page per call. No synchronization, persistence, retries of provider collection attempts, entitlement decision or refund completion inference is added.
+
+## Sources and evidence boundary
+
+Reviewed on 2026-11-08 with each API page reporting `currentVersion=2026-08-21` and specification `airwallex-openapi-2026-08-21.yaml` (`f3dcbacb0453ce7a4808b6e97305dac6`).
+
+- [Payments Customers](https://www.airwallex.com/docs/api/payments/customers), [Consents](https://www.airwallex.com/docs/api/payments/payment_consents), [Methods](https://www.airwallex.com/docs/api/payments/payment_methods).
+- [Intents](https://www.airwallex.com/docs/api/payments/payment_intents), [Attempts](https://www.airwallex.com/docs/api/payments/payment_attempts), [Refunds](https://www.airwallex.com/docs/api/payments/refunds).
+- [PaymentIntent setup and idempotency](https://www.airwallex.com/docs/payments/get-started/using-payments-intent-api), [manual capture](https://www.airwallex.com/docs/payments/payment-operations/manage-payments/place-a-hold-on-a-payment-method), [micro-deposit verification](https://www.airwallex.com/docs/payments/payment-methods/north-america-and-latam/ach-direct-debit/micro-deposit-verification), [refund behavior](https://www.airwallex.com/docs/payments/payment-operations/manage-payments/refunds).
+
+Deterministic fakes validate the documented signatures, selected operation shapes, financial wire bytes, method-specific next actions, account headers and failure behavior. They do not establish product activation, real Method acceptance or connected-merchant Billing linkage. [#17](https://github.com/jojeringnax/airwallex-php-sdk/issues/17) and [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) own opt-in sandbox journeys and provider confirmations. Browser collection, method eligibility and actual webhook deliveries remain explicit runtime evidence gates.
