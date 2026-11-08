@@ -1,0 +1,70 @@
+# Billing capability boundaries
+
+Contract review for [issue #5](https://github.com/jojeringnax/airwallex-php-sdk/issues/5), verified on **2026-11-08** against API **`2026-08-21`**. This reference defines document access, checkout, self-service and trial boundaries for later interfaces. [Planning](planning.md) owns release scope; the [API inventory](api-contracts.md) owns version policy and the [connected-account reference](connected-account-contracts.md) owns authorization and linkage.
+
+## Accepted scope
+
+| Capability | Initial SDK scope | Consumer responsibility / boundary |
+| --- | --- | --- |
+| Invoice documents | Return provider `pdf_url` and `hosted_url` through invoice retrieval | Authorize the buyer, download or redirect, store and deliver documents; no SDK PDF renderer, downloader or mailer |
+| Checkout | Server-side create/retrieve/update/cancel for `HOSTED`, `EMBEDDED` and `ELEMENTS`, across supported `PAYMENT`, `SUBSCRIPTION` and `SETUP` modes | Redirect or integrate Airwallex.js; browser components remain outside the PHP package |
+| Self-service | Verified customer, source, subscription and invoice API operations underpin an application portal | Application owns UI, tenant authorization, persistence and reconciliation; provider-hosted Billing portal sessions deferred pending a verified contract |
+| Provider trials / future starts | Subscription `starts_at` and `trial_ends_at`, including checkout `subscription_data` | Application chooses dates and access policy; provider owns remote trial and billing state |
+| Generic local trials | Outside SDK implementation | Application stores trial dates and grants access, creating remote Billing resources when its policy requires |
+| Cancellation | Immediate cancellation and documented scheduled-ending fields | Application owns grace/access policy; schedule reversal needs the evidence gate below; cancelled-subscription reactivation and pause APIs deferred |
+
+These boundaries retain native provider capabilities without adding application infrastructure to the framework-independent package. Link exposure avoids coupling the SDK to document storage/delivery. Supporting checkout UI modes at the server boundary lets applications choose their browser experience while sharing one Billing contract.
+
+## Selected-version evidence
+
+The official [Invoices API](https://www.airwallex.com/docs/api/billing/invoices), [Billing Checkouts API](https://www.airwallex.com/docs/api/billing/billing_checkouts) and [Subscriptions API](https://www.airwallex.com/docs/api/billing/subscriptions) page metadata each reported `currentVersion=2026-08-21`. Request properties, resource schemas and endpoint lists were inspected in `activeCategory`. All endpoints in these three groups report organization resource level and no on-behalf-of support. Use credentials authorized for the owning Billing organization, not a Payments delegation header. Linked collection-account eligibility still follows the connected-account reference.
+
+### Invoice access and delivery
+
+`GET /api/v1/billing/invoices/{id}` returns the Invoice schema. Its `pdf_url` is a download link valid for 35 days and is `null` before finalization. `hosted_url` lets a customer view/pay an invoice and is also documented as valid for 35 days. The schema does not establish the clock origin or guarantee that every retrieve regenerates either link. The [invoicing guide](https://www.airwallex.com/docs/billing/invoicing/get-started-with-invoicing) describes digital links as valid for 35 days after the due date and obtaining a new link via the web app or API. Preserve this validity-clock ambiguity for expiry/refresh validation rather than calculating an SDK expiry or promising renewal on every read.
+
+The [Billing setup guide](https://www.airwallex.com/docs/billing/get-started-with-billing) describes provider invoice email delivery to the supplied customer email address. That is provider behavior, not an SDK send/resend API contract. No dedicated PDF generation, binary download or email-send operation was found in the inspected 17 Invoice endpoints. This limits the verified SDK contract; it does not prove such provider features never exist.
+
+Consumer scenario: authorize the local buyer against the stored Billing Customer mapping, retrieve their invoice under the owning organization and return the available PDF/view link. A draft's null PDF is an expected state. If a link is expired, retrieve current resource data; confirm refresh behavior in sandbox or with Airwallex before promising a replacement. Downloading, archiving and emailing belong to the application.
+
+### Checkout UI contracts
+
+Create uses `POST /api/v1/billing/billing_checkouts/create`; `ui_mode` accepts `HOSTED` (default), `EMBEDDED` or `ELEMENTS`. The Checkout response includes `client_secret` only for the two embedded modes. Its `url` is present only while `ACTIVE`; an unpaid checkout expires after one hour. The [embedded guide](https://www.airwallex.com/docs/billing/billing-components/checkout/embedded-billing-checkout) and [Elements guide](https://www.airwallex.com/docs/billing/billing-components/checkout/billing-checkout-elements) describe browser initialization using that secret. These use Billing Checkout, whereas Payments Elements operate on Payment Intents; the [comparison](https://www.airwallex.com/docs/billing/billing-components/checkout) distinguishes them.
+
+Consumer scenario: create an on-demand `SUBSCRIPTION` checkout with a recurring price, owning legal entity, eligible collection account and request ID. For `HOSTED`, redirect to `url`; for `EMBEDDED` or `ELEMENTS`, pass only the checkout client secret and necessary configuration to the authorized browser and mount the appropriate Airwallex.js component. Keep API credentials and bearer tokens server-side and redact client secrets from diagnostics. Retrieve the checkout and resulting resources or process verified webhooks to reconcile completion; a browser success callback/redirect alone establishes neither settlement nor application entitlement. Mode-specific setup/payment examples and PHP method signatures remain in [#6](https://github.com/jojeringnax/airwallex-php-sdk/issues/6) and [#21](https://github.com/jojeringnax/airwallex-php-sdk/issues/21).
+
+### Self-service and portal evidence
+
+The [sample integration](https://www.airwallex.com/docs/billing/subscriptions/subscriptions-via-api/sample-integration) discusses a customer portal and backend synchronization. It does not specify a hosted Billing portal-session endpoint, authentication, return URL or permitted-action contract. The reviewed Billing resource endpoints do not establish one either. The [Airi portal](https://www.airwallex.com/docs/payments/payment-methods/global/airi) manages shoppers' saved payment details; it is not evidence for Billing subscription self-service sessions.
+
+Consumer scenario: the application's authenticated portal retrieves the buyer's invoices, requests supported plan/quantity changes, or schedules cancellation through organization-authorized backend calls. To replace an instrument, collect it using an approved setup flow, verify ownership, then update the subscription source. The Subscription update schema documents an immediate retry of the last failed invoice payment when `payment_source_id` is updated; this side effect has not been exercised in sandbox. Source changes therefore require an explicit consumer action and financial-side-effect documentation; see [#28](https://github.com/jojeringnax/airwallex-php-sdk/issues/28). Source deletion/default-management and a hosted portal API remain unverified, not inferred from UI mentions.
+
+### Trials, cancellation and grace
+
+Subscription create accepts `starts_at` (immediate by default) and `trial_ends_at`; Checkout create accepts both within `subscription_data`. The [subscription guide](https://www.airwallex.com/docs/billing/subscriptions/subscriptions-via-api) places the trial start at `starts_at` and excludes the trial from billing duration. Its update table permits start changes in `PENDING` and trial-end changes in `PENDING`/`IN_TRIAL`. The update schema documents `NOW` for immediate pending start or trial termination. Preserve timezone and precision; full range/error fixtures belong to [#23](https://github.com/jojeringnax/airwallex-php-sdk/issues/23).
+
+Consumer scenario: choose a future `starts_at` and later `trial_ends_at`, create the remote subscription (or a subscription checkout), then retrieve observed `PENDING`, `IN_TRIAL` and subsequent billing state. A local trial instead exists solely in application storage until remote creation; it does not imply an Airwallex subscription or suppress provider billing. Exact PHP representations are left to #6.
+
+Immediate cancellation uses `POST /api/v1/billing/subscriptions/{id}/cancel` with required `request_id` and `proration_behavior`: `ALL` refunds the current-period charge, `PRORATED` refunds the prorated amount, and `NONE` refunds no unused time. The product guide says cancellation is permanent and stops pending automatic subscription payments. It is not a promise that outstanding invoices are voided.
+
+Scheduled ending uses Subscription update: `cancel_at_period_end=true` schedules period-end cancellation; `ends_at` supplies a scheduled end, while creation allows it only when `duration` is empty. Update also exposes `duration`/`remaining_duration`; their interaction and schedule-clearing behavior require fixtures before convenience methods are defined. `cancel_at_period_end=false` exists in the schema, but the product update table omits this field and provides no complete reversal rules. Include the documented field in the resource contract; gate a guaranteed reversal operation on provider confirmation or sandbox evidence for the applicable non-cancelled state. Never describe it as reactivation of a cancelled subscription. No pause/resume endpoint or paused state was found among the seven inspected Subscription endpoints and status enum.
+
+Consumer scenario: retrieve the subscription, request period-end ending, and reconcile the returned schedule. The application may retain access through its chosen paid-through date. If the buyer changes their mind before cancellation, clear the schedule only after validating supported reversal for that state; after permanent cancellation, any new subscription is a separate financial resource. Access grace never delays a provider cancellation or charge by itself.
+
+For recovery, the [API inventory](api-contracts.md#payment-recovery-conflict) records the fixed-retry API introduction versus configurable [dunning guide](https://www.airwallex.com/docs/billing/subscriptions/dunning). Preserve observed `UNPAID`/`ACTIVE`/`CANCELLED` state and account settings; no universal retry schedule, inevitable cancellation, SDK collection scheduler or automatic access cutoff follows from this review.
+
+## Delivery and evidence gates
+
+This is a documentation contract review, not a sandbox validation result. There are no executable SDK interfaces yet. Before claiming integration support, use explicitly configured sandbox credentials and sanitized fixtures; no live financial operations are required.
+
+| Owning work | Required result / validation |
+| --- | --- |
+| [#6](https://github.com/jojeringnax/airwallex-php-sdk/issues/6) | Translate these scenarios into approved PHP interfaces, including optional/null fields and unknown values |
+| [#21](https://github.com/jojeringnax/airwallex-php-sdk/issues/21) | Cover all accepted UI/mode combinations; test URL/client-secret presence, one-hour expiry, cancellation and backend completion reconciliation |
+| [#23](https://github.com/jojeringnax/airwallex-php-sdk/issues/23) | Trial/future-start payloads, timezone precision, status-dependent updates and invalid ranges |
+| [#26](https://github.com/jojeringnax/airwallex-php-sdk/issues/26) | Immediate proration choices, scheduled ends, invalid/already-cancelled states; confirm schedule reversal/interactions before promising it; preserve pause/reactivation deferral |
+| [#27](https://github.com/jojeringnax/airwallex-php-sdk/issues/27) | Return nullable PDF and hosted links; test draft/finalized access and expired-link handling; resolve validity-clock/refresh ambiguity with Airwallex or sandbox |
+| [#28](https://github.com/jojeringnax/airwallex-php-sdk/issues/28) | Source-change retry side effects, account-configured recovery and ownership failures |
+| [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) | Validate the account-specific journeys and entitlement prerequisites; seek Airwallex confirmation of hosted Billing portal availability/session contract if revisiting that deferral |
+
+Hosted Billing portal sessions and pause/reactivation remain deliberate deferrals. Reopening them requires provider contracts, account eligibility and a separate scope decision. Application portal, document delivery, local trial and entitlement implementations remain outside this repository.
