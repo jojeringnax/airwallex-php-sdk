@@ -1,6 +1,6 @@
 # Consumer interface examples
 
-Use these examples when implementing or reviewing a consumer workflow. The [interface conventions](consumer-interfaces.md) define the shared public contract. The webhook verification and decoding boundary is exercised against synthetic fixtures in deterministic tests. The other recipes remain executable-shaped specifications pending their resource implementation; sandbox execution requires the separate integration evidence recorded with each capability.
+Use these accepted workflow shapes when implementing or reviewing consumer calls. The [interface conventions](consumer-interfaces.md) own the shared public contract; the [consumer guide](usage.md) supplies development-source installation and an index of runnable recipe files executed against deterministic fixtures. The snippets below describe the same supported calls without claiming sandbox or account-specific validation. Operation details and evidence boundaries remain in [Billing resources](billing-resources.md), [Payments contracts](payments-contracts.md) and the [webhook catalogue](webhook-contracts.md).
 
 ## Initialization and account contexts
 
@@ -71,19 +71,19 @@ $checkoutState = $billing->billing()->checkouts()->retrieve($checkout['id']);
 
 Authorize the local buyer before every call; organization credentials can access multiple buyers. A hosted checkout's active `url` is the redirect target. With `ui_mode=EMBEDDED` or `ELEMENTS`, deliver `client_secret` only to the authorized browser for the corresponding Airwallex.js integration; keep it out of logs. PHP does not mount browser components. Neither redirect nor browser callback proves payment completion: retrieve provider state and reconcile verified events. See [checkout boundaries](billing-capabilities.md#checkout-ui-contracts) for one-hour expiry and nullable response fields.
 
-The same `checkouts()->create()` shape covers the following modes, each with a fresh persisted request ID. UI mode is independent of the business mode; mode-specific constraints must be tested in [#21](https://github.com/jojeringnax/airwallex-php-sdk/issues/21).
+The same `checkouts()->create()` shape covers the following modes, each with a fresh persisted request ID. UI mode is independent of the business mode; mode-specific contracts and deterministic coverage are documented in [Billing resources](billing-resources.md).
 
 | Mode | Payload change / use |
 | --- | --- |
 | `SUBSCRIPTION` | Recurring Price line items; optional `subscription_data` with `starts_at` and `trial_ends_at` |
 | `PAYMENT` | One-time Price line items; reconcile the resulting payment/invoice rather than assuming a subscription |
-| `SETUP` | Omit `line_items`; collect an instrument for the existing Billing Customer and eligible linked account, then retrieve resulting state before charging later |
+| `SETUP` | Supply `currency` and the existing Billing Customer; omit `line_items`; collect an instrument under the eligible linked account, then retrieve resulting state before charging later |
 
 Checkout update uses `update($id, $body)` with only verified mutable fields; cancellation uses `cancel($id)` without an invented request ID. Retrieve after ambiguous outcomes rather than assuming safe replay. A setup alone is not consent to an arbitrary later charge.
 
 ## Saved instrument and direct subscription
 
-The application first creates a Payments Customer using `payments()->customers()->create($body)` and stores it separately from the Billing Customer. Create a Consent using `paymentConsents()->create()` with `customer_id`, persisted `request_id`, `next_triggered_by=merchant` and the applicable `merchant_trigger_reason`; the documented Billing source flow uses `unscheduled`. Use approved browser/provider verification to collect details, call `verify($id, $body)` / `continueVerification($id, $body)` where required, and retrieve state. Payment-method-specific bodies and browser actions require their own endpoint fixtures; no raw card data belongs in these examples.
+The application first creates a Payments Customer using `payments()->customers()->create($body)` with `merchant_customer_id` and a persisted `request_id`, and stores it separately from the Billing Customer. Create a Consent using `paymentConsents()->create()` with `customer_id`, persisted `request_id`, `next_triggered_by=merchant` and the applicable `merchant_trigger_reason`; the documented Billing source flow uses `unscheduled`. Use approved browser/provider verification to collect details, call `verify($id, $body)` / `continueVerification($id, $body)` where required, and retrieve state. Use the [selected method-specific contracts](payments-contracts.md#instruments-confirmation-and-continuation) and approved browser/provider actions; no raw card data belongs in these examples.
 
 ```php
 $consent = $payments->payments()->paymentConsents()->retrieve('<verified-consent-id>');
@@ -108,7 +108,7 @@ $subscription = $billing->billing()->subscriptions()->create([
 ]);
 ```
 
-Before linkage, verify the local buyer, Consent/Payments Customer ownership, Billing Customer and collection account together. The SDK cannot infer cross-family ownership from ID strings. Other methods need verified linkage; this card-shaped example does not restrict accepted method coverage. The API requires the Method ID as `external_id`, not the Consent ID; see the [source contract discrepancy](api-contracts.md#representative-contract-checks).
+The [executed card-linkage recipe](../examples/billing-card-subscription.php) implements this sequence with identity/ownership guards and stops before Subscription create if the returned source is unusable. Before linkage, verify the local buyer, Consent/Payments Customer ownership, Billing Customer and collection account together. The SDK cannot infer cross-family ownership from ID strings. Other methods need verified linkage; this card-shaped example does not restrict accepted method coverage. The API requires the Method ID as `external_id`, not the Consent ID; see the [source contract discrepancy](api-contracts.md#representative-contract-checks).
 
 For provider trials/future starts, add timezone-bearing `starts_at` and later `trial_ends_at` strings to Subscription create, or to checkout `subscription_data`. Retrieve observed `PENDING`/`IN_TRIAL` and subsequent state. A generic local trial is application storage/access policy with no SDK call; creating a remote subscription remains a deliberate financial action. Do not hide it in a trial convenience method.
 
@@ -131,7 +131,7 @@ $changedPlan = $billing->billing()->subscriptions()->update($subscription['id'],
 ]);
 ```
 
-An omitted existing item stays unchanged; its `price_id` cannot be edited in place. `NONE`, `PRORATED` and `ALL` follow provider proration semantics; per-item `proration_mode` overrides the default. The SDK does not compute credits or hide a billing-cycle reset. Billing anchors, state restrictions and item-level fixtures belong to [#24](https://github.com/jojeringnax/airwallex-php-sdk/issues/24) and [#25](https://github.com/jojeringnax/airwallex-php-sdk/issues/25).
+An omitted existing item stays unchanged; its `price_id` cannot be edited in place. `NONE`, `PRORATED` and `ALL` follow provider proration semantics; per-item `proration_mode` overrides the default. The SDK does not compute credits or hide a billing-cycle reset. The [Billing financial-control reference](billing-resources.md#choosing-subscription-financial-controls) documents provider defaults, explicit billing actions and deterministic coverage; current-state restrictions remain provider-enforced.
 
 Choose **one** cancellation action according to consumer intent:
 
@@ -172,7 +172,7 @@ $observed = $payments->payments()->paymentIntents()->retrieve($intent['id']);
 
 Confirmation uses `confirm($id, $body)` with persisted `request_id` and verified method/Consent details; follow `next_action` via approved browser or `continueConfirmation($id, $body)` calls. A merchant-initiated subsequent charge explicitly references the saved Consent in the same account and follows its authorization. For separate authorization/capture, select documented manual capture settings at confirmation; `capture($id, ['request_id' => ..., 'amount' => '19.90'])` applies only to a capturable authorization. `cancel($id, ['request_id' => ...])` requires a cancellable Intent state. These are alternative state-dependent actions, not an unconditional sequence.
 
-Refunds use `refunds()->create(['request_id' => ..., 'payment_intent_id' => $intent['id'], 'amount' => '5.00', 'reason' => 'requested_by_customer'])`, then `retrieve($refundId)` to inspect status. Do not treat acceptance as completed settlement. Retrieve/list Payment Attempts for status details and `paymentMethods()->retrieve($methodId)` for saved instrument details. Full method-specific schemas and failure paths require endpoint implementation fixtures.
+Refunds use `refunds()->create(['request_id' => ..., 'payment_intent_id' => $intent['id'], 'amount' => '5.00', 'reason' => 'requested_by_customer'])`, then `retrieve($refundId)` to inspect status. Do not treat acceptance as completed settlement. Retrieve/list Payment Attempts for status details and `paymentMethods()->retrieve($methodId)` for saved instrument details. The [Payments contracts](payments-contracts.md) record selected method-specific schemas and deterministic failure coverage; actual method/account acceptance remains sandbox/provider evidence.
 
 ## Pagination and failures
 
@@ -190,9 +190,9 @@ $paymentPage = $payments->payments()->paymentIntents()->list([
 // If has_more is true, request page_num 1 with the same filters and client.
 ```
 
-Retain all original filters and context on subsequent pages. Billing bookmarks and Payments page numbers remain distinct; no automatic network iteration is promised. List bounds/envelopes are verified per resource in [#16](https://github.com/jojeringnax/airwallex-php-sdk/issues/16).
+Retain all original filters and context on subsequent pages. Billing bookmarks and Payments page numbers remain distinct; no automatic network iteration is promised. The [Billing](billing-resources.md#validation-and-precision) and [Payments](payments-contracts.md#refunds-errors-and-replay) references document their selected list bounds and envelopes.
 
-All SDK exceptions implement `Jojeringnax\Airwallex\Exception\SdkException` (a `Throwable` interface). `ConfigurationException` covers invalid setup/context, `ValidationException` invalid local arguments, `TransportException` no usable HTTP response, `ProtocolException` malformed successful responses, and `ApiException` HTTP failures. `ApiException` exposes `httpStatus(): int`, `providerCode(): ?string` and `providerSource(): ?string`; invalid/missing provider error JSON leaves provider fields null while retaining HTTP status. Provider message/details, secrets and raw bodies are excluded from default exception messages, serialization and logs. Diagnostic design belongs to [#14](https://github.com/jojeringnax/airwallex-php-sdk/issues/14).
+All SDK exceptions implement `Jojeringnax\Airwallex\Exception\SdkException` (a `Throwable` interface). `ConfigurationException` covers invalid setup/context, `ValidationException` invalid local arguments, `TransportException` no usable HTTP response, `ProtocolException` malformed successful responses, and `ApiException` HTTP failures. `ApiException` exposes `httpStatus(): int`, `providerCode(): ?string` and `providerSource(): ?string`; invalid/missing provider error JSON leaves provider fields null while retaining HTTP status. Provider message/details, secrets and raw bodies are excluded from default exception messages, serialization and logs. The [client diagnostic reference](client-configuration.md#responses-paging-and-failures) records safe fields and default diagnostic behavior.
 
 ```php
 try {
