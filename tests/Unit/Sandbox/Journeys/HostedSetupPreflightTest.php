@@ -121,9 +121,19 @@ final class HostedSetupPreflightTest extends TestCase
             $options ?? $this->options(),
             static fn (Configuration $config, string $context): SandboxSession
                 => new SandboxSession($config, $context, $transport),
-            function (string $url, array $expected, bool $render, bool $observeConfig) use ($fault, $options): array {
+            function (
+                string $url,
+                array $expected,
+                bool $render,
+                bool $observeConfig,
+                bool $observeNormal,
+            ) use (
+                $fault,
+                $options
+            ): array {
                 self::assertSame(($options['render-owned-data'] ?? false) === true, $render);
                 self::assertSame(($options['observe-one-method-config'] ?? false) === true, $observeConfig);
+                self::assertSame(($options['observe-normal-reads'] ?? false) === true, $observeNormal);
                 self::assertSame([
                     'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
                 ], $expected);
@@ -149,6 +159,21 @@ final class HostedSetupPreflightTest extends TestCase
                     ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_method_config_read']['body_hash']);
                 } else {
                     self::assertArrayNotHasKey('preflight_method_config_read', $state['actions']);
+                }
+                foreach (
+                    ['customer', 'consent_list', 'country', 'checkout_status_0',
+                    'checkout_status_1', 'checkout_status_2'] as $role
+                ) {
+                    if ($observeNormal) {
+                        $action = $state['actions']['preflight_normal_' . $role] ?? null;
+                        self::assertIsArray($action);
+                        self::assertSame(hash('sha256', json_encode($expected + [
+                            'method' => 'GET', 'role' => $role, 'scope' => 'fresh_payer_and_exact_original_frame',
+                            'target_data' => 'bound_in_private_browser_memory', 'observation_window_max_ms' => 8000,
+                        ], JSON_THROW_ON_ERROR)), $action['body_hash']);
+                    } else {
+                        self::assertArrayNotHasKey('preflight_normal_' . $role, $state['actions']);
+                    }
                 }
                 self::assertStringNotContainsString('PRIVATE_SYNTHETIC_SESSION', $contents);
                 $this->browserCalls++;
@@ -218,6 +243,19 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertSame(1, $this->browserCalls);
         self::assertSame(1, $this->cancels);
         self::assertSame(['customers' => 1, 'checkouts' => 1], $result['created_counts']);
+    }
+
+    public function testFiniteNormalSlotsAreDurableWithoutPretendingUnknownWireDataWasKnown(): void
+    {
+        $options = $this->options();
+        $options['render-owned-data'] = true;
+        $options['observe-one-method-config'] = true;
+        $options['observe-normal-reads'] = true;
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['normal_reads_requested']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function testMethodReadIntentIsDurableBeforePrivateBrowserHandoff(): void
@@ -332,6 +370,8 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'invalid render mode' => ['render-owned-data', 'PRIVATE_MODE'];
         yield 'method without render' => ['observe-one-method-config', true];
         yield 'invalid method mode' => ['observe-one-method-config', 'PRIVATE_MODE'];
+        yield 'normal without method' => ['observe-normal-reads', true];
+        yield 'invalid normal flag' => ['observe-normal-reads', 'PRIVATE_MODE'];
     }
 
     #[DataProvider('invalidOptions')]
@@ -350,6 +390,9 @@ final class HostedSetupPreflightTest extends TestCase
     public static function invalidMethodFlags(): iterable
     {
         yield 'requires rendering' => [['--observe-one-method-config']];
+        yield 'normal missing method' => [['--render-owned-data', '--observe-normal-reads']];
+        yield 'normal value' => [['--observe-normal-reads=true']];
+        yield 'normal duplicate' => [['--observe-normal-reads', '--observe-normal-reads']];
         yield 'rejects a flag value' => [['--render-owned-data', '--observe-one-method-config=true']];
         yield 'rejects duplicate flags' => [['--render-owned-data', '--observe-one-method-config',
             '--observe-one-method-config']];
