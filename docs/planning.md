@@ -23,7 +23,7 @@ The initial release covers both subscription billing and standalone Payments ([i
 | Saving payment methods and subsequent charges | Required |
 | One-time payments, authorization, capture and payment cancellation | Required |
 | Payment status retrieval and refunds | Required |
-| Invoice retrieval | Required; document/PDF access needs capability review |
+| Invoice retrieval | Required, including provider PDF and hosted links; see [Billing capability boundaries](billing-capabilities.md) |
 | Webhooks | SDK verification and event contracts required; state synchronization and reconciliation belong to consumers |
 | Connected-account support | Both platform billing of connected accounts and connected merchants billing their buyers; subject to independent provider-eligibility verification per family |
 | Authentication | Client ID and API key exchanged for bearer tokens; OAuth deferred |
@@ -34,3 +34,5 @@ The initial release covers both subscription billing and standalone Payments ([i
 For platform requests and Billing–Payments ownership, consult [connected-account contracts](connected-account-contracts.md), including the two Billing models and account-eligibility prerequisites.
 
 Both Billing models are included to cover platform service subscriptions and merchants’ customer billing. API-key authentication provides the initial credential path; OAuth authorization and refresh support require a separate scope decision.
+
+For invoice documents, self-service, checkout UI modes, trials and cancellation/grace boundaries, consult [Billing capability boundaries](billing-capabilities.md).
