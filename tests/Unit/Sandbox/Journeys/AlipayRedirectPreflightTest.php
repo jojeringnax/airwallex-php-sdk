@@ -84,6 +84,17 @@ final class AlipayRedirectPreflightTest extends TestCase
                     $data['next_action']['method'] = 'POST';
                 } elseif ($fault === 'unknown_action') {
                     $data['next_action']['type'] = 'PRIVATE_ACTION';
+                } elseif ($fault === 'regional_sg') {
+                    $data['next_action']['url'] = str_replace('/hk/', '/sg/', self::URL);
+                } elseif ($fault === 'mock_hk') {
+                    $data['next_action']['url'] = str_replace('/redirect/', '/sandbox/', self::URL);
+                } elseif ($fault === 'mock_sg') {
+                    $data['next_action']['url'] = str_replace('/redirect/hk/', '/sandbox/sg/', self::URL);
+                } elseif ($fault === 'other_sandbox_path') {
+                    $data['next_action']['url'] = 'https://api.sandbox.airwallex.com/pa/PRIVATE_ID'
+                        . '?PRIVATE_KEY=PRIVATE_VALUE';
+                } elseif ($fault === 'lookalike_url') {
+                    $data['next_action']['url'] = str_replace('.com/', '.com.evil.test/', self::URL);
                 } elseif ($fault === 'foreign_url') {
                     $data['next_action']['url'] = 'https://api.airwallex.com/PRIVATE_ID';
                 }
@@ -192,6 +203,41 @@ final class AlipayRedirectPreflightTest extends TestCase
         self::assertSame('cancelled', $safe['cleanup']);
         self::assertCount(0, $this->customerGets);
         self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return iterable<string,array{string,string,string,bool}> */
+    public static function redirectTargets(): iterable
+    {
+        yield 'verified regional SG' => ['regional_sg', 'sandbox_api', 'redirect_sg', true];
+        yield 'mock HK remains diagnostic' => ['mock_hk', 'sandbox_api', 'sandbox_hk', false];
+        yield 'mock SG remains diagnostic' => ['mock_sg', 'sandbox_api', 'sandbox_sg', false];
+        yield 'other Sandbox path remains diagnostic' => ['other_sandbox_path',
+            'sandbox_api', 'other_sandbox_path', false];
+        yield 'lookalike never navigates' => ['lookalike_url', 'unverified_origin', 'redirect_hk', false];
+    }
+
+    #[DataProvider('redirectTargets')]
+    public function testTargetEvidenceSurvivesBeforeTheEligibilityGate(
+        string $fault,
+        string $origin,
+        string $family,
+        bool $navigate,
+    ): void {
+        $safe = $this->execute($fault);
+        self::assertIsArray($safe['redirect_uri']);
+        self::assertSame($origin, $safe['redirect_uri']['origin_category']);
+        self::assertSame($family, $safe['redirect_uri']['path_family']);
+        self::assertSame($navigate, $safe['redirect_contract_matches']);
+        self::assertSame($navigate, $safe['navigation_attempted']);
+        self::assertCount($navigate ? 1 : 0, $this->customerGets);
+        self::assertSame('cancelled', $safe['cleanup']);
+        self::assertSame(0, $safe['ambiguous_actions']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+        if ($navigate) {
+            self::assertSame(str_replace('/hk/', '/sg/', self::URL), (string) $this->customerGets[0]->getUri());
+            self::assertIsArray($safe['navigation']);
+            self::assertSame('sandbox_api_sg_redirect', $safe['navigation']['origin_category']);
+        }
     }
 
     public function testAlreadyCapturedFundsAreRefundedOnlyForExactOwnAmount(): void

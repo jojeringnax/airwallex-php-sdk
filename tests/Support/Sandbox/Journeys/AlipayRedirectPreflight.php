@@ -65,8 +65,9 @@ final class AlipayRedirectPreflight
                 ? 'redirect' : 'unrecognized';
             $safe['next_action_method'] = is_array($next) && ($next['method'] ?? null) === 'GET'
                 ? 'GET' : 'unrecognized';
+            $safe['redirect_uri'] = AlipayRedirect::diagnose(is_array($next) ? ($next['url'] ?? null) : null);
             $safe['redirect_contract_matches'] = is_array($next) && ($next['type'] ?? null) === 'redirect'
-                && ($next['method'] ?? null) === 'GET' && AlipayRedirect::eligible($next['url'] ?? null);
+                && ($next['method'] ?? null) === 'GET' && $safe['redirect_uri']['eligible'] === true;
             if ($safe['redirect_contract_matches'] && is_array($next) && is_string($next['url'] ?? null)) {
                 $journey->stage = 'customer_redirect_get';
                 $ledger->requestId('redirect_navigation', ['url' => $next['url']], $session->contextFingerprint());

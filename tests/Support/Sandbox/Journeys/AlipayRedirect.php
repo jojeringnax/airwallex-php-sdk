@@ -27,18 +27,74 @@ final class AlipayRedirect
 
     public static function eligible(#[SensitiveParameter] mixed $value): bool
     {
-        if (
-            !is_string($value) || strlen($value) > 8192
-            || preg_match('/[\x00-\x20\x7f\\\\]/', $value) === 1
-            || preg_match('/%(?![a-fA-F0-9]{2})/', $value) === 1
-        ) {
-            return false;
+        return self::diagnose($value)['eligible'] === true;
+    }
+
+    /** Fixed categories only; the opaque URI and all query names/values stay private.
+     * @return array<string,bool|string>
+     */
+    public static function diagnose(#[SensitiveParameter] mixed $value): array
+    {
+        $safe = [
+            'input_is_string' => is_string($value), 'size_within_limit' => false,
+            'lexically_valid' => false, 'absolute_uri' => false, 'https' => false,
+            'sandbox_host_matches' => false, 'userinfo_absent' => false, 'explicit_port_absent' => false,
+            'fragment_absent' => false, 'path_identifier_valid' => false, 'exact_uri_preserved' => false,
+            'origin_category' => 'unclassified', 'path_family' => 'unclassified',
+            'query_present' => false, 'query_checksum_present' => false, 'query_unlisted_keys_present' => false,
+            'query_repeated_key_present' => false, 'query_scan_complete' => false, 'eligible' => false,
+        ];
+        if (!is_string($value) || strlen($value) > 8192) {
+            return $safe;
+        }
+        $safe['size_within_limit'] = true;
+        $safe['lexically_valid'] = preg_match('/[\x00-\x20\x7f\\\\]/', $value) !== 1
+            && preg_match('/%(?![a-fA-F0-9]{2})/', $value) !== 1;
+        if (!$safe['lexically_valid']) {
+            return $safe;
         }
         $url = parse_url($value);
-        return is_array($url) && ($url['scheme'] ?? null) === 'https'
-            && ($url['host'] ?? null) === 'api.sandbox.airwallex.com'
-            && !isset($url['user']) && !isset($url['pass']) && !isset($url['port']) && !isset($url['fragment'])
-            && preg_match('~^/pa/redirect/hk/[A-Za-z0-9_-]+$~D', $url['path'] ?? '') === 1;
+        if (!is_array($url) || !isset($url['scheme'], $url['host']) || $url['host'] === '') {
+            return $safe;
+        }
+        $safe['absolute_uri'] = true;
+        $safe['https'] = $url['scheme'] === 'https';
+        $safe['sandbox_host_matches'] = $url['host'] === 'api.sandbox.airwallex.com';
+        $safe['userinfo_absent'] = !isset($url['user']) && !isset($url['pass']);
+        $safe['explicit_port_absent'] = !isset($url['port']);
+        $safe['fragment_absent'] = !isset($url['fragment']);
+        $origin = $safe['https'] && $safe['sandbox_host_matches'] && $safe['explicit_port_absent'];
+        $safe['origin_category'] = $origin ? 'sandbox_api' : 'unverified_origin';
+        $path = $url['path'] ?? '';
+        if (preg_match('~^/pa/(redirect|sandbox)/(hk|sg)/~D', $path, $family) === 1) {
+            $safe['path_family'] = $family[1] . '_' . $family[2];
+        } else {
+            $safe['path_family'] = $origin ? 'other_sandbox_path' : 'unverified_origin';
+        }
+        $safe['path_identifier_valid'] = preg_match(
+            '~^/pa/(?:redirect|sandbox)/(?:hk|sg)/[A-Za-z0-9_-]+$~D',
+            $path
+        ) === 1;
+        $safe['query_present'] = isset($url['query']);
+        $parts = ($url['query'] ?? '') === '' ? [] : explode('&', $url['query'], 65);
+        $safe['query_scan_complete'] = count($parts) <= 64;
+        $seen = [];
+        foreach (array_slice($parts, 0, 64) as $part) {
+            $name = rawurldecode(explode('=', $part, 2)[0]);
+            $safe['query_checksum_present'] = $safe['query_checksum_present'] || $name === 'checksum';
+            $safe['query_unlisted_keys_present'] = $safe['query_unlisted_keys_present'] || $name !== 'checksum';
+            $safe['query_repeated_key_present'] = $safe['query_repeated_key_present'] || isset($seen[$name]);
+            $seen[$name] = true;
+        }
+        try {
+            $safe['exact_uri_preserved'] = (string) (new Request('GET', $value))->getUri() === $value;
+        } catch (\Throwable) {
+            // Neither parser errors nor private URL values leave this diagnostic boundary.
+        }
+        $safe['eligible'] = $origin && $safe['userinfo_absent'] && $safe['fragment_absent']
+            && $safe['path_identifier_valid'] && $safe['exact_uri_preserved']
+            && in_array($safe['path_family'], ['redirect_hk', 'redirect_sg'], true);
+        return $safe;
     }
 
     /** @return array<string,int|bool|string> */
@@ -83,7 +139,7 @@ final class AlipayRedirect
                 }
                 $html = preg_match('~^(?:text/html|application/xhtml\+xml)(?:\s*;|$)~i', $type) === 1;
                 $safe = [
-                    'http_status' => $response->getStatusCode(), 'origin_category' => 'sandbox_api_hk_redirect',
+                    'http_status' => $response->getStatusCode(), 'origin_category' => self::location($url),
                     'html_content_type' => $html, 'location_present' => $locations !== [],
                     'location_category' => self::location($locations[0] ?? null),
                     'form_present' => false, 'form_action_present' => false, 'post_form_present' => false,
@@ -105,8 +161,9 @@ final class AlipayRedirect
         if ($value === null || $value === '') {
             return 'absent';
         }
-        if (self::eligible($value)) {
-            return 'sandbox_api_hk_redirect';
+        $diagnostic = self::diagnose($value);
+        if ($diagnostic['eligible']) {
+            return $diagnostic['path_family'] === 'redirect_sg' ? 'sandbox_api_sg_redirect' : 'sandbox_api_hk_redirect';
         }
         $url = parse_url($value);
         return is_array($url) && ($url['scheme'] ?? null) === 'https' ? 'other_https' : 'non_https_or_relative';
