@@ -63,6 +63,10 @@ final class HostedBrowserTest extends TestCase
         $contents = file_get_contents('php://stdin');
         $data = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
         if (str_contains(json_encode($argv), 'PRIVATE_SESSION') || getenv('AIRWALLEX_BRIDGE_SENTINEL') !== false
+            || str_contains(json_encode($argv), 'PRIVATE_CHECKOUT')
+            || ($data['expected'] ?? null) !== [
+                'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
+            ]
             || ($data['url'] ?? null) !== 'https://checkout.airwallex.com/pay?s=PRIVATE_SESSION') {
             exit(3);
         }
@@ -71,7 +75,9 @@ final class HostedBrowserTest extends TestCase
         $bridge = $this->bridge($script);
         putenv('AIRWALLEX_BRIDGE_SENTINEL=PRIVATE_ENVIRONMENT');
         try {
-            $safe = $bridge->inspect('https://checkout.airwallex.com/pay?s=PRIVATE_SESSION');
+            $safe = $bridge->inspect('https://checkout.airwallex.com/pay?s=PRIVATE_SESSION', [
+                'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
+            ]);
         } finally {
             putenv('AIRWALLEX_BRIDGE_SENTINEL');
         }
@@ -99,6 +105,13 @@ final class HostedBrowserTest extends TestCase
             . '"card_entry_enabled":true}\';'];
         yield 'nonzero exit with safe-looking output' => ['echo \'{"result":"blocked",'
             . '"reason":"financial_sandbox_boundary_unverified","card_entry_enabled":false}\'; exit(3);'];
+        foreach (
+            ['payer_customer_mapping_verified', 'payer_payload_delivered', 'financial_routing_verified',
+            'sandbox_origin_verified'] as $field
+        ) {
+            yield $field => ['echo \'{"result":"blocked","reason":"financial_sandbox_boundary_unverified",'
+                . '"card_entry_enabled":false,"' . $field . '":true}\';'];
+        }
     }
 
     #[DataProvider('unsafeChildren')]
@@ -107,7 +120,9 @@ final class HostedBrowserTest extends TestCase
         $bridge = $this->bridge($script);
         $failure = null;
         try {
-            $bridge->inspect('https://checkout.airwallex.com/pay?s=PRIVATE_SESSION');
+            $bridge->inspect('https://checkout.airwallex.com/pay?s=PRIVATE_SESSION', [
+                'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
+            ]);
         } catch (\Throwable $error) {
             $failure = $error;
             self::assertStringNotContainsString('PRIVATE_', $error->getMessage());
@@ -144,6 +159,39 @@ final class HostedBrowserTest extends TestCase
         $safe = HostedBrowser::sanitize($base + ['candidate_origin' => 'PRIVATE_HOST']);
         self::assertArrayNotHasKey('candidate_origin', $safe);
         self::assertStringNotContainsString('PRIVATE_HOST', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    public function testReadOnlyBindingEvidenceCannotRetainOpaqueObservationOrPayloadFields(): void
+    {
+        $safe = HostedBrowser::sanitize(['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'checkout_token_matches' => true, 'payer_request_scope_verified' => true,
+            'payer_get_attempted' => true, 'payer_response_observed' => true, 'payer_observation' => 'matched',
+            'payer_mode_matches' => true, 'payer_currency_matches' => true, 'payer_customer_mapping_verified' => false,
+            'payer_payload_delivered' => false, 'financial_routing_verified' => false,
+            'payer_body' => ['PRIVATE_NAME'], 'checkout_id' => 'PRIVATE_ID', 'authorization' => 'PRIVATE_TOKEN']);
+        self::assertSame('matched', $safe['payer_observation']);
+        self::assertTrue($safe['payer_request_scope_verified']);
+        self::assertFalse($safe['payer_customer_mapping_verified']);
+        self::assertFalse($safe['payer_payload_delivered']);
+        self::assertFalse($safe['financial_routing_verified']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+        $safe['payer_observation'] = 'PRIVATE_RESPONSE';
+        self::assertArrayNotHasKey('payer_observation', HostedBrowser::sanitize($safe));
+    }
+
+    public function testOnlyBoundedIntegerPayerHttpStatusesBecomeEvidence(): void
+    {
+        $base = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false];
+        foreach ([100, 200, 302, 401, 403, 404, 503, 599] as $status) {
+            $safe = HostedBrowser::sanitize($base + ['payer_http_status' => $status]);
+            self::assertSame($status, $safe['payer_http_status']);
+        }
+        foreach ([99, 600, -1, 'PRIVATE_STATUS', '401', 401.0, []] as $status) {
+            self::assertArrayNotHasKey('payer_http_status', HostedBrowser::sanitize($base + [
+                'payer_http_status' => $status,
+            ]));
+        }
     }
 
     public function testFalseCreationFlagCannotBecomeOptInAtTheCliBoundary(): void
