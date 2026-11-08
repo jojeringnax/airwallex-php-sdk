@@ -45,8 +45,11 @@ final readonly class HostedBrowser
      * @param array{checkout_id:string,mode:string,currency:string} $expected SDK-verified own Checkout.
      * @return array<string,string|int|bool>
      */
-    public function inspect(#[SensitiveParameter] string $url, #[SensitiveParameter] array $expected): array
-    {
+    public function inspect(
+        #[SensitiveParameter] string $url,
+        #[SensitiveParameter] array $expected,
+        bool $render = false,
+    ): array {
         $keys = array_keys($expected);
         sort($keys);
         if (
@@ -69,7 +72,7 @@ final readonly class HostedBrowser
         }
         [$input, $output, $errors] = self::pipes($pipes);
         try {
-            $payload = json_encode(['url' => $url, 'expected' => $expected], JSON_THROW_ON_ERROR);
+            $payload = json_encode(['url' => $url, 'expected' => $expected, 'render' => $render], JSON_THROW_ON_ERROR);
             if (@fwrite($input, $payload) !== strlen($payload)) {
                 throw new RuntimeException('Private browser handoff failed.');
             }
@@ -78,7 +81,7 @@ final readonly class HostedBrowser
             stream_set_blocking($errors, false);
             $contents = '';
             $hadErrors = false;
-            $deadline = microtime(true) + 40;
+            $deadline = microtime(true) + ($render ? 60 : 40);
             do {
                 $chunk = stream_get_contents($output, 8193);
                 $discard = stream_get_contents($errors, 8193);
@@ -102,7 +105,7 @@ final readonly class HostedBrowser
             if ($hadErrors) {
                 throw new RuntimeException('Browser preflight emitted unexpected diagnostics.');
             }
-            $safe = self::sanitize(json_decode($contents, true, 16, JSON_THROW_ON_ERROR));
+            $safe = self::sanitize(json_decode($contents, true, 16, JSON_THROW_ON_ERROR), $render);
             if ($safe['result'] === 'blocked' && $status['exitcode'] !== 0) {
                 throw new RuntimeException('Browser preflight process failed.');
             }
@@ -121,7 +124,7 @@ final readonly class HostedBrowser
     }
 
     /** @return array<string,string|int|bool> */
-    public static function sanitize(#[SensitiveParameter] mixed $data): array
+    public static function sanitize(#[SensitiveParameter] mixed $data, bool $render = false): array
     {
         if (!is_array($data) || ($data['card_entry_enabled'] ?? null) !== false) {
             throw new RuntimeException('Browser preflight returned invalid evidence.');
@@ -141,7 +144,8 @@ final readonly class HostedBrowser
         foreach (
             ['navigation_passed', 'test_mode_visible',
             'checkout_token_matches', 'payer_request_scope_verified', 'payer_get_attempted',
-            'payer_response_observed', 'payer_mode_matches', 'payer_currency_matches'] as $key
+            'payer_response_observed', 'payer_mode_matches', 'payer_currency_matches',
+            'render_requested', 'render_frame_binding_available'] as $key
         ) {
             if (isset($data[$key]) && is_bool($data[$key])) {
                 $safe[$key] = $data[$key];
@@ -149,7 +153,7 @@ final readonly class HostedBrowser
         }
         foreach (
             ['sandbox_origin_verified', 'payer_customer_mapping_verified',
-                'payer_payload_delivered', 'financial_routing_verified'] as $key
+                'financial_routing_verified'] as $key
         ) {
             if (array_key_exists($key, $data)) {
                 if ($data[$key] !== false) {
@@ -157,6 +161,30 @@ final readonly class HostedBrowser
                 }
                 $safe[$key] = false;
             }
+        }
+        if (array_key_exists('render_requested', $data) && $data['render_requested'] !== $render) {
+            throw new RuntimeException('Browser rendering did not match its explicit configuration.');
+        }
+        if (array_key_exists('payer_payload_delivered', $data)) {
+            $delivered = $data['payer_payload_delivered'];
+            if ($delivered !== false) {
+                if (
+                    $delivered !== true || !$render || ($data['candidate_origin'] ?? null) !== 'sandbox'
+                    || ($data['payer_http_status'] ?? null) !== 200
+                    || ($data['payer_observation'] ?? null) !== 'matched'
+                ) {
+                    throw new RuntimeException('Browser rendering lacked the verified own response.');
+                }
+                foreach (
+                    ['checkout_token_matches', 'payer_request_scope_verified', 'payer_get_attempted',
+                    'payer_response_observed', 'payer_mode_matches', 'payer_currency_matches'] as $key
+                ) {
+                    if (($data[$key] ?? null) !== true) {
+                        throw new RuntimeException('Browser rendering lacked the verified own response.');
+                    }
+                }
+            }
+            $safe['payer_payload_delivered'] = $delivered;
         }
         if (
             in_array($data['payer_observation'] ?? null, [
@@ -168,7 +196,7 @@ final readonly class HostedBrowser
         }
         $counters = ['blocked_requests', 'blocked_websockets', 'returns_intercepted',
             'proxy_rejections', 'proxy_connections', 'proxy_external_connections',
-            'verified_static_assets', 'integrity_rejections'];
+            'verified_static_assets', 'integrity_rejections', 'verified_render_assets', 'bound_render_frames'];
         foreach ($counters as $key) {
             if (isset($data[$key]) && is_int($data[$key]) && $data[$key] >= 0 && $data[$key] <= 1000000) {
                 $safe[$key] = $data[$key];
