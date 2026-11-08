@@ -125,13 +125,17 @@ final readonly class HostedBrowser
             throw new RuntimeException('Browser preflight returned invalid evidence.');
         }
         $safe = ['result' => $result, 'reason' => $reason, 'card_entry_enabled' => false];
+        if (in_array($data['candidate_origin'] ?? null, ['shared', 'sandbox'], true)) {
+            $safe['candidate_origin'] = $data['candidate_origin'];
+        }
         foreach (['navigation_passed', 'test_mode_visible', 'sandbox_origin_verified'] as $key) {
             if (isset($data[$key]) && is_bool($data[$key])) {
                 $safe[$key] = $data[$key];
             }
         }
         $counters = ['blocked_requests', 'blocked_websockets', 'returns_intercepted',
-            'proxy_rejections', 'proxy_connections', 'proxy_external_connections'];
+            'proxy_rejections', 'proxy_connections', 'proxy_external_connections',
+            'verified_static_assets', 'integrity_rejections'];
         foreach ($counters as $key) {
             if (isset($data[$key]) && is_int($data[$key]) && $data[$key] >= 0 && $data[$key] <= 1000000) {
                 $safe[$key] = $data[$key];

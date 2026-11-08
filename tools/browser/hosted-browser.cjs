@@ -5,7 +5,7 @@ for (const key of ['DEBUG', 'PWDEBUG', 'DEBUG_FILE', 'CHROME_LOG_FILE']) delete 
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { HostedPolicy, egressProxy } = require('./hosted-policy.cjs');
+const { HostedPolicy, egressProxy, assetMatches } = require('./hosted-policy.cjs');
 
 async function inspect(initial, playwright, fixtureOrigin = null, exercise = null) {
   const policy = new HostedPolicy(initial, fixtureOrigin);
@@ -29,7 +29,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     if (browser) void track(() => browser.close());
   }, 20000);
   watchdog.unref();
-  const counts = { blocked_requests: 0, blocked_websockets: 0, returns_intercepted: 0 };
+  const counts = { blocked_requests: 0, blocked_websockets: 0, returns_intercepted: 0,
+    verified_static_assets: 0, integrity_rejections: 0 };
   try {
     proxy = await egressProxy(policy);
     browser = await playwright.chromium.launch({
@@ -72,6 +73,15 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           } else {
             const body = await response.body();
             if (body.length > 2 * 1024 * 1024) throw new Error('Browser response exceeds the preflight boundary.');
+            const expected = policy.assetHash(request.url(), request.method(), request.resourceType());
+            if (expected !== null) {
+              if (!assetMatches(body, expected)) {
+                counts.integrity_rejections++;
+                await route.abort('blockedbyclient');
+                throw new Error('Browser script integrity did not match the reviewed build.');
+              }
+              counts.verified_static_assets++;
+            }
             await route.fulfill({ response, body });
           }
         } finally { await response.dispose(); }
@@ -100,6 +110,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       reason: fixtureOrigin === null ? 'financial_sandbox_boundary_unverified' : 'local_fixture_only',
       navigation_passed: true, test_mode_visible: visible,
       sandbox_origin_verified: false, card_entry_enabled: false,
+      ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
       browser_version: /^[0-9]+(?:\.[0-9]+){1,3}$/u.test(browser.version()) ? browser.version() : 'unclassified',
       ...counts, proxy_rejections: proxy.counts.rejected,
       proxy_connections: proxy.counts.connected,
