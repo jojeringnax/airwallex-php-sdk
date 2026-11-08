@@ -8,7 +8,7 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 $arguments = $argv ?? [];
 $options = getopt('', ['environment:', 'credentials-file:', 'state-dir:',
-    'create-one-alipay-hk', 'read-one-sandbox-mock'], $last);
+    'create-one-alipay-hk', 'read-one-sandbox-mock', 'simulate-one-returned-sandbox-mock'], $last);
 if (is_array($options)) {
     $valid = $last === count($arguments);
 } else {
@@ -20,16 +20,18 @@ foreach (array_slice($arguments, 1) as $argument) {
     if (
         !str_starts_with($argument, '--')
         || !in_array($name, ['environment', 'credentials-file', 'state-dir',
-            'create-one-alipay-hk', 'read-one-sandbox-mock'], true)
-        || (in_array($name, ['create-one-alipay-hk', 'read-one-sandbox-mock'], true)
+            'create-one-alipay-hk', 'read-one-sandbox-mock', 'simulate-one-returned-sandbox-mock'], true)
+        || (in_array($name, ['create-one-alipay-hk', 'read-one-sandbox-mock',
+            'simulate-one-returned-sandbox-mock'], true)
             && $argument !== '--' . $name)
-        || (!in_array($name, ['create-one-alipay-hk', 'read-one-sandbox-mock'], true)
+        || (!in_array($name, ['create-one-alipay-hk', 'read-one-sandbox-mock',
+            'simulate-one-returned-sandbox-mock'], true)
             && !str_contains($argument, '='))
     ) {
         $valid = false;
     }
 }
-foreach (['create-one-alipay-hk', 'read-one-sandbox-mock'] as $flag) {
+foreach (['create-one-alipay-hk', 'read-one-sandbox-mock', 'simulate-one-returned-sandbox-mock'] as $flag) {
     if ($valid && array_key_exists($flag, $options)) {
         $valid = $options[$flag] === false;
         $options[$flag] = true;

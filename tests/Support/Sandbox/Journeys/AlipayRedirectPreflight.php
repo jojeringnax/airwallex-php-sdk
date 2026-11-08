@@ -27,6 +27,8 @@ final class AlipayRedirectPreflight
     private bool $cancelAttempted = false;
     private bool $refundAttempted = false;
     private ?string $observedState = null;
+    /** @var array<string,bool|int|string> */
+    private array $simulation = ['attempted' => false, 'acknowledged' => false, 'result' => 'not_attempted'];
 
     private function __construct(
         private readonly SandboxSession $session,
@@ -44,15 +46,23 @@ final class AlipayRedirectPreflight
         ?Closure $sleep = null,
         int $readAttempts = 7,
         bool $readOneSandboxMock = false,
+        bool $simulateReturnedSandboxMock = false,
     ): array {
-        if ($session->isOrganization() || $readAttempts < 1 || $readAttempts > 7) {
+        if (
+            $session->isOrganization() || $readAttempts < 1 || $readAttempts > 7
+            || ($readOneSandboxMock && $simulateReturnedSandboxMock)
+        ) {
             throw new RuntimeException('Alipay preflight requires account context and bounded observations.');
+        }
+        if ($simulateReturnedSandboxMock) {
+            SimulationTransport::assertAvailable();
         }
         $ledger->assertContext($session->contextFingerprint());
         $journey = new self($session, $ledger, $sleep ?? static fn (int $n) => sleep($n), $readAttempts);
         $safe = ['scenario' => 'alipay-redirect-preflight', 'api_version' => '2026-08-21',
             'result' => 'blocked', 'reason' => 'customer_interaction_not_automated', 'navigation_attempted' => false,
-            'read_one_sandbox_mock' => $readOneSandboxMock];
+            'read_one_sandbox_mock' => $readOneSandboxMock,
+            'simulate_returned_sandbox_mock' => $simulateReturnedSandboxMock];
         try {
             $journey->create();
             $journey->stage = 'intent_confirm';
@@ -84,11 +94,29 @@ final class AlipayRedirectPreflight
                         $journey->stage = 'customer_sandbox_mock_get';
                         $ledger->requestId('redirect_mock_navigation', ['url' => $url], $session->contextFingerprint());
                     } : null;
-                    $safe['navigation'] = $redirect->inspect($next['url'], $reserve);
+                    $action = $simulateReturnedSandboxMock ? static function (#[SensitiveParameter] string $url) use (
+                        $journey,
+                    ): void {
+                        $journey->simulateCanonical($url);
+                    } : null;
+                    $safe['navigation'] = $redirect->inspect($next['url'], $reserve, $action);
                 } catch (Throwable) {
                     $journey->unsafe = true;
                     ++$journey->ambiguous;
                     throw new RuntimeException('The customer GET needs independent reconciliation.');
+                }
+                if ($safe['navigation']['mock_action_callback_failed'] === true) {
+                    $journey->unsafe = true;
+                    ++$journey->ambiguous;
+                    $safe['result'] = 'fail';
+                    $safe['reason'] = 'simulation_callback_failed';
+                }
+                if ($simulateReturnedSandboxMock) {
+                    $safe['simulation'] = $journey->simulation;
+                    if (in_array($journey->simulation['result'], ['rejected', 'failed', 'preflight_failed'], true)) {
+                        $safe['result'] = 'fail';
+                        $safe['reason'] = 'simulation_not_verified';
+                    }
                 }
                 if ($safe['navigation']['mock_read_reservation_failed'] === true) {
                     $safe['result'] = 'fail';
@@ -134,7 +162,9 @@ final class AlipayRedirectPreflight
         if ($cleanup === 'fail') {
             $safe['result'] = 'fail';
         } elseif ($cleanup === 'refund_accepted' && $safe['result'] !== 'fail') {
-            $safe['result'] = $safe['navigation_attempted'] === true ? 'pass' : 'blocked';
+            $safe['result'] = $safe['navigation_attempted'] === true
+                && (!$simulateReturnedSandboxMock || $journey->simulation['acknowledged'] === true)
+                ? 'pass' : 'blocked';
             $safe['reason'] = 'captured_payment_refund_accepted';
         }
         return $safe + [
@@ -143,6 +173,65 @@ final class AlipayRedirectPreflight
             'reconciliation_required' => in_array($cleanup, ['fail', 'pending'], true) || $journey->unsafe,
             'retained' => 'Own payment/refund history remains; no other account resources are swept.',
         ] + $ledger->evidence();
+    }
+
+    private function simulateCanonical(#[SensitiveParameter] string $url): void
+    {
+        try {
+            $this->stage = 'mock_simulation_preflight';
+            $observed = $this->readOwn();
+            if (($observed['status'] ?? null) !== 'REQUIRES_CUSTOMER_ACTION') {
+                $this->simulation['result'] = 'own_state_not_eligible';
+                return;
+            }
+            $fingerprint = $this->session->contextFingerprint();
+            $body = ['url' => $url];
+            $this->ledger->recordObservation('redirect_mock_simulation_target', [
+                'intent_id' => $this->ownId(), 'method' => 'POST',
+                'path' => '/api/v1/simulation/pa/shopper_actions/pay',
+                'url_sha256' => hash('sha256', $url),
+                'body_sha256' => hash('sha256', json_encode($body, JSON_THROW_ON_ERROR)),
+            ], $fingerprint);
+            $this->ledger->requestId('redirect_mock_simulation', $body, $fingerprint);
+            $this->stage = 'sandbox_mock_simulation';
+            $this->simulation['attempted'] = true;
+            $this->session->simulateShopperAction('pay', $url);
+            $this->ledger->recordObservation('redirect_mock_simulation_ack', [
+                'http_status' => '200', 'body' => 'empty',
+            ], $fingerprint);
+            $this->simulation['acknowledged'] = true;
+            for ($i = 0; $i < $this->readAttempts; ++$i) {
+                $observed = $this->readOwn();
+                $state = $observed['status'] ?? null;
+                if (in_array($state, ['SUCCEEDED', 'CANCELLED'], true)) {
+                    $this->ledger->recordObservation('redirect_mock_simulation_outcome', [
+                        'intent_id' => $this->ownId(), 'status' => $state,
+                    ], $fingerprint);
+                    $this->simulation['result'] = 'state_observed';
+                    return;
+                }
+                $this->pause($i);
+            }
+            $this->simulation['result'] = 'state_pending';
+            $this->unsafe = true; // An unfinished pay action cannot be replaced with financial cleanup.
+        } catch (ApiException $error) {
+            $this->simulation['result'] = 'rejected';
+            $this->simulation['http_status'] = $error->httpStatus();
+            $code = $error->providerCode();
+            $this->simulation['code'] = in_array($code, [
+                'validation_error', 'operation_not_supported', 'internal_error',
+            ], true) ? $code : 'unlisted';
+            $this->unsafe = true; // No sent failure establishes permission to replay or substitute an action.
+            if ($this->simulation['attempted'] === true && $error->httpStatus() >= 500) {
+                ++$this->ambiguous;
+            }
+        } catch (Throwable) {
+            $this->simulation['result'] = $this->simulation['attempted'] === true ? 'failed' : 'preflight_failed';
+            $this->unsafe = true;
+            if ($this->simulation['attempted'] === true) {
+                ++$this->ambiguous;
+            }
+        }
     }
 
     private function create(): void
