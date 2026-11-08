@@ -14,6 +14,8 @@ For selected Billing webhook names, versioned resource transitions, setup and un
 
 The initial scope is limited to the Billing and Payments capabilities below. Other Airwallex product families and connected-account onboarding operations require separate scope decisions.
 
+For compatibility changes and release preparation, follow the [release policy](release-policy.md), including the first-release evidence gates.
+
 ## Initial Billing and Payments scope
 
 The initial release covers both subscription billing and standalone Payments ([issue #1](https://github.com/jojeringnax/airwallex-php-sdk/issues/1)).
