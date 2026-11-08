@@ -1,6 +1,6 @@
 # Consumer interface examples
 
-Use these examples when implementing or reviewing a consumer workflow. The [interface conventions](consumer-interfaces.md) define the shared public contract. Examples are executable-shaped specifications for future implementation; they have not been executed against an SDK or sandbox.
+Use these examples when implementing or reviewing a consumer workflow. The [interface conventions](consumer-interfaces.md) define the shared public contract. The webhook verification and decoding boundary is exercised against synthetic fixtures in deterministic tests. The other recipes remain executable-shaped specifications pending their resource implementation; sandbox execution requires the separate integration evidence recorded with each capability.
 
 ## Initialization and account contexts
 
@@ -224,7 +224,7 @@ $verifier = new WebhookVerifier(
 $verifier->verify($rawBody, $timestampHeader, $signatureHeader); // void or exception
 ```
 
-`verify(string $rawBody, string $timestamp, string $signature): void` throws `WebhookVerificationException` (an SDK exception) on malformed, invalid or out-of-tolerance deliveries. Freshness tolerance is required explicitly, a non-negative integer in milliseconds; no undocumented provider default is selected. Reject timestamps beyond tolerance in either direction. Verification uses the exact timestamp string plus raw body, HMAC-SHA256 and constant-time comparison; header parsing and tests belong to [#29](https://github.com/jojeringnax/airwallex-php-sdk/issues/29).
+`verify(string $rawBody, string $timestamp, string $signature): void` throws `WebhookVerificationException` (an SDK exception) on malformed, invalid or out-of-tolerance deliveries. Freshness tolerance is required explicitly, a non-negative integer in milliseconds; no undocumented provider default is selected. Reject timestamps beyond tolerance in either direction. Verification uses the exact timestamp string plus raw body, HMAC-SHA256 and constant-time comparison; header parsing, numeric decoding and error behavior are documented in the [implemented webhook boundary](webhook-contracts.md#php-verification-and-decoding).
 
 After successful verification, `WebhookEvent::fromJson($rawBody)` in the same namespace losslessly decodes a JSON object and exposes `toArray(): array`. This method converts the root envelope to an array, including `[]` for an empty root object; nested empty objects retain `stdClass` under the shared representation rules. Malformed JSON or a non-object root throws `ProtocolException`.
 
