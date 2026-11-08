@@ -5,11 +5,12 @@ const path = require('node:path');
 const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
-  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0 };
+  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0, method: 0 };
   let tamper = false;
   let payerReply = 'matched';
   let tamperController = false;
   let redirectController = false;
+  let methodReply = 'matched';
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
       case '/page':
@@ -44,7 +45,8 @@ async function smoke(playwright) {
               if (window.fixtureControllerReady !== true) throw new Error('Fixture bootstrap missing.');
               const options = { mode: 'recurring', currency: data.currency,
                 customer_id: data.setupModeDetails.billingCustomerExternalId,
-                client_secret: data.setupModeDetails.externalCustomerClientSecret };
+                client_secret: data.setupModeDetails.externalCustomerClientSecret,
+                observeConfig: new URL(location.href).searchParams.has('config') };
               if (new URL(location.href).searchParams.get('wrongframe')) options.customer_id = 'PRIVATE_OTHER';
               const frame = document.createElement('iframe');
               frame.src = location.origin + '/render-frame#/elements/dropin?' + new URLSearchParams({
@@ -98,7 +100,43 @@ async function smoke(playwright) {
       case '/render-frame':
         hits.render++;
         response.writeHead(200, { 'Content-Type': 'text/html' }).end(
-          '<!doctype html><p>Fixture render frame</p><script src="/render-sdk.js?ts=' + Date.now() + '"></script>');
+          `<!doctype html><p>Fixture render frame</p><script src="/render-sdk.js?ts=${Date.now()}"></script><script>
+            const options = JSON.parse(new URLSearchParams(location.hash.split('?')[1]).get('options'));
+            if (options.observeConfig) {
+              const headers = { 'client-secret': options.client_secret, 'content-type': 'application/json',
+                'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout', 'awx-tracker': 'SYNTHETIC_TRACKER',
+                'x-cloud-trace-context': '0123456789abcdef0123456789abcdef' };
+              const target = '/api/v1/pa/config/payment_method_types?' + new URLSearchParams({ page_num: 0,
+                page_size: 200, active: true, transaction_currency: options.currency, __verification_methods: true });
+              fetch(target, { headers }).then(r => r.json()).then(data => {
+                if (!Array.isArray(data.items)) return;
+                for (const name of ['cardnumber', 'expiry', 'cvc']) {
+                  const input = document.createElement('input'); input.name = name;
+                  if (name === 'cvc') input.disabled = true;
+                  document.body.append(input);
+                }
+                return Promise.all([target, '/country', '/api/v1/pa/customers/PRIVATE',
+                  '/api/v1/pa/payment_consents', '/api/v1/pa/PRIVATE', '/billing/payer-web-api/checkout/status']
+                  .map(url => fetch(url, { headers }).catch(() => {})));
+              }).catch(() => {});
+            }
+          </script>`);
+        break;
+      case '/api/v1/pa/config/payment_method_types':
+        hits.method++;
+        if (request.method !== 'GET' || request.headers['client-secret'] !== 'PRIVATE_CLIENT_SECRET'
+            || request.headers['x-api-version'] !== '2024-06-14' || request.headers['x-client-ip-source'] !== 'awx-checkout'
+            || request.headers['x-cloud-trace-context'] !== '0123456789abcdef0123456789abcdef'
+            || request.headers.authorization || request.headers.cookie || request.headers.referer) {
+          hits.forbidden++; response.writeHead(500).end();
+        } else if (methodReply === 'redirect') {
+          response.writeHead(302, { Location: '/forbidden?PRIVATE' }).end();
+        } else {
+          response.writeHead(200, { 'Content-Type': 'application/json',
+            'Set-Cookie': 'synthetic_method=PRIVATE_COOKIE; Path=/' }).end(JSON.stringify({
+              items: [{ name: 'card', transaction_mode: 'recurring', transaction_currencies: ['EUR'] }],
+            })); // Missing pagination is deliberately not converted into a complete-list claim.
+        }
         break;
       case '/render-sdk.js':
         response.writeHead(200, { 'Content-Type': 'application/javascript' }).end('window.fixtureRendered = true;');
@@ -253,6 +291,35 @@ async function smoke(playwright) {
         || wrongFrame.render_frame_checks.customer_mismatch !== 1 || wrongFrame.render_frame_checks.qualified !== 0) {
       throw new Error('Local mismatched render frame escaped.');
     }
+    const methodBefore = hits.method;
+    const configured = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1',
+      playwright, origin, async (_page, context) => {
+        if ((await context.cookies()).some(cookie => cookie.name === 'synthetic_method')) {
+          throw new Error('Local method cookie escaped its isolated request context.');
+        }
+      }, expected, true, true);
+    if (hits.method !== methodBefore + 1 || !configured.method_config_get_attempted
+        || configured.method_config_http_status !== 200 || !configured.method_config_payload_delivered
+        || configured.method_config_observation !== 'matched' || configured.method_config_items !== 1
+        || configured.method_config_pagination_known || !configured.method_config_card_advertised
+        || !configured.card_readiness_observed || !configured.cardnumber_unique || !configured.cardnumber_visible
+        || !configured.cardnumber_enabled || !configured.expiry_visible || !configured.expiry_enabled
+        || !configured.cvc_visible || configured.cvc_enabled || hits.forbidden !== 0
+        || Object.values(configured.denied_read_families).some(count => count !== 1)) {
+      throw new Error('Local bound method-config/readiness boundary failed.');
+    }
+    const deniedConfig = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1',
+      playwright, origin, null, expected, true);
+    if (hits.method !== methodBefore + 1 || Object.hasOwn(deniedConfig, 'method_config_requested')) {
+      throw new Error('Local default rendering admitted a method read.');
+    }
+    methodReply = 'redirect';
+    const redirectedConfig = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1',
+      playwright, origin, null, expected, true, true);
+    if (hits.method !== methodBefore + 2 || redirectedConfig.method_config_http_status !== 302
+        || redirectedConfig.method_config_observation !== 'redirect_rejected'
+        || redirectedConfig.method_config_payload_delivered || redirectedConfig.cardnumber_unique
+        || hits.forbidden !== 0) throw new Error('Local method redirect escaped.');
     // Both failure probes keep the payer mismatched, so no private body or frame can be delivered.
     payerReply = 'wrong_mode'; tamperController = true;
     let controllerRejected = false;
@@ -270,7 +337,8 @@ async function smoke(playwright) {
       altered_script_blocked: true, payer_binding_checks: payerChecks, payer_payloads_delivered: 0,
       payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true,
       public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
-      altered_controller_blocked: true, production_preload_denied: true };
+      altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
+      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

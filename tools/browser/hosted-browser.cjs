@@ -7,8 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { HostedPolicy, egressProxy, assetMatches } = require('./hosted-policy.cjs');
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false) {
-  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render);
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false) {
+  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
   await fs.chmod(directory, 0o700);
   let proxy;
@@ -16,6 +16,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let context;
   let mainPage;
   let publicClientPromise;
+  let methodClientPromise;
+  let boundFrame;
   let shuttingDown = false;
   let result;
   let failed = false;
@@ -40,6 +42,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   const observed = new Promise(resolve => { observationDone = resolve; });
   let observationStarted;
   const started = new Promise(resolve => { observationStarted = resolve; });
+  let method = { method_config_observation: 'not_observed', method_config_response_observed: false,
+    method_config_payload_delivered: false };
   let payer = { payer_observation: 'not_observed', payer_response_observed: false,
     payer_mode_matches: false, payer_currency_matches: false };
   try {
@@ -114,7 +118,50 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           && request.url().startsWith(new URL('/billing/payer-web-api/checkout?', initial).href)) {
         try { payerFromMainPage = request.frame() === mainPage.mainFrame(); } catch { /* Deny unavailable frame. */ }
       }
-      if (payerFromMainPage
+      let methodHeaders = null;
+      if (observeConfig && boundFrame && ['xhr', 'fetch'].includes(request.resourceType())) {
+        let fromBoundFrame = false;
+        try { fromBoundFrame = request.frame() === boundFrame; } catch { /* Deny detached or unavailable frames. */ }
+        if (fromBoundFrame) methodHeaders = policy.claimMethodConfig(request.url(), request.method(),
+          request.resourceType(), request.headers(), request.postData());
+      }
+      if (methodHeaders !== null) {
+        let delivered = false;
+        try {
+          if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+          if (!methodClientPromise) methodClientPromise = playwright.request.newContext({
+            ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
+          });
+          const client = await methodClientPromise;
+          if (shuttingDown) throw new Error('Browser preflight is shutting down.');
+          const response = await client.get(request.url(), { headers: methodHeaders,
+            maxRedirects: 0, maxRetries: 0, timeout: 10000 });
+          try {
+            const status = response.status();
+            if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error('Invalid method status.');
+            method.method_config_response_observed = true;
+            method.method_config_http_status = status;
+            if (status >= 300 && status < 400) method.method_config_observation = 'redirect_rejected';
+            else if (status !== 200) method.method_config_observation = 'http_rejected';
+            else {
+              const declared = response.headers()['content-length'];
+              if (declared !== undefined && (!/^[0-9]+$/u.test(declared) || Number(declared) > 262144)) {
+                method.method_config_observation = 'invalid_response';
+              } else {
+                const body = await response.body();
+                method = { ...method, ...policy.observeMethodConfig(body) };
+                if (policy.mayDeliverMethodConfig()) {
+                  const headers = Object.fromEntries(Object.entries(response.headers())
+                    .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
+                  await route.fulfill({ response, headers, body });
+                  method.method_config_payload_delivered = true;
+                  delivered = true;
+                }
+              }
+            }
+          } finally { await response.dispose(); }
+        } finally { if (!delivered) await route.abort('blockedbyclient'); }
+      } else if (payerFromMainPage
         && policy.claimPayerRequest(request.url(), request.method(), request.resourceType(),
         request.headers(), request.postData())) {
         observationStarted();
@@ -201,6 +248,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
               else if (policy.isRenderAsset(request.url())) counts.verified_render_assets++;
               else counts.verified_static_assets++;
             }
+            if (renderFrame) {
+              policy.markRenderFrameDelivered();
+              boundFrame = request.frame();
+            }
             if (controller) {
               const publicHeaders = Object.fromEntries(Object.entries(response.headers())
                 .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
@@ -214,6 +265,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         } finally { await response.dispose(); }
       } else {
         counts.blocked_requests++;
+        policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
         await route.abort('blockedbyclient');
       }
     }));
@@ -238,6 +290,20 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       if (policy.bindingEvidence().payer_get_attempted) await observed;
     }
     if (policy.bindingEvidence().payer_payload_delivered) await new Promise(resolve => setTimeout(resolve, 10000));
+    let readiness = {};
+    if (observeConfig) {
+      readiness = { card_readiness_observed: false };
+      if (boundFrame) {
+        for (const name of ['cardnumber', 'expiry', 'cvc']) {
+          const field = boundFrame.locator(`input[name="${name}"]`);
+          const count = await field.count();
+          readiness[`${name}_unique`] = count === 1;
+          readiness[`${name}_visible`] = count === 1 && await field.isVisible();
+          readiness[`${name}_enabled`] = count === 1 && await field.isEnabled();
+        }
+        readiness.card_readiness_observed = true;
+      }
+    }
     const visible = await page.getByText(/^(test mode|sandbox)$/iu, { exact: true }).first().isVisible();
     if (exercise !== null) await exercise(page, context);
     result = {
@@ -246,7 +312,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       navigation_passed: true, test_mode_visible: visible,
       sandbox_origin_verified: false, card_entry_enabled: false,
       ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
-      ...policy.bindingEvidence(), ...payer,
+      ...policy.bindingEvidence(), ...payer, ...(observeConfig ? { ...method, ...readiness } : {}),
       browser_version: /^[0-9]+(?:\.[0-9]+){1,3}$/u.test(browser.version()) ? browser.version() : 'unclassified',
       ...counts, proxy_rejections: proxy.counts.rejected,
       proxy_connections: proxy.counts.connected,
@@ -259,8 +325,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     clearTimeout(watchdog);
     if (context) await track(() => context.close());
     if (browser) await track(() => browser.close());
-    if (publicClientPromise) await track(async () => {
-      const client = await publicClientPromise;
+    for (const promise of [publicClientPromise, methodClientPromise]) if (promise) await track(async () => {
+      const client = await promise;
       await client.dispose();
     });
     await Promise.all([...pending]);
@@ -268,7 +334,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await track(() => fs.rm(directory, { recursive: true, force: true }));
   }
   if (failed || result === undefined) throw new Error('Browser preflight failed safely.');
-  return { ...result, ...counts, ...policy.renderEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
@@ -284,14 +350,15 @@ async function main() {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !['expected,url', 'expected,render,url'].includes(Object.keys(input).sort().join(','))
+      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url'].includes(Object.keys(input).sort().join(','))
+      || (Object.hasOwn(input, 'observeConfig') && typeof input.observeConfig !== 'boolean')
       || (Object.hasOwn(input, 'render') && typeof input.render !== 'boolean') || typeof input.url !== 'string'
       || !input.expected || typeof input.expected !== 'object') {
     throw new Error('Invalid private browser input.');
   }
   // Reject non-provider input before requiring any browser module or launching Chrome.
-  new HostedPolicy(input.url, null, input.expected, input.render ?? false);
-  const result = await inspect(input.url, require(process.argv[2]), null, null, input.expected, input.render ?? false);
+  new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false);
+  const result = await inspect(input.url, require(process.argv[2]), null, null, input.expected, input.render ?? false, input.observeConfig ?? false);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 

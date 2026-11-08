@@ -49,11 +49,12 @@ final readonly class HostedBrowser
         #[SensitiveParameter] string $url,
         #[SensitiveParameter] array $expected,
         bool $render = false,
+        bool $observeConfig = false,
     ): array {
         $keys = array_keys($expected);
         sort($keys);
         if (
-            !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
+            ($observeConfig && !$render) || !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
             || $expected['checkout_id'] === '' || strlen($expected['checkout_id']) > 256
             || preg_match('/[\x00-\x20]/', $expected['checkout_id']) === 1
             || $expected['mode'] !== 'SETUP' || preg_match('/^[A-Z]{3}$/D', $expected['currency']) !== 1
@@ -72,7 +73,9 @@ final readonly class HostedBrowser
         }
         [$input, $output, $errors] = self::pipes($pipes);
         try {
-            $payload = json_encode(['url' => $url, 'expected' => $expected, 'render' => $render], JSON_THROW_ON_ERROR);
+            $payload = json_encode([
+                'url' => $url, 'expected' => $expected, 'render' => $render, 'observeConfig' => $observeConfig,
+            ], JSON_THROW_ON_ERROR);
             if (@fwrite($input, $payload) !== strlen($payload)) {
                 throw new RuntimeException('Private browser handoff failed.');
             }
@@ -105,7 +108,7 @@ final readonly class HostedBrowser
             if ($hadErrors) {
                 throw new RuntimeException('Browser preflight emitted unexpected diagnostics.');
             }
-            $safe = self::sanitize(json_decode($contents, true, 16, JSON_THROW_ON_ERROR), $render);
+            $safe = self::sanitize(json_decode($contents, true, 16, JSON_THROW_ON_ERROR), $render, $observeConfig);
             if ($safe['result'] === 'blocked' && $status['exitcode'] !== 0) {
                 throw new RuntimeException('Browser preflight process failed.');
             }
@@ -124,8 +127,14 @@ final readonly class HostedBrowser
     }
 
     /** @return array<string,string|int|bool|array<string,int>> */
-    public static function sanitize(#[SensitiveParameter] mixed $data, bool $render = false): array
-    {
+    public static function sanitize(
+        #[SensitiveParameter] mixed $data,
+        bool $render = false,
+        bool $observeConfig = false,
+    ): array {
+        if ($observeConfig && !$render) {
+            throw new RuntimeException('Method observation requires explicit rendering.');
+        }
         if (!is_array($data) || ($data['card_entry_enabled'] ?? null) !== false) {
             throw new RuntimeException('Browser preflight returned invalid evidence.');
         }
@@ -185,6 +194,64 @@ final readonly class HostedBrowser
                 }
             }
             $safe['payer_payload_delivered'] = $delivered;
+        }
+        if (array_key_exists('method_config_requested', $data) && $data['method_config_requested'] !== $observeConfig) {
+            throw new RuntimeException('Method observation did not match its explicit configuration.');
+        }
+        $methodDelivered = $data['method_config_payload_delivered'] ?? false;
+        if ($methodDelivered !== false) {
+            if (
+                $methodDelivered !== true || !$observeConfig
+                || ($safe['payer_payload_delivered'] ?? false) !== true
+                || ($data['method_config_http_status'] ?? null) !== 200
+                || ($data['method_config_observation'] ?? null) !== 'matched'
+                || ($data['method_config_get_attempted'] ?? null) !== true
+                || ($data['method_config_response_observed'] ?? null) !== true
+                || !is_int($data['bound_render_frames'] ?? null) || $data['bound_render_frames'] < 1
+            ) {
+                throw new RuntimeException('Method observation lacked the bound read-only response.');
+            }
+        }
+        if ($observeConfig) {
+            foreach (
+                ['method_config_requested', 'method_config_get_attempted', 'method_config_response_observed',
+                'method_config_payload_delivered', 'method_config_pagination_known', 'method_config_has_more',
+                'method_config_card_advertised', 'card_readiness_observed', 'cardnumber_unique', 'cardnumber_visible',
+                'cardnumber_enabled', 'expiry_unique', 'expiry_visible', 'expiry_enabled',
+                'cvc_unique', 'cvc_visible', 'cvc_enabled'] as $key
+            ) {
+                if (is_bool($data[$key] ?? null)) {
+                    $safe[$key] = $data[$key];
+                }
+            }
+            $observation = $data['method_config_observation'] ?? null;
+            if (
+                in_array($observation, ['not_observed', 'matched', 'invalid_response',
+                'redirect_rejected', 'http_rejected'], true)
+            ) {
+                $safe['method_config_observation'] = $observation;
+            }
+            $status = $data['method_config_http_status'] ?? null;
+            if (is_int($status) && $status >= 100 && $status <= 599) {
+                $safe['method_config_http_status'] = $status;
+            }
+            $items = $data['method_config_items'] ?? null;
+            if (is_int($items) && $items >= 0 && $items <= 200) {
+                $safe['method_config_items'] = $items;
+            }
+            if (is_array($data['denied_read_families'] ?? null)) {
+                $families = [];
+                foreach (
+                    ['method_config', 'country', 'customer', 'consent_list', 'checkout_status',
+                    'other_pa'] as $key
+                ) {
+                    $count = $data['denied_read_families'][$key] ?? null;
+                    if (is_int($count) && $count >= 0 && $count <= 1000000) {
+                        $families[$key] = $count;
+                    }
+                }
+                $safe['denied_read_families'] = $families;
+            }
         }
         if (
             in_array($data['payer_observation'] ?? null, [
