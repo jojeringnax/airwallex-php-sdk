@@ -63,7 +63,7 @@ final class BillingScheduleEvidenceTest extends TestCase
     }
 
     /** @return array<string,mixed> */
-    private function runCase(string $case, ?RunLedger $ledger = null): array
+    private function runCase(string $case, ?RunLedger $ledger = null, ?Closure $clock = null): array
     {
         return BillingScheduleEvidence::execute(
             $this->session,
@@ -71,7 +71,7 @@ final class BillingScheduleEvidenceTest extends TestCase
             $case,
             'fixture_entity',
             'fixture_account',
-            static fn (): int => 1830297600,
+            $clock ?? static fn (): int => 1830297600,
             static fn (int $s) => null,
             3
         );
@@ -167,6 +167,164 @@ final class BillingScheduleEvidenceTest extends TestCase
         self::assertTrue($result['observations']['future_start_guard']);
         self::assertTrue($result['observations']['visible_schedule_unset']);
         self::assertNotNull($reserved);
+    }
+
+    public function testImmediateOutOfBandTrialOmitsOnlyStartAndCancelsBeforeArchivesWithoutActivation(): void
+    {
+        $result = $this->runCase('immediate-oob-trial');
+        self::assertSame('pass', $result['result']);
+        self::assertTrue($result['cancellation_verified']);
+        self::assertIsArray($result['observations']);
+        foreach (
+            ['trial_requested_without_starts_at', 'trial_observed_without_payment_action',
+            'trial_end_matches_requested', 'trial_start_before_end_verified', 'trial_cancel_before_end_guard'] as $key
+        ) {
+            self::assertTrue($result['observations'][$key]);
+        }
+        $creates = $this->mutationsEnding('/subscriptions/create');
+        self::assertCount(1, $creates);
+        $body = BillingScheduleProvider::body($creates[0]);
+        $keys = array_keys($body);
+        sort($keys);
+        self::assertSame(['billing_customer_id', 'collection_method', 'currency', 'days_until_due',
+            'duration', 'items', 'legal_entity_id', 'metadata', 'request_id', 'trial_ends_at'], $keys);
+        self::assertSame('OUT_OF_BAND', $body['collection_method']);
+        self::assertSame('EUR', $body['currency']);
+        self::assertSame(30, $body['days_until_due']);
+        self::assertSame(['period' => 1, 'period_unit' => 'MONTH'], $body['duration']);
+        self::assertSame('2028-01-03T00:00:00Z', $body['trial_ends_at']);
+        foreach (['starts_at', 'payment_source_id', 'linked_payment_account_id', 'payment_options'] as $field) {
+            self::assertArrayNotHasKey($field, $body);
+        }
+        $prices = $this->mutationsEnding('/prices/create');
+        self::assertCount(1, $prices);
+        $price = BillingScheduleProvider::body($prices[0]);
+        self::assertSame('1.23', $price['unit_amount']);
+        self::assertSame(['period' => 1, 'period_unit' => 'MONTH'], $price['recurring']);
+        $cancels = $this->mutationsEnding('/cancel');
+        self::assertCount(1, $cancels);
+        self::assertSame('NONE', BillingScheduleProvider::body($cancels[0])['proration_behavior']);
+        $cancelIndex = array_search($cancels[0], $this->http->requests, true);
+        foreach ($this->http->requests as $i => $request) {
+            self::assertStringNotContainsString('/pa/', $request->getUri()->getPath());
+            self::assertStringNotContainsString('/invoices/', $request->getUri()->getPath());
+            if (
+                $request->getMethod() === 'POST'
+                && $request->getUri()->getPath() !== '/api/v1/authentication/login'
+            ) {
+                $wire = BillingScheduleProvider::body($request);
+                self::assertNotSame('NOW', $wire['starts_at'] ?? null);
+                self::assertNotSame('NOW', $wire['trial_ends_at'] ?? null);
+                if (array_key_exists('active', $wire) && $wire['active'] === false) {
+                    self::assertGreaterThan($cancelIndex, $i);
+                }
+            }
+        }
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function unsafeImmediateTrials(): iterable
+    {
+        foreach (['PENDING', 'ACTIVE', 'UNPAID', 'PRIVATE_UNKNOWN'] as $state) {
+            yield $state => ['status', $state];
+        }
+        foreach (
+            [null, 'now', '2028-02-30T00:00:00Z', '2028-01-01T00:00:00+24:00',
+            '2028-01-03T00:00:00Z', '2028-01-04T00:00:00Z'] as $i => $start
+        ) {
+            yield 'invalid start ' . $i => ['starts_at', $start];
+        }
+        yield 'missing trial end' => ['trial_ends_at', null];
+        yield 'changed fractional trial end' => ['trial_ends_at', '2028-01-03T00:00:00.0000000001Z'];
+        yield 'wrong due days' => ['days_until_due', 31];
+        yield 'wrong duration' => ['duration', ['period' => 1, 'period_unit' => 'DAY']];
+        yield 'wrong customer' => ['billing_customer_id', 'PRIVATE_FOREIGN'];
+        yield 'wrong entity' => ['legal_entity_id', 'PRIVATE_FOREIGN'];
+        yield 'wrong currency' => ['currency', 'USD'];
+        yield 'wrong collection' => ['collection_method', 'AUTO_CHARGE'];
+        yield 'wrong marker' => ['metadata', ['sdk_validation_run' => 'PRIVATE_FOREIGN']];
+        yield 'unexpected source' => ['payment_source_id', 'PRIVATE_FOREIGN'];
+    }
+
+    #[DataProvider('unsafeImmediateTrials')]
+    public function testUnsafeImmediateTrialNeverCancelsOrArchives(string $field, mixed $value): void
+    {
+        $this->http->intercept = static function (
+            RequestInterface $request,
+            BillingScheduleProvider $http
+        ) use (
+            $field,
+            $value,
+        ): ?ResponseInterface {
+            $path = $request->getUri()->getPath();
+            if (
+                $request->getMethod() === 'GET' && str_contains($path, '/subscriptions/')
+                && !str_ends_with($path, '/items')
+            ) {
+                return BillingScheduleProvider::response(array_replace($http->objects[$path], [$field => $value]));
+            }
+            return null;
+        };
+        $result = $this->runCase('immediate-oob-trial');
+        self::assertNotSame('pass', $result['result']);
+        self::assertFalse($result['cancellation_verified']);
+        self::assertCount(0, $this->mutationsEnding('/cancel'));
+        self::assertCount(4, $this->http->mutations());
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testImmediateTrialClockMustStillPrecedeEndAfterItemRead(): void
+    {
+        $time = new class {
+            public int $now = 1830297600;
+        };
+        $this->http->intercept = static function (RequestInterface $request) use ($time): ?ResponseInterface {
+            if (str_ends_with($request->getUri()->getPath(), '/items')) {
+                $time->now += 172800;
+            }
+            return null;
+        };
+        $result = $this->runCase('immediate-oob-trial', clock: static fn (): int => $time->now);
+        self::assertNotSame('pass', $result['result']);
+        self::assertCount(0, $this->mutationsEnding('/cancel'));
+        self::assertCount(4, $this->http->mutations());
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function immediateCancellationFailures(): iterable
+    {
+        yield 'server rejection' => ['500'];
+        yield 'definite rejection' => ['400'];
+        yield 'after send transport failure' => ['transport'];
+        yield 'ack without terminal state' => ['unchanged'];
+    }
+
+    #[DataProvider('immediateCancellationFailures')]
+    public function testImmediateTrialCancellationNeverRepeatsOrArchivesBeforeTerminalReadback(string $fault): void
+    {
+        $this->http->intercept = static function (RequestInterface $request) use ($fault): ?ResponseInterface {
+            if (!str_ends_with($request->getUri()->getPath(), '/cancel')) {
+                return null;
+            }
+            if ($fault === 'transport') {
+                throw new RuntimeException('PRIVATE_AFTER_SEND');
+            }
+            if ($fault === 'unchanged') {
+                $parts = explode('/', $request->getUri()->getPath());
+                return BillingScheduleProvider::response(['id' => $parts[count($parts) - 2]]);
+            }
+            return new Response(
+                $fault === '400' ? 400 : 500,
+                [],
+                '{"code":"validation_error","message":"PRIVATE_MESSAGE"}'
+            );
+        };
+        $result = $this->runCase('immediate-oob-trial');
+        self::assertNotSame('pass', $result['result']);
+        self::assertTrue($result['reconciliation_required']);
+        self::assertCount(1, $this->mutationsEnding('/cancel'));
+        self::assertCount(5, $this->http->mutations());
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function testTrialOnlyUsesVerifiedCollectorAndNeverCreatesInstrumentOrPayment(): void
