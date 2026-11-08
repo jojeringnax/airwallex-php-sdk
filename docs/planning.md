@@ -4,6 +4,7 @@
 
 - Develop a framework-independent PHP SDK for the accepted Billing and Payments scope.
 - Distribute the SDK through Composer.
+- Keep the SDK framework-independent, following the [package architecture](architecture.md).
 
 The initial scope is limited to the Billing and Payments capabilities below. Other Airwallex product families and connected-account onboarding operations require separate scope decisions.
 
@@ -21,7 +22,7 @@ The initial release covers both subscription billing and standalone Payments ([i
 | One-time payments, authorization, capture and payment cancellation | Required |
 | Payment status retrieval and refunds | Required |
 | Invoice retrieval | Required; document/PDF access needs capability review |
-| Webhook state synchronization | Required |
+| Webhooks | SDK verification and event contracts required; state synchronization and reconciliation belong to consumers |
 | Connected-account support | Required, subject to independent contract verification per family |
 | Discounts/coupons, tax and usage-based billing | Deferred beyond the initial release |
 | Countries and currencies | No SDK-specific restrictions; expose provider-supported combinations for the applicable contract and account |
