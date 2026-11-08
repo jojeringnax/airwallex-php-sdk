@@ -79,7 +79,7 @@ The [data-type reference](https://www.airwallex.com/docs/api/data_types) uses ma
 
 Keep filters and authorization context across pages. Other lists need their own bounds/envelopes verified; the representative formats do not establish one universal paginator.
 
-The [error reference](https://www.airwallex.com/docs/api/errors) describes `code`, `source`, `message` and conditional `details`. Preserve HTTP status and provider codes; exception conventions are defined in [consumer interfaces](consumer-interfaces.md#pagination-and-failures). Endpoint error tables add resource-specific behavior: a missing Billing resource can be 404 even though the general table describes 404 as a missing endpoint. Error-message text is unsuitable for stable matching. Sanitize diagnostics rather than logging full bodies.
+The [error reference](https://www.airwallex.com/docs/api/errors) describes `code`, `source`, `message` and conditional `details`. Preserve HTTP status and provider codes; exception conventions are defined in [interface examples](consumer-examples.md#pagination-and-failures). Endpoint error tables add resource-specific behavior: a missing Billing resource can be 404 even though the general table describes 404 as a missing endpoint. Error-message text is unsuitable for stable matching. Sanitize diagnostics rather than logging full bodies.
 
 ## Request identity and retries
 
