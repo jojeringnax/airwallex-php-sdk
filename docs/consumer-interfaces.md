@@ -22,7 +22,7 @@ Use resource-oriented synchronous methods with provider-shaped associative array
 | Mutation identity | Consumers supply and durably associate each documented `request_id` with the intended action; the SDK never silently generates/replaces it. Bodyless endpoints without request identity do not gain an invented field. Automatic mutation replay stays disabled until endpoint safety is verified in [#15](https://github.com/jojeringnax/airwallex-php-sdk/issues/15). |
 | Responses | Return resource/list envelopes as arrays, preserving nullable fields and provider pagination. Each call performs its named operation. HTTP/error metadata is exposed through exceptions on failure. |
 
-These choices establish the future public surface before an initial release. Once shipped, changes follow the [compatibility policy](architecture.md#compatibility-policy); [#9](https://github.com/jojeringnax/airwallex-php-sdk/issues/9) defines detailed release gates. Resource contracts determine operation coverage.
+These choices establish the future public surface before an initial release. Once shipped, changes follow the [compatibility and release policy](release-policy.md), including its release gates. Resource contracts determine operation coverage.
 
 ## Workflow references
 
