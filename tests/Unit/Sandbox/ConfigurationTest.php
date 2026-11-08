@@ -137,4 +137,37 @@ ENV;
         self::assertSame($response, $guard->sendRequest($request));
         self::assertSame(1, $guard->loginRequests);
     }
+    /** @return iterable<string,array{?string,?string,bool}> */
+    public static function organizationReferences(): iterable
+    {
+        yield 'absent' => [null, null, true];
+        yield 'valid opaque' => ['SYNTHETIC_PRIVATE_ORG', 'SYNTHETIC_PRIVATE_ORG', true];
+        yield 'empty provided' => ['', null, false];
+        yield 'whitespace' => ['SYNTHETIC PRIVATE', null, false];
+        yield 'control' => ["SYNTHETIC\x01PRIVATE", null, false];
+        yield 'oversized' => [str_repeat('x', 257), null, false];
+    }
+
+    #[DataProvider('organizationReferences')]
+    public function testOptionalOrganizationIsPrivateComparisonDataOnly(
+        ?string $value,
+        ?string $expected,
+        bool $valid,
+    ): void {
+        $path = tempnam(sys_get_temp_dir(), 'synthetic-organization-reference-');
+        self::assertNotFalse($path);
+        $contents = $value === null ? '' : 'AIRWALLEX_ORGANIZATION_ID="' . $value . '"';
+        file_put_contents($path, $contents);
+        try {
+            $configuration = Configuration::load('sandbox', $path);
+            self::assertStringNotContainsString('SYNTHETIC', print_r($configuration, true));
+            if (!$valid) {
+                $this->expectExceptionMessage('The optional organization comparison reference is invalid.');
+            }
+            self::assertSame($expected, $configuration->organizationId());
+            self::assertSame($contents, file_get_contents($path));
+        } finally {
+            unlink($path);
+        }
+    }
 }
