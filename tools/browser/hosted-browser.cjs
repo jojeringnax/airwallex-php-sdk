@@ -6,6 +6,8 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { HostedPolicy, egressProxy, assetMatches } = require('./hosted-policy.cjs');
+const { RiskJournalClient } = require('./hosted-risk-journal.cjs');
+const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
 
 // Contains only evidence constructed from fixed local labels/counts, never a caught Error.
 class PreflightFailure extends Error {
@@ -15,8 +17,10 @@ class PreflightFailure extends Error {
 }
 let startupPhase = 'configuration';
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false) {
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null) {
   const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal);
+  if (riskJournal !== null && !observeNormal) throw new Error('Risk observation requires explicit normal reads.');
+  const risk = new HostedRiskObserver(policy, riskJournal, playwright, riskFixture);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
   await fs.chmod(directory, 0o700);
   let proxy;
@@ -83,7 +87,11 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let payer = { payer_observation: 'not_observed', payer_response_observed: false,
     payer_mode_matches: false, payer_currency_matches: false };
   try {
-    proxy = await step('proxy_start', () => egressProxy(policy));
+    proxy = await step('proxy_start', () => egressProxy({
+      allowsAuthority: (host, port) => policy.allowsAuthority(host, port) || risk.authority(host, port),
+      allowsHttp: value => policy.allowsHttp(value),
+    }));
+    risk.start(proxy.server);
     browser = await step('browser_launch', () => playwright.chromium.launch({
       channel: 'chrome', headless: true, timeout: 15000,
       proxy: { server: proxy.server, bypass: '' },
@@ -106,6 +114,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await context.route('**/*', route => track(async () => {
       if (shuttingDown) throw new Error('Browser preflight is shutting down.');
       const request = route.request();
+      if (await risk.handle(route, context, mainPage?.mainFrame(), boundFrame, () => shuttingDown)) return;
       // Script admission and integrity share one immutable, non-null expected hash.
       const script = request.resourceType() === 'script';
       const expectedHash = script ? policy.assetHash(request.url(), request.method(), request.resourceType()) : null;
@@ -400,6 +409,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       } else {
         counts.blocked_requests++;
         policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
+        risk.noteDenied(request.url());
         await route.abort('blockedbyclient');
       }
     }));
@@ -501,6 +511,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     policy.closeNormalWindow();
     clearTimeout(normalWindowTimer);
     clearTimeout(watchdog);
+    await track(async () => {
+      if (!await risk.close()) throw new Error('Risk relay did not close safely.');
+    }, 'risk_shutdown');
     if (context) await track(() => context.close(), 'shutdown_browser_context');
     if (browser) await track(() => browser.close(), 'shutdown_browser');
     for (const promise of [publicClientPromise, methodClientPromise, ...normalClientPromises]) if (promise) await track(async () => {
@@ -518,8 +531,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     ...policy.bindingEvidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
     ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}),
     ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
+    ...risk.evidence(),
   });
-  return { ...result, ...counts, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...risk.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
@@ -535,7 +549,9 @@ async function main() {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url'].includes(Object.keys(input).sort().join(','))
+      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url', 'expected,observeConfig,observeNormal,observeRisk,render,riskJournal,url'].includes(Object.keys(input).sort().join(','))
+      || (Object.hasOwn(input, 'observeRisk') && input.observeRisk !== true)
+      || (input.observeRisk === true && input.observeNormal !== true)
       || (Object.hasOwn(input, 'observeNormal') && typeof input.observeNormal !== 'boolean')
       || (Object.hasOwn(input, 'observeConfig') && typeof input.observeConfig !== 'boolean')
       || (Object.hasOwn(input, 'render') && typeof input.render !== 'boolean') || typeof input.url !== 'string'
@@ -547,7 +563,8 @@ async function main() {
   startupPhase = 'tooling_load';
   const playwright = require(process.argv[2]);
   startupPhase = 'browser_startup';
-  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false);
+  const journal = input.observeRisk === true ? RiskJournalClient.fromDescriptors(input.riskJournal) : null;
+  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
