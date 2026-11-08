@@ -11,7 +11,7 @@ Commit, push, release, and GitHub board changes require user authorization cover
 
 ## Planning
 
-Before planning development or implementing capabilities, read [docs/planning.md](docs/planning.md) for accepted SDK scope, deferrals and implementation gates.
+Before planning development or implementing capabilities, read [docs/planning.md](docs/planning.md) for accepted SDK scope and deferrals.
 
 Use https://github.com/users/jojeringnax/projects/2 for project planning when accessible. For each proposed development item, define its outcome, scope, acceptance criteria, dependencies, and validation. Planning is complete when the proposed work has a clear order and every decision blocking implementation is identified for the user.
 
