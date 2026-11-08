@@ -46,22 +46,10 @@ The accepted scope covers signup through customer creation and checkout, renewal
 
 The maintainer selected broad geographic, currency and payment-method coverage to avoid an arbitrary SDK subset. This is a coverage requirement, not verified provider availability or a promise that every method supports recurring collection, saved-method charging, authorization/capture or connected-account use. Contract review must map supported combinations and identify unavailable or uncertain combinations before implementation; any proposed reduction in the accepted scope requires a maintainer decision.
 
-The existing Billing-focused implementation plan must be reconciled with this Payments scope before implementation. Identify missing Payments work and its dependencies during contract review; the current milestone list does not yet establish a delivery sequence for those additions.
+The existing Billing-focused implementation plan must be reconciled with this Payments scope before implementation. Identify missing Payments work and its dependencies during contract review.
 
 ## Implementation gates
 
 Issue creation does not approve every proposed public method or implementation detail. The initial decision and contract milestone must settle product and endpoint coverage, supported PHP versions, SDK package naming and dependencies, framework-independent consumer interfaces, and API/webhook versions before dependent implementation begins.
 
 Verify connected-account applicability separately for each selected API family. Organization-level Billing resources and account-level Payments resources must not be assumed to share authorization or ownership semantics. Account-specific enablement and sandbox access remain validation prerequisites.
-
-Milestone numbering expresses the intended development sequence. Dependencies on individual issues define which work can proceed concurrently. Dates, estimates and release numbers remain unset until agreed. Publishing, tagging, pushing and release operations require separate authorization.
-
-## SDK milestones
-
-The list below includes SDK work only. Linked GitHub milestones retain their existing numbering; their remote descriptions and issue dependencies still need reconciliation with the current scope.
-
-1. [Decisions and contracts](https://github.com/jojeringnax/airwallex-php-sdk/milestone/1): agree scope, examples, compatibility and verified provider contracts.
-2. [SDK foundation](https://github.com/jojeringnax/airwallex-php-sdk/milestone/2): Composer tooling, transport, authentication, precision, errors, retries and pagination.
-3. [Billing workflows](https://github.com/jojeringnax/airwallex-php-sdk/milestone/3): customers, catalog, checkout, subscription lifecycle and invoices.
-4. [Advanced billing](https://github.com/jojeringnax/airwallex-php-sdk/milestone/5): discounts/coupons, tax and usage billing are deferred beyond the initial release; credit-note scope remains subject to capability review.
-5. [Release readiness](https://github.com/jojeringnax/airwallex-php-sdk/milestone/6): sandbox evidence, consumer documentation and distributable artifacts.
