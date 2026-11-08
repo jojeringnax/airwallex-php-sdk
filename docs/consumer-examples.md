@@ -62,6 +62,8 @@ $checkout = $billing->billing()->checkouts()->create([
     'linked_payment_account_id' => '<eligible-collection-account-id>',
     'mode' => 'SUBSCRIPTION',
     'ui_mode' => 'HOSTED',
+    'currency' => 'EUR', // Match the recurring Price's currency.
+    'subscription_data' => ['days_until_due' => 0],
     'line_items' => [['price_id' => '<recurring-price-id>', 'quantity' => 1]],
     'success_url' => 'https://example.test/billing/complete',
     'back_url' => 'https://example.test/billing',
@@ -75,11 +77,13 @@ The same `checkouts()->create()` shape covers the following modes, each with a f
 
 | Mode | Payload change / use |
 | --- | --- |
-| `SUBSCRIPTION` | Recurring Price line items; optional `subscription_data` with `starts_at` and `trial_ends_at` |
-| `PAYMENT` | One-time Price line items; reconcile the resulting payment/invoice rather than assuming a subscription |
+| `SUBSCRIPTION` | Recurring Price line items and explicit `subscription_data`, as above; add `starts_at`, `trial_ends_at` or finite `duration` only when intended |
+| `PAYMENT` | One-time Price line items and `invoice_data`, for example `['days_until_due' => 0]`; reconcile the resulting payment/invoice |
 | `SETUP` | Supply `currency` and the existing Billing Customer; omit `line_items`; collect an instrument under the eligible linked account, then retrieve resulting state before charging later |
 
 Checkout update uses `update($id, $body)` with only verified mutable fields; cancellation uses `cancel($id)` without an invented request ID. Retrieve after ambiguous outcomes rather than assuming safe replay. A setup alone is not consent to an arbitrary later charge.
+
+For SUBSCRIPTION, `days_until_due=0` states the selected default explicitly; PAYMENT uses zero as the example's chosen due-date setting. The subscription example leaves `duration` absent for an ongoing subscription. A [bounded sandbox matrix](https://github.com/jojeringnax/airwallex-php-sdk/issues/42#issuecomment-6722652823) passed all nine mode/UI control flows with these mode-specific objects and a finite one-month subscription duration; it did not complete a purchase or validate every optional-field combination. The SDK retains the selected schema's requiredness rules.
 
 ## Saved instrument and direct subscription
 

@@ -27,6 +27,8 @@ return static function (Client $client): array {
         'linked_payment_account_id' => '<eligible-collection-account-id>',
         'mode' => 'SUBSCRIPTION',
         'ui_mode' => 'HOSTED',
+        'currency' => 'EUR', // Match the recurring Price's currency.
+        'subscription_data' => ['days_until_due' => 0],
         'line_items' => [['price_id' => '<recurring-price-id>', 'quantity' => 1]],
         'success_url' => 'https://example.test/billing/complete',
         'back_url' => 'https://example.test/billing',
