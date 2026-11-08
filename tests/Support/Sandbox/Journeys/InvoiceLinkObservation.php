@@ -10,7 +10,7 @@ use Jojeringnax\Airwallex\Exception\ProtocolException;
 use RuntimeException;
 use SensitiveParameter;
 
-/** GET-only observations of one prior manual lifecycle; never follows the returned capabilities. */
+/** Shared own-Invoice checks; the default string/clock observation never follows returned capabilities. */
 final class InvoiceLinkObservation
 {
     private bool $used = false;
@@ -125,9 +125,26 @@ final class InvoiceLinkObservation
         return $value;
     }
 
-    /** @return array<string,mixed> */
-    public function inspect(SandboxSession $session, ?Closure $clock = null, ?Closure $wait = null): array
+    /**
+     * @return array{prior_ledger_sha256:string,
+     * prior_source:array{base_commit:string,sdk_digest:string,harness_digest:string}}
+     */
+    public function provenance(): array
     {
+        return ['prior_ledger_sha256' => $this->priorDigest, 'prior_source' => $this->priorSource];
+    }
+
+    /**
+     * @param (Closure(array<array-key,mixed>):array<string,mixed>)|null $access
+     * Private development handoff only after the same Invoice has passed both ownership reads.
+     * @return array<string,mixed>
+     */
+    public function inspect(
+        SandboxSession $session,
+        ?Closure $clock = null,
+        ?Closure $wait = null,
+        ?Closure $access = null,
+    ): array {
         if (
             $this->used || !$session->isOrganization()
             || !hash_equals($this->contextFingerprint, $session->contextFingerprint())
@@ -184,6 +201,10 @@ final class InvoiceLinkObservation
                 [$beforeSecond, $afterSecond]
             );
             $result['clock_progressed_between_reads'] = $beforeSecond > $afterFirst;
+            if ($access !== null) {
+                $phase = 'observe_invoice_access';
+                $result['access'] = $access($second);
+            }
             $result['result'] = 'pass';
         } catch (\Throwable $error) {
             if ($error instanceof ApiException) {
