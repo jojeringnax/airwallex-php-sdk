@@ -93,6 +93,7 @@ The files below return a closure or a map of named application recipes. Load the
 | Verified card instrument to Billing Source and direct Subscription | [Card linkage](../examples/billing-card-subscription.php), with stored buyer/collector mapping |
 | Provider trial/future start, quantity and plan changes | [Billing lifecycle](../examples/billing-lifecycle.php): `start_trial`, `change_quantity`, `replace_price` |
 | Scheduled ending or immediate permanent cancellation | [Billing lifecycle](../examples/billing-lifecycle.php): choose `schedule_end` or `cancel_now` |
+| Preserve and restore an applicable finite end | [Billing lifecycle](../examples/billing-lifecycle.php): `schedule_finite_end`, then separately authorized `restore_finite_end`, with private durable snapshot callbacks |
 | Replace an expired source and observe recovery | [Billing lifecycle](../examples/billing-lifecycle.php): `replace_source_and_observe` |
 | Invoice PDF/hosted links | [Billing lifecycle](../examples/billing-lifecycle.php): `read_invoice` |
 | Payments Customer/Consent setup and card verification | [Payments lifecycle](../examples/payments-lifecycle.php): `prepare_customer_consent`, then `verify_card_consent` after approved instrument collection |
