@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys;
 
+use Closure;
 use DOMDocument;
 use GuzzleHttp\Client;
 use GuzzleHttp\Psr7\Request;
@@ -11,7 +12,7 @@ use Psr\Http\Client\ClientInterface;
 use RuntimeException;
 use SensitiveParameter;
 
-/** One credential-free customer GET; HTML is observed, never executed or submitted. */
+/** Credential-free bounded reads; the optional single mock hop cannot execute HTML or submit a form. */
 final class AlipayRedirect
 {
     private bool $sent = false;
@@ -97,69 +98,115 @@ final class AlipayRedirect
         return $safe;
     }
 
-    /** @return array<string,int|bool|string> */
-    public function inspect(#[SensitiveParameter] string $url): array
+    /**
+     * @param (Closure(string):void)|null $beforeMockRead Explicit opt-in and durable private reservation.
+     * @return array<string,int|bool|string|array<string,int|bool|string>>
+     */
+    public function inspect(#[SensitiveParameter] string $url, ?Closure $beforeMockRead = null): array
     {
         if ($this->sent || !self::eligible($url)) {
             throw new RuntimeException('The customer redirect is unavailable or outside the verified Sandbox path.');
         }
+        $this->sent = true;
         try {
-            $request = new Request('GET', $url, ['Accept' => 'text/html, application/xhtml+xml']);
-            if ((string) $request->getUri() !== $url) {
-                throw new RuntimeException('The customer redirect cannot be preserved exactly.');
+            $first = $this->observe($url);
+            $safe = $first['safe'] + ['mock_read_requested' => $beforeMockRead !== null,
+                'mock_read_attempted' => false, 'mock_read_reservation_failed' => false, 'mock_read_failed' => false];
+            $location = $first['location'];
+            if (
+                $beforeMockRead === null || $safe['http_status'] !== 302
+                || $location === null || !self::mockReadable($location)
+            ) {
+                return $safe;
             }
-            $this->sent = true;
-            $response = $this->http->sendRequest($request);
-            $stream = $response->getBody();
             try {
-                $body = '';
-                while (strlen($body) <= 65536) {
-                    $part = $stream->read(min(8192, 65537 - strlen($body)));
-                    if ($part === '') {
-                        if ($stream->eof()) {
-                            break;
-                        }
-                        throw new RuntimeException('The customer response did not make bounded progress.');
-                    }
-                    $body .= $part;
+                $beforeMockRead($location);
+            } catch (\Throwable) {
+                $safe['mock_read_reservation_failed'] = true;
+                return $safe; // The second transport is unreachable without the durable reservation.
+            }
+            $safe['location_follow_allowed'] = true;
+            $safe['mock_read_attempted'] = true;
+            try {
+                $second = $this->observe($location);
+                $safe['sandbox_mock'] = $second['safe'];
+            } catch (\Throwable) {
+                $safe['mock_read_failed'] = true; // No raw exception, retry or third request.
+            }
+            return $safe;
+        } catch (\Throwable) {
+            throw new RuntimeException('The customer redirect read could not be safely observed.');
+        }
+    }
+
+    /** @return array{safe:array<string,int|bool|string>,location:?string} Private Location never enters evidence. */
+    private function observe(#[SensitiveParameter] string $url): array
+    {
+        $request = new Request('GET', $url, ['Accept' => 'text/html, application/xhtml+xml']);
+        if ((string) $request->getUri() !== $url) {
+            throw new RuntimeException('The customer redirect cannot be preserved exactly.');
+        }
+        $response = $this->http->sendRequest($request);
+        $stream = $response->getBody();
+        try {
+            $body = '';
+            while (strlen($body) <= 65536) {
+                $part = $stream->read(min(8192, 65537 - strlen($body)));
+                if ($part === '') {
                     if ($stream->eof()) {
                         break;
                     }
+                    throw new RuntimeException('The customer response did not make bounded progress.');
                 }
-                if (strlen($body) > 65536) {
-                    throw new RuntimeException('The customer response exceeds the observation boundary.');
+                $body .= $part;
+                if ($stream->eof()) {
+                    break;
                 }
-                $locations = $response->getHeader('Location');
-                if (count($locations) > 1 || strlen($locations[0] ?? '') > 8192) {
-                    throw new RuntimeException('The customer response has an unsupported redirect header.');
-                }
-                $type = $response->getHeaderLine('Content-Type');
-                if (strlen($type) > 256) {
-                    throw new RuntimeException('The customer response has an unsupported content type.');
-                }
-                $html = preg_match('~^(?:text/html|application/xhtml\+xml)(?:\s*;|$)~i', $type) === 1;
-                $safe = [
-                    'http_status' => $response->getStatusCode(), 'origin_category' => self::location($url),
-                    'html_content_type' => $html, 'location_present' => $locations !== [],
-                    'location_category' => self::location($locations[0] ?? null),
-                    'form_present' => false, 'form_action_present' => false, 'post_form_present' => false,
-                ];
-                foreach (self::diagnose($locations[0] ?? null) as $key => $value) {
-                    $safe['location_uri_' . $key] = $value;
-                }
-                // The guide shows this shape as simulation request-body data, never customer-GET permission.
-                $safe['location_documented_sg_simulation_shape'] = self::simulationShape($locations[0] ?? null);
-                $safe['location_follow_allowed'] = false;
-                if ($html && $body !== '') {
-                    $safe = array_replace($safe, self::forms($body));
-                }
-                return $safe;
-            } finally {
-                $stream->close();
             }
-        } catch (\Throwable) {
-            throw new RuntimeException('The single customer redirect read could not be safely observed.');
+            if (strlen($body) > 65536) {
+                throw new RuntimeException('The customer response exceeds the observation boundary.');
+            }
+            $locations = $response->getHeader('Location');
+            if (count($locations) > 1 || strlen($locations[0] ?? '') > 8192) {
+                throw new RuntimeException('The customer response has an unsupported redirect header.');
+            }
+            $type = $response->getHeaderLine('Content-Type');
+            if (strlen($type) > 256) {
+                throw new RuntimeException('The customer response has an unsupported content type.');
+            }
+            $html = preg_match('~^(?:text/html|application/xhtml\+xml)(?:\s*;|$)~i', $type) === 1;
+            $safe = [
+                'http_status' => $response->getStatusCode(), 'origin_category' => self::simulationShape($url)
+                    ? 'sandbox_api_sg_mock' : self::location($url),
+                'html_content_type' => $html, 'location_present' => $locations !== [],
+                'location_category' => self::location($locations[0] ?? null),
+                'form_present' => false, 'form_action_present' => false, 'post_form_present' => false,
+            ];
+            foreach (self::diagnose($locations[0] ?? null) as $key => $value) {
+                $safe['location_uri_' . $key] = $value;
+            }
+            // The guide shape alone is simulation-body evidence; any customer GET needs the explicit inference policy.
+            $safe['location_documented_sg_simulation_shape'] = self::simulationShape($locations[0] ?? null);
+            $safe['location_follow_allowed'] = false;
+            if ($html && $body !== '') {
+                $safe = array_replace($safe, self::forms($body));
+            }
+            return ['safe' => $safe, 'location' => $locations[0] ?? null];
+        } finally {
+            $stream->close();
         }
+    }
+
+    private static function mockReadable(#[SensitiveParameter] string $url): bool
+    {
+        if (!self::simulationShape($url)) {
+            return false;
+        }
+        $safe = self::diagnose($url);
+        // Public example has no query; the observed own 302 has a single checksum. Other keys stay unverified.
+        return $safe['query_scan_complete'] === true && $safe['query_unlisted_keys_present'] === false
+            && $safe['query_repeated_key_present'] === false
+            && ($safe['query_present'] === false || $safe['query_checksum_present'] === true);
     }
 
     private static function simulationShape(#[SensitiveParameter] ?string $value): bool

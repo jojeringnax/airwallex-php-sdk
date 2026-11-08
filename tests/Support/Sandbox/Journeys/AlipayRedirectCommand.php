@@ -23,13 +23,15 @@ final class AlipayRedirectCommand
         $safe = ['scenario' => 'alipay-redirect-preflight', 'api_version' => '2026-08-21',
             'result' => 'fail', 'stage' => 'configuration'];
         try {
-            $allowed = ['environment', 'credentials-file', 'state-dir', 'create-one-alipay-hk'];
+            $allowed = ['environment', 'credentials-file', 'state-dir', 'create-one-alipay-hk',
+                'read-one-sandbox-mock'];
             $path = $options['credentials-file'] ?? null;
             $directory = $options['state-dir'] ?? null;
             if (
                 array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox'
                 || ($options['create-one-alipay-hk'] ?? null) !== true || !is_string($path) || $path === ''
                 || !is_string($directory) || $directory === ''
+                || (array_key_exists('read-one-sandbox-mock', $options) && !is_bool($options['read-one-sandbox-mock']))
             ) {
                 return $safe;
             }
@@ -37,7 +39,12 @@ final class AlipayRedirectCommand
             $config = Configuration::load('sandbox', $path);
             $session = new SandboxSession($config, 'account', $sdkHttp);
             $ledger = RunLedger::create($session->contextFingerprint(), $directory);
-            return AlipayRedirectPreflight::execute($session, $ledger, new AlipayRedirect($redirectHttp));
+            return AlipayRedirectPreflight::execute(
+                $session,
+                $ledger,
+                new AlipayRedirect($redirectHttp),
+                readOneSandboxMock: ($options['read-one-sandbox-mock'] ?? false) === true
+            );
         } catch (\Throwable) {
             return $safe;
         }

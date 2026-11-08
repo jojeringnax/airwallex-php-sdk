@@ -23,6 +23,9 @@ final class AlipayRedirectTest extends TestCase
     private const string URL = 'https://api.sandbox.airwallex.com/pa/redirect/hk/synthetic_attempt'
         . '?checksum=PRIVATE_SESSION%2f%2B+opaque&unchanged=1';
 
+    private const string MOCK = 'https://api.sandbox.airwallex.com/pa/sandbox/sg/mck_PRIVATE_MOCK'
+        . '?checksum=PRIVATE_MOCK%2f%2B+opaque';
+
     /** @return iterable<string,array{mixed,bool}> */
     public static function urls(): iterable
     {
@@ -281,6 +284,185 @@ final class AlipayRedirectTest extends TestCase
             ] as [$flag, $variant]
         ) {
             self::assertFalse(AlipayRedirect::diagnose($variant)[$flag]);
+        }
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function readableMockQueries(): iterable
+    {
+        yield 'single opaque checksum' => [self::MOCK];
+        yield 'no query as in public example' => [explode('?', self::MOCK, 2)[0]];
+    }
+
+    #[DataProvider('readableMockQueries')]
+    public function testOptInReservesOneExactAnonymousMockGetAndNeverFollowsItsRedirect(string $location): void
+    {
+        $mock = new MockHandler([
+            new Response(302, ['Location' => $location, 'Set-Cookie' => 'PRIVATE_COOKIE=PRIVATE_VALUE']),
+            new Response(
+                302,
+                ['Location' => $location, 'Content-Type' => 'text/html'],
+                '<form method="POST" action="PRIVATE_ACTION">PRIVATE_NAME<script>PRIVATE_SCRIPT</script></form>'
+            ),
+            new Response(200, [], 'PRIVATE_FORBIDDEN_THIRD_REQUEST'),
+        ]);
+        $http = new RecordingClient(new Client(['handler' => $mock, 'cookies' => false]));
+        $reservations = 0;
+        $safe = (new AlipayRedirect($http))->inspect(self::URL, static function (string $url) use (
+            &$reservations,
+            $mock,
+            $location,
+        ): void {
+            self::assertSame($location, $url);
+            self::assertSame(2, $mock->count(), 'The reservation must precede the second send.');
+            ++$reservations;
+        });
+        self::assertSame(1, $reservations);
+        self::assertSame(1, $mock->count());
+        self::assertCount(2, $http->requests);
+        self::assertSame(self::URL, (string) $http->requests[0]->getUri());
+        self::assertSame($location, (string) $http->requests[1]->getUri());
+        foreach ($http->requests as $request) {
+            self::assertSame('GET', $request->getMethod());
+            self::assertSame('', (string) $request->getBody());
+            foreach (['Authorization', 'Cookie', 'Referer', 'x-api-key', 'x-login-as', 'x-on-behalf-of'] as $header) {
+                self::assertFalse($request->hasHeader($header));
+            }
+        }
+        self::assertTrue($safe['mock_read_requested']);
+        self::assertTrue($safe['mock_read_attempted']);
+        self::assertTrue($safe['location_follow_allowed']);
+        self::assertIsArray($safe['sandbox_mock']);
+        self::assertSame(302, $safe['sandbox_mock']['http_status']);
+        self::assertSame('sandbox_api_sg_mock', $safe['sandbox_mock']['origin_category']);
+        self::assertTrue($safe['sandbox_mock']['post_form_present']);
+        self::assertFalse($safe['sandbox_mock']['location_follow_allowed']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    public function testDefaultKeepsTheExactMockLocationDiagnosticOnly(): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => self::MOCK]), new Response(200)]);
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(self::URL);
+        self::assertFalse($safe['mock_read_requested']);
+        self::assertFalse($safe['mock_read_attempted']);
+        self::assertFalse($safe['location_follow_allowed']);
+        self::assertSame(1, $mock->count());
+    }
+
+    /** @return iterable<string,array{int}> */
+    public static function not302(): iterable
+    {
+        foreach ([200, 301, 303, 307, 308, 400, 500] as $status) {
+            yield (string) $status => [$status];
+        }
+    }
+
+    #[DataProvider('not302')]
+    public function testOnlyFirstResponse302CanUseTheOptIn(int $status): void
+    {
+        $mock = new MockHandler([new Response($status, ['Location' => self::MOCK]), new Response(200)]);
+        $called = false;
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+            self::URL,
+            static function () use (&$called): void {
+                $called = true;
+            }
+        );
+        self::assertFalse($called);
+        self::assertFalse($safe['mock_read_attempted']);
+        self::assertSame(1, $mock->count());
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function unverifiedMockTargets(): iterable
+    {
+        foreach (
+            [
+            'production' => str_replace('api.sandbox.', 'api.', self::MOCK),
+            'lookalike' => str_replace('.com/', '.com.evil.test/', self::MOCK),
+            'HTTP' => str_replace('https:', 'http:', self::MOCK),
+            'port443' => str_replace('.com/', '.com:443/', self::MOCK),
+            'other port' => str_replace('.com/', '.com:444/', self::MOCK),
+            'userinfo' => str_replace('https://', 'https://PRIVATE_USER@', self::MOCK),
+            'fragment' => self::MOCK . '#PRIVATE_FRAGMENT',
+            'HK' => str_replace('/sg/', '/hk/', self::MOCK),
+            'no mock prefix' => str_replace('mck_', '', self::MOCK),
+            'encoded ID' => str_replace('mck_PRIVATE_MOCK', 'mck_%41', self::MOCK),
+            'traversal' => str_replace('mck_PRIVATE_MOCK', '../mck_PRIVATE_MOCK', self::MOCK),
+            'repeated query' => self::MOCK . '&checksum=PRIVATE_SECOND',
+            'unverified query' => self::MOCK . '&PRIVATE_NAME=PRIVATE_VALUE',
+            'malformed' => self::MOCK . '%x',
+            ] as $name => $url
+        ) {
+            yield $name => [$url];
+        }
+    }
+
+    #[DataProvider('unverifiedMockTargets')]
+    public function testOptInRejectsUnverifiedMockTargetsBeforeReservationOrSecondSend(string $url): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => $url]), new Response(200)]);
+        $reserved = false;
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+            self::URL,
+            static function () use (&$reserved): void {
+                $reserved = true;
+            }
+        );
+        self::assertFalse($reserved);
+        self::assertFalse($safe['mock_read_attempted']);
+        self::assertFalse($safe['location_follow_allowed']);
+        self::assertSame(1, $mock->count());
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    public function testFailedReservationNeverSendsTheMockGetOrRetainsItsError(): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => self::MOCK]), new Response(200)]);
+        $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+            self::URL,
+            static function (): void {
+                throw new RuntimeException('PRIVATE_RESERVATION_ERROR');
+            }
+        );
+        self::assertTrue($safe['mock_read_reservation_failed']);
+        self::assertFalse($safe['mock_read_attempted']);
+        self::assertFalse($safe['location_follow_allowed']);
+        self::assertSame(1, $mock->count());
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    public function testRepeatedLocationHeadersCannotSelectAMockTarget(): void
+    {
+        $mock = new MockHandler([new Response(302, ['Location' => [self::MOCK, self::MOCK]]), new Response(200)]);
+        $reserved = false;
+        $error = null;
+        try {
+            (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(
+                self::URL,
+                static function () use (&$reserved): void {
+                    $reserved = true;
+                }
+            );
+        } catch (RuntimeException $caught) {
+            $error = $caught;
+        }
+        self::assertNotNull($error);
+        self::assertFalse($reserved);
+        self::assertSame(1, $mock->count());
+    }
+
+    public function testFailedSecondStreamIsPrivateAndCannotBecomeAThirdRequest(): void
+    {
+        foreach (self::unsafeResponses() as [$response]) {
+            $mock = new MockHandler([new Response(302, ['Location' => self::MOCK]), $response, new Response(200)]);
+            $safe = (new AlipayRedirect(new Client(['handler' => $mock])))->inspect(self::URL, static fn () => null);
+            self::assertTrue($safe['mock_read_attempted']);
+            self::assertTrue($safe['mock_read_failed']);
+            self::assertArrayNotHasKey('sandbox_mock', $safe);
+            self::assertSame(1, $mock->count());
+            self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
         }
     }
 
