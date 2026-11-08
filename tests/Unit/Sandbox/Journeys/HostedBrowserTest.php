@@ -67,7 +67,7 @@ final class HostedBrowserTest extends TestCase
             || ($data['expected'] ?? null) !== [
                 'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
             ]
-            || ($data['render'] ?? null) !== true
+            || ($data['render'] ?? null) !== true || ($data['observeConfig'] ?? null) !== true
             || ($data['url'] ?? null) !== 'https://checkout.airwallex.com/pay?s=PRIVATE_SESSION') {
             exit(3);
         }
@@ -78,7 +78,7 @@ final class HostedBrowserTest extends TestCase
         try {
             $safe = $bridge->inspect('https://checkout.airwallex.com/pay?s=PRIVATE_SESSION', [
                 'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
-            ], true);
+            ], true, true);
         } finally {
             putenv('AIRWALLEX_BRIDGE_SENTINEL');
         }
@@ -92,6 +92,151 @@ final class HostedBrowserTest extends TestCase
         self::assertStringNotContainsString($this->directory, $debug);
         $this->expectException(RuntimeException::class);
         serialize($bridge);
+    }
+
+    public function testMethodEvidenceSanitizerRequiresExplicitScopeAndKeepsOnlyFixedObservations(): void
+    {
+        $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'method_config_requested' => true,
+            'method_config_get_attempted' => true, 'method_config_response_observed' => true,
+            'method_config_payload_delivered' => false, 'method_config_http_status' => 403,
+            'method_config_observation' => 'http_rejected', 'method_config_items' => 1,
+            'method_config_pagination_known' => false, 'method_config_has_more' => false,
+            'method_config_card_advertised' => true, 'card_readiness_observed' => true,
+            'cardnumber_unique' => true, 'cardnumber_visible' => true, 'cardnumber_enabled' => true,
+            'expiry_unique' => false, 'expiry_visible' => false, 'expiry_enabled' => false,
+            'cvc_unique' => true, 'cvc_visible' => true, 'cvc_enabled' => false,
+            'denied_read_families' => ['method_config' => 1, 'country' => 2, 'customer' => -1,
+                'consent_list' => 1000001, 'other_pa' => 'PRIVATE_VALUE', 'PRIVATE_LABEL' => 3],
+            'client-secret' => 'PRIVATE_SECRET', 'cardnumber_value' => 'PRIVATE_PAN'];
+        $safe = HostedBrowser::sanitize($data, true, true);
+        self::assertSame(403, $safe['method_config_http_status']);
+        self::assertSame('http_rejected', $safe['method_config_observation']);
+        self::assertFalse($safe['method_config_pagination_known']);
+        self::assertTrue($safe['cardnumber_enabled']);
+        self::assertFalse($safe['cvc_enabled']);
+        self::assertSame(['method_config' => 1, 'country' => 2], $safe['denied_read_families']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        unset($data['method_config_requested']);
+        $safe = HostedBrowser::sanitize($data, true);
+        self::assertArrayNotHasKey('method_config_observation', $safe);
+        self::assertArrayNotHasKey('card_readiness_observed', $safe);
+        self::assertArrayNotHasKey('denied_read_families', $safe);
+    }
+
+    public function testDeliveredMethodEvidenceRequiresAllPrivateReadPrerequisites(): void
+    {
+        $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'candidate_origin' => 'sandbox', 'render_requested' => true,
+            'checkout_token_matches' => true, 'payer_request_scope_verified' => true, 'payer_get_attempted' => true,
+            'payer_response_observed' => true, 'payer_mode_matches' => true, 'payer_currency_matches' => true,
+            'payer_observation' => 'matched', 'payer_http_status' => 200, 'payer_payload_delivered' => true,
+            'bound_render_frames' => 1, 'method_config_requested' => true, 'method_config_get_attempted' => true,
+            'method_config_response_observed' => true, 'method_config_http_status' => 200,
+            'method_config_observation' => 'matched', 'method_config_payload_delivered' => true];
+        self::assertTrue(HostedBrowser::sanitize($data, true, true)['method_config_payload_delivered']);
+        foreach (
+            ['method_config_get_attempted', 'method_config_response_observed', 'method_config_http_status',
+            'method_config_observation', 'bound_render_frames', 'payer_payload_delivered'] as $key
+        ) {
+            $invalid = $data;
+            unset($invalid[$key]);
+            $failed = false;
+            try {
+                HostedBrowser::sanitize($invalid, true, true);
+            } catch (RuntimeException $error) {
+                $failed = true;
+                self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+            }
+            self::assertTrue($failed, $key);
+        }
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true);
+    }
+
+    public function testFailedChildKeepsOnlyClosedPhaseCountersAndStatus(): void
+    {
+        $bridge = $this->bridge(<<<'PHP'
+        echo '{"result":"fail","reason":"browser_preflight_failed","card_entry_enabled":false,
+          "browser_failure_phase":"readiness_cardnumber_count","method_config_requested":true,
+          "method_config_get_attempted":true,"method_config_send_started":true,"method_config_http_status":200,
+          "method_config_response_observed":true,"method_config_observation":"matched","method_config_items":2,
+          "method_config_card_advertised":true,"method_config_payload_delivered":true,
+          "candidate_origin":"sandbox","render_requested":true,"checkout_token_matches":true,
+          "payer_request_scope_verified":true,"payer_get_attempted":true,"payer_response_observed":true,
+          "payer_mode_matches":true,"payer_currency_matches":true,"payer_observation":"matched",
+          "payer_http_status":200,"payer_payload_delivered":true,"card_readiness_observed":false,
+          "bound_render_frames":1,"blocked_requests":17,"message":"PRIVATE_URL_SECRET"}';
+        exit(1);
+        PHP);
+        $safe = $bridge->inspect('https://checkout.sandbox.airwallex.com/pay?s=PRIVATE_SESSION', [
+            'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
+        ], true, true);
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('readiness_cardnumber_count', $safe['browser_failure_phase']);
+        self::assertSame(200, $safe['method_config_http_status']);
+        self::assertSame(1, $safe['bound_render_frames']);
+        self::assertTrue($safe['method_config_send_started']);
+        self::assertSame('matched', $safe['method_config_observation']);
+        self::assertTrue($safe['method_config_card_advertised']);
+        self::assertTrue($safe['method_config_payload_delivered']);
+        self::assertSame(2, $safe['method_config_items']);
+        self::assertFalse($safe['card_readiness_observed']);
+
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        $data = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'browser_failure_phase' => 'PRIVATE_PROVIDER_PATH'];
+        self::assertArrayNotHasKey('browser_failure_phase', HostedBrowser::sanitize($data));
+        $data['result'] = 'blocked';
+        $data['browser_failure_phase'] = 'navigation';
+        self::assertArrayNotHasKey('browser_failure_phase', HostedBrowser::sanitize($data));
+    }
+
+    public function testKnownDetachedFramePreservesMethodFactsWithoutInventingFieldAbsence(): void
+    {
+        $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'method_config_requested' => true,
+            'method_config_get_attempted' => true, 'method_config_send_started' => true,
+            'method_config_response_observed' => true, 'method_config_http_status' => 200,
+            'method_config_observation' => 'matched', 'method_config_items' => 2,
+            'method_config_card_advertised' => true, 'method_config_pagination_known' => false,
+            'card_readiness_observed' => false, 'card_readiness_unavailable_reason' => 'frame_detached',
+            'readiness_frame_detached' => true, 'readiness_detach_stage' => 'after_count', 'bound_render_frames' => 1,
+            'readiness_attachment_field' => 'cardnumber', 'readiness_frame_detached_before_count' => false,
+            'readiness_frame_detached_after_count' => true,
+            'cardnumber_unique' => false, 'cardnumber_visible' => false, 'cvc_enabled' => false,
+            'private_error' => 'PRIVATE_FRAME_ERROR'];
+        $safe = HostedBrowser::sanitize($data, true, true);
+        self::assertFalse($safe['card_readiness_observed']);
+        self::assertSame('frame_detached', $safe['card_readiness_unavailable_reason']);
+        self::assertSame('after_count', $safe['readiness_detach_stage']);
+        self::assertFalse($safe['readiness_frame_detached_before_count']);
+        self::assertTrue($safe['readiness_frame_detached_after_count']);
+        self::assertSame('matched', $safe['method_config_observation']);
+        self::assertSame(200, $safe['method_config_http_status']);
+        self::assertSame(2, $safe['method_config_items']);
+        self::assertTrue($safe['method_config_card_advertised']);
+        self::assertFalse($safe['method_config_pagination_known']);
+        foreach (['cardnumber_unique', 'cardnumber_visible', 'cvc_enabled'] as $key) {
+            self::assertArrayNotHasKey($key, $safe);
+        }
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        foreach (
+            ['card_readiness_observed', 'readiness_frame_detached', 'readiness_detach_stage',
+            'bound_render_frames'] as $key
+        ) {
+            $invalid = $data;
+            unset($invalid[$key]);
+            $failed = false;
+            try {
+                HostedBrowser::sanitize($invalid, true, true);
+            } catch (RuntimeException) {
+                $failed = true;
+            }
+            self::assertTrue($failed, $key);
+        }
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true);
     }
 
     /** @return iterable<string,array{string}> */

@@ -19,7 +19,7 @@ final class HostedSetupPreflight
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,BrowserExpectation,bool):array<string,mixed>)|null $browser
+     * @param (Closure(string,BrowserExpectation,bool,bool):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -32,7 +32,7 @@ final class HostedSetupPreflight
         $phase = 'configuration';
         try {
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
-                'playwright-module', 'create-one-hosted-setup', 'render-owned-data'];
+                'playwright-module', 'create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -51,7 +51,12 @@ final class HostedSetupPreflight
             if (!is_bool($render)) {
                 throw new RuntimeException('Explicit rendering configuration is invalid.');
             }
+            $observeConfig = $options['observe-one-method-config'] ?? false;
+            if (!is_bool($observeConfig) || ($observeConfig && !$render)) {
+                throw new RuntimeException('Method observation requires explicit rendering.');
+            }
             $safe['render_requested'] = $render;
+            $safe['method_config_requested'] = $observeConfig;
             $bridge = new HostedBrowser($strings['node-bin'], $strings['playwright-module']);
             $browser ??= $bridge->inspect(...);
             $safe['source'] = SourceEvidence::capture();
@@ -104,8 +109,20 @@ final class HostedSetupPreflight
             $ledger->requestId('preflight_payer_read', $browserExpected + [
                 'method' => 'GET', 'path' => '/billing/payer-web-api/checkout',
             ], $fingerprint);
+            if ($observeConfig) {
+                $ledger->requestId('preflight_method_config_read', $browserExpected + [
+                    'method' => 'GET', 'path' => '/api/v1/pa/config/payment_method_types',
+                    'query' => ['page_num' => 0, 'page_size' => 200, 'active' => true,
+                        'transaction_currency' => 'EUR', '__verification_methods' => true],
+                    'browser_api_version' => '2024-06-14', 'scope' => 'verified_own_dropin_frame',
+                ], $fingerprint);
+            }
             $phase = 'browser_read_only';
-            $safe['browser'] = HostedBrowser::sanitize($browser($url, $browserExpected, $render), $render);
+            $safe['browser'] = HostedBrowser::sanitize(
+                $browser($url, $browserExpected, $render, $observeConfig),
+                $render,
+                $observeConfig,
+            );
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {
                 throw new RuntimeException('Browser tooling changed during the preflight.');
