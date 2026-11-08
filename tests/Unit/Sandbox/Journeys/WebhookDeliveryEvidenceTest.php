@@ -51,7 +51,7 @@ final class WebhookDeliveryEvidenceTest extends TestCase
             'metadata' => ['sdk_validation_run' => 'SYNTHETIC_PRIVATE_RUN']];
     }
 
-    private function evidence(): WebhookDeliveryEvidence
+    private function evidence(string $account = 'SYNTHETIC_PRIVATE_ACCOUNT'): WebhookDeliveryEvidence
     {
         return new WebhookDeliveryEvidence(
             $this->store,
@@ -59,7 +59,7 @@ final class WebhookDeliveryEvidenceTest extends TestCase
             str_repeat('c', 64),
             str_repeat('a', 64),
             str_repeat('b', 64),
-            'SYNTHETIC_PRIVATE_ACCOUNT',
+            $account,
             'SYNTHETIC_PRIVATE_INTENT',
             'SYNTHETIC_PRIVATE_ORDER',
             'SYNTHETIC_PRIVATE_RUN',
@@ -149,5 +149,107 @@ final class WebhookDeliveryEvidenceTest extends TestCase
         self::assertSame(1, $counts['unrecognized_or_foreign_count']);
         self::assertSame(0, $counts['matching_created_count']);
         self::assertSame('SYNTHETIC_PRIVATE_INVALID_JSON', $this->store->read('capture-000001.body'));
+    }
+    /** @return iterable<string,array{string}> */
+    public static function ambiguousProofFields(): iterable
+    {
+        yield 'root event ID' => ['id'];
+        yield 'escaped event alias' => ['name'];
+        yield 'nested own resource' => ['currency'];
+        yield 'escaped owner alias' => ['owner'];
+    }
+
+    #[DataProvider('ambiguousProofFields')]
+    public function testValidMacDuplicateObjectKeysStayUnrecognizedAndRawBytesAreRetained(string $field): void
+    {
+        $this->runtime->bodyFilter = static function (string $body) use ($field): string {
+            if ($field === 'currency') {
+                self::assertStringContainsString('"currency":"HKD"', $body);
+                return str_replace('"currency":"HKD"', '"currency":"HKD","currency":"HKD"', $body);
+            }
+            $duplicate = match ($field) {
+                'id' => '"id":"SYNTHETIC_PRIVATE_EVENT_0"',
+                'name' => '"n\\u0061me":"payment_intent.created"',
+                default => '"account\\u005fid":"SYNTHETIC_PRIVATE_ACCOUNT"',
+            };
+            return substr($body, 0, -1) . ',' . $duplicate . '}';
+        };
+        $this->runtime->capture(self::object(), 'payment_intent.created');
+        $raw = $this->store->read('capture-000001.body');
+        $counts = $this->evidence()->collect();
+        self::assertSame(1, $counts['mac_verified_count']);
+        self::assertSame(1, $counts['receipt_freshness_verified_count']);
+        self::assertSame(1, $counts['unrecognized_or_foreign_count']);
+        self::assertSame(0, $counts['matching_created_count']);
+        self::assertSame($raw, $this->store->read('capture-000001.body'));
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($counts, JSON_THROW_ON_ERROR));
+    }
+
+    public function testToxicInvalidMacCannotReachTheLocalJsonProofPolicy(): void
+    {
+        $this->runtime->bodyFilter = static fn (string $body): string => 'SYNTHETIC_PRIVATE_TOXIC_JSON';
+        $this->runtime->metadataFilter = static function (array $metadata): array {
+            $result = [];
+            foreach ($metadata as $key => $value) {
+                if (!is_string($key)) {
+                    throw new ProtocolException('Invalid synthetic capture metadata.');
+                }
+                $result[$key] = $value;
+            }
+            $result['signature'] = str_repeat('0', 64);
+            return $result;
+        };
+        $this->runtime->capture(self::object(), 'payment_intent.created');
+        $counts = $this->evidence()->collect();
+        self::assertSame(1, $counts['invalid_signature_count']);
+        self::assertSame(0, $counts['mac_verified_count']);
+        self::assertSame(0, $counts['unrecognized_or_foreign_count']);
+        self::assertSame(0, $counts['matching_created_count']);
+    }
+
+    /** @return iterable<string,array{mixed}> */
+    public static function conflictingLegacyOwner(): iterable
+    {
+        yield 'matching legacy' => ['SYNTHETIC_PRIVATE_ACCOUNT'];
+        yield 'foreign legacy' => ['SYNTHETIC_PRIVATE_FOREIGN_ACCOUNT'];
+        yield 'nonstring legacy' => [['SYNTHETIC_PRIVATE_ACCOUNT']];
+    }
+
+    #[DataProvider('conflictingLegacyOwner')]
+    public function testLegacyOwnerCannotContradictSdkRecognitionEvenWhenItMatchesAccount(mixed $value): void
+    {
+        $this->runtime->eventFilter = static fn (array $event): array => array_replace($event, ['accountId' => $value]);
+        $this->runtime->capture(self::object(), 'payment_intent.created');
+        $counts = $this->evidence()->collect();
+        self::assertSame(1, $counts['mac_verified_count']);
+        self::assertSame(1, $counts['unrecognized_or_foreign_count']);
+        self::assertSame(0, $counts['matching_created_count']);
+    }
+    public function testRawNumericAccountCannotBecomeAStringOwnerEvenWithMatchingOpaqueReference(): void
+    {
+        $this->runtime->eventFilter = static fn (array $event): array => array_replace($event, ['account_id' => 123]);
+        $this->runtime->capture(self::object(), 'payment_intent.created');
+        $counts = $this->evidence('123')->collect();
+        self::assertSame(1, $counts['mac_verified_count']);
+        self::assertSame(1, $counts['unrecognized_or_foreign_count']);
+        self::assertSame(0, $counts['matching_created_count']);
+    }
+
+    public function testNumericEnvelopeIdentityIsUnrecognizedWithoutStringCoercion(): void
+    {
+        $this->runtime->eventFilter = static fn (array $event): array => array_replace($event, ['id' => 123]);
+        $this->runtime->capture(self::object(), 'payment_intent.created');
+        $counts = $this->evidence()->collect();
+        self::assertSame(1, $counts['unrecognized_or_foreign_count']);
+        self::assertSame(0, $counts['matching_created_count']);
+    }
+    public function testNumericCreationTimeCannotBorrowAStringTypeFromLosslessDecoding(): void
+    {
+        $this->runtime->eventFilter = static fn (array $event): array => array_replace($event, ['created_at' => 123]);
+        $this->runtime->capture(self::object(), 'payment_intent.created');
+        $counts = $this->evidence()->collect();
+        self::assertSame(1, $counts['mac_verified_count']);
+        self::assertSame(1, $counts['unrecognized_or_foreign_count']);
+        self::assertSame(0, $counts['matching_created_count']);
     }
 }

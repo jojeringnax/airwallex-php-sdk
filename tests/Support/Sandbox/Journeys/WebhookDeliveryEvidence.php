@@ -10,6 +10,7 @@ use Jojeringnax\Airwallex\Webhook\WebhookEvent;
 use Jojeringnax\Airwallex\Webhook\WebhookVerifier;
 use SensitiveParameter;
 use Throwable;
+use stdClass;
 
 /** Verify immutable private captures before parsing; never dispatch a callback mutation. */
 final class WebhookDeliveryEvidence
@@ -108,23 +109,28 @@ final class WebhookDeliveryEvidence
                 // A later freshness failure never changes the trusted original receipt clock.
             }
             try {
+                $literal = WebhookDeliveryApi::assertUnambiguousObject($body);
                 $event = WebhookEvent::fromJson($body)->toArray();
             } catch (Throwable) {
                 ++$this->counts['unrecognized_or_foreign_count'];
                 continue;
             }
-            $nameValue = $event['name'] ?? null;
-            $id = $event['id'] ?? null;
+            $nameValue = $literal->name ?? null;
+            $id = $literal->id ?? null;
             $data = $event['data'] ?? null;
             $object = is_array($data) ? ($data['object'] ?? null) : null;
+            $literalData = $literal->data ?? null;
+            $literalObject = $literalData instanceof stdClass ? ($literalData->object ?? null) : null;
             $status = $nameValue === 'payment_intent.created' ? 'REQUIRES_PAYMENT_METHOD' : 'CANCELLED';
             if (
                 !is_string($id) || $id === '' || strlen($id) > 1024
-                || !is_string($event['created_at'] ?? null) || $event['created_at'] === ''
+                || !is_string($literal->created_at ?? null) || $literal->created_at === ''
                 || !in_array($nameValue, ['payment_intent.created', 'payment_intent.cancelled'], true)
-                || ($event['version'] ?? null) !== '2026-08-21' || ($event['account_id'] ?? null) !== $this->account
-                || ($event['org_id'] ?? null) !== null || !is_array($object)
-                || (array_key_exists('account_id', $object) && $object['account_id'] !== $this->account)
+                || ($literal->version ?? null) !== '2026-08-21' || ($literal->account_id ?? null) !== $this->account
+                || ($literal->org_id ?? null) !== null
+                || !in_array($literal->accountId ?? null, [null, ''], true) || !is_array($object)
+                || !($literalObject instanceof stdClass) || !is_string($literalObject->id ?? null)
+                || (property_exists($literalObject, 'account_id') && $literalObject->account_id !== $this->account)
                 || !self::ownIntent($object, $this->intent, $this->order, $this->marker, $status)
             ) {
                 ++$this->counts['unrecognized_or_foreign_count'];

@@ -80,6 +80,19 @@ final readonly class Configuration
         return $this->required('AIRWALLEX_ACCOUNT_ID');
     }
 
+    /** Optional private comparison data only; never an authentication selector or SDK configuration. */
+    public function organizationId(): ?string
+    {
+        if (!array_key_exists('AIRWALLEX_ORGANIZATION_ID', $this->values)) {
+            return null;
+        }
+        $value = $this->values['AIRWALLEX_ORGANIZATION_ID'];
+        if ($value === '' || strlen($value) > 256 || preg_match('/[\x00-\x20\x7f]/', $value) === 1) {
+            throw new RuntimeException('The optional organization comparison reference is invalid.');
+        }
+        return $value;
+    }
+
     private function required(string $name): string
     {
         $value = $this->values[$name] ?? '';
