@@ -82,6 +82,13 @@ final class BillingScheduleProvider implements ClientInterface
                 $body['ends_at'] = ($object['duration'] ?? null) === ['period' => 7, 'period_unit' => 'DAY']
                     ? '2028-01-08T00:00:00Z' : '2028-01-02T00:00:00Z';
             }
+            $metadata = $object['metadata'] ?? null;
+            if (
+                is_array($metadata) && ($metadata['sdk_validation_case'] ?? null) === 'flag-restore-end'
+                && ($body['cancel_at_period_end'] ?? null) === true
+            ) {
+                $body['ends_at'] = $object['current_period_ends_at'] ?? null;
+            }
             // The selected Subscription schema does not promise a remaining_duration response field.
             unset($body['remaining_duration']);
             $object = array_replace($object, $body);
