@@ -28,9 +28,22 @@ Keep each requirement in one authoritative place. A capability matrix can replac
 
 State provider restrictions where they affect the documented capability. Separate desired coverage from verified availability, and identify uncertainty precisely enough to guide the next decision or verification. Preserve accepted scope while improving wording.
 
-## Verify completion
+## Review and fix in context
 
-Review the complete changed document, not just the edited sentences. Check accuracy against inspected sources, consistency with accepted decisions, duplication across referenced documents, and whether the entry-point pointer triggers reading at the right time. Apply every applicable writing-for-agents rule, including relevance, behavioral effect and necessity.
+For substantive documentation changes, use an independent subagent review before completion. Give the reviewer the complete changed document and diff, its entry-point references, the current request or issue acceptance criteria, accepted decisions, relevant implementation and linked prerequisite/follow-up work. Have it inspect the evidence rather than supplying the author's expected verdict.
+
+Ask the reviewer to assess:
+
+- Can a developer or implementing agent understand and act on the part documented by this change without conversation history or inventing behavior? Identify concrete unanswered questions, contradictions and unsupported claims with locations and evidence.
+- Does the change satisfy the current request or issue? Distinguish completion of this contribution from completion of the whole document, which may be developed across several issues.
+- Which gaps block the current contribution, and which belong to linked prerequisites, later issues or deliberate deferrals? Check that boundaries and references make that distinction discoverable; a future issue is not a valid reason to defer a current acceptance criterion.
+- Are the document's callers and related references consistent, and does the entry-point pointer lead readers to it when needed? Apply the writing-for-agents relevance, behavioral-effect and necessity checks.
+
+Fix findings within the authorized scope and resolve material scope or public-contract decisions with the user. Keep legitimate follow-ups explicit and linked to their owning work; avoid expanding the current contribution to finish unrelated parts of the document. Separate evidence still needed from decisions still needed, so a reader knows the next action.
+
+Have the reviewer recheck the affected passages and context after fixes. Continue until current-scope blockers are resolved, or report the specific unresolved blocker and its required decision or evidence. When a PR is involved, base its issue-closing claim on the final revision and current acceptance criteria, following [open-pr](../open-pr/SKILL.md) within existing authorization. A review alone grants no permission to publish or close issues.
+
+## Verify completion
 
 Check local links and formatting. Validate executable examples with checks appropriate to the change; report unexecuted examples and evidence gaps. For prose-only edits, review and whitespace checks are sufficient unless the repository supplies additional required checks.
 
