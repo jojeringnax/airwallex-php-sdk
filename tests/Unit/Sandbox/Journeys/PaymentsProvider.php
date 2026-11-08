@@ -79,6 +79,13 @@ final class PaymentsProvider implements ClientInterface
             $id = 'synthetic-' . $kind . '-' . ++$this->sequence;
             unset($data['request_id']);
             $data['id'] = $id;
+            if ($kind === 'refunds') {
+                $parent = $data['payment_intent_id'] ?? null;
+                if (!is_string($parent) || !is_string($this->resources[$parent]['currency'] ?? null)) {
+                    throw new RuntimeException('Fixture refund requires its owned Intent currency.');
+                }
+                $data['currency'] = $this->resources[$parent]['currency'];
+            }
             $data['status'] = match ($kind) {
                 'payment_intents', 'payment_consents' => 'REQUIRES_PAYMENT_METHOD',
                 'refunds' => $this->pendingRefunds ? 'RECEIVED' : 'ACCEPTED',
