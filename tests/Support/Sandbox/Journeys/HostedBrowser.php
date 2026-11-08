@@ -41,10 +41,20 @@ final readonly class HostedBrowser
         return is_string($query['s'] ?? null) && $query['s'] !== '';
     }
 
-    /** @return array<string,string|int|bool> */
-    public function inspect(#[SensitiveParameter] string $url): array
+    /**
+     * @param array{checkout_id:string,mode:string,currency:string} $expected SDK-verified own Checkout.
+     * @return array<string,string|int|bool>
+     */
+    public function inspect(#[SensitiveParameter] string $url, #[SensitiveParameter] array $expected): array
     {
-        if (!self::candidate($url)) {
+        $keys = array_keys($expected);
+        sort($keys);
+        if (
+            !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
+            || $expected['checkout_id'] === '' || strlen($expected['checkout_id']) > 256
+            || preg_match('/[\x00-\x20]/', $expected['checkout_id']) === 1
+            || $expected['mode'] !== 'SETUP' || preg_match('/^[A-Z]{3}$/D', $expected['currency']) !== 1
+        ) {
             throw new RuntimeException('Checkout preflight URL is not an approved candidate.');
         }
         $process = @proc_open(
@@ -59,7 +69,7 @@ final readonly class HostedBrowser
         }
         [$input, $output, $errors] = self::pipes($pipes);
         try {
-            $payload = json_encode(['url' => $url], JSON_THROW_ON_ERROR);
+            $payload = json_encode(['url' => $url, 'expected' => $expected], JSON_THROW_ON_ERROR);
             if (@fwrite($input, $payload) !== strlen($payload)) {
                 throw new RuntimeException('Private browser handoff failed.');
             }
@@ -128,10 +138,33 @@ final readonly class HostedBrowser
         if (in_array($data['candidate_origin'] ?? null, ['shared', 'sandbox'], true)) {
             $safe['candidate_origin'] = $data['candidate_origin'];
         }
-        foreach (['navigation_passed', 'test_mode_visible', 'sandbox_origin_verified'] as $key) {
+        foreach (
+            ['navigation_passed', 'test_mode_visible',
+            'checkout_token_matches', 'payer_request_scope_verified', 'payer_get_attempted',
+            'payer_response_observed', 'payer_mode_matches', 'payer_currency_matches'] as $key
+        ) {
             if (isset($data[$key]) && is_bool($data[$key])) {
                 $safe[$key] = $data[$key];
             }
+        }
+        foreach (
+            ['sandbox_origin_verified', 'payer_customer_mapping_verified',
+                'payer_payload_delivered', 'financial_routing_verified'] as $key
+        ) {
+            if (array_key_exists($key, $data)) {
+                if ($data[$key] !== false) {
+                    throw new RuntimeException('Browser preflight exceeded its read-only evidence boundary.');
+                }
+                $safe[$key] = false;
+            }
+        }
+        if (
+            in_array($data['payer_observation'] ?? null, [
+            'not_observed', 'matched', 'mode_or_currency_mismatch', 'invalid_response',
+            'redirect_rejected', 'http_rejected',
+            ], true)
+        ) {
+            $safe['payer_observation'] = $data['payer_observation'];
         }
         $counters = ['blocked_requests', 'blocked_websockets', 'returns_intercepted',
             'proxy_rejections', 'proxy_connections', 'proxy_external_connections',
@@ -140,6 +173,10 @@ final readonly class HostedBrowser
             if (isset($data[$key]) && is_int($data[$key]) && $data[$key] >= 0 && $data[$key] <= 1000000) {
                 $safe[$key] = $data[$key];
             }
+        }
+        $payerStatus = $data['payer_http_status'] ?? null;
+        if (is_int($payerStatus) && $payerStatus >= 100 && $payerStatus <= 599) {
+            $safe['payer_http_status'] = $payerStatus;
         }
         $version = $data['browser_version'] ?? null;
         if (is_string($version) && preg_match('/^[0-9]+(?:\.[0-9]+){1,3}$/D', $version) === 1) {

@@ -38,7 +38,12 @@ function parse(value) {
 class HostedPolicy {
   #initial;
   #fixture;
-  constructor(initial, fixtureOrigin = null) {
+  #token = null;
+  #scope = false;
+  #expires = 0;
+  #payerAttempted = false;
+  #expected;
+  constructor(initial, fixtureOrigin = null, expected = null) {
     const url = parse(initial);
     if (!url) throw new Error('Invalid browser preflight configuration.');
     if (fixtureOrigin === null) {
@@ -54,6 +59,70 @@ class HostedPolicy {
     }
     this.#initial = url.href;
     this.#fixture = fixtureOrigin;
+    this.#expected = expected;
+    if (expected !== null) {
+      if (!expected || typeof expected !== 'object' || Array.isArray(expected)
+          || Object.keys(expected).sort().join(',') !== 'checkout_id,currency,mode'
+          || typeof expected.checkout_id !== 'string' || expected.checkout_id.length === 0
+          || Buffer.byteLength(expected.checkout_id, 'utf8') > 256 || /[\u0000-\u0020]/u.test(expected.checkout_id)
+          || expected.mode !== 'SETUP' || !/^[A-Z]{3}$/u.test(expected.currency)) {
+        throw new Error('Invalid private browser expectation.');
+      }
+      this.#expected = Object.freeze({ ...expected });
+      // This is correlation with the SDK-verified URL, not independent JWT signature verification.
+      const tokens = url.searchParams.getAll('s');
+      if (tokens.length === 1 && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(tokens[0])) {
+        try {
+          const claim = JSON.parse(Buffer.from(tokens[0].split('.')[1], 'base64url').toString('utf8'));
+          this.#scope = claim !== null && typeof claim === 'object' && !Array.isArray(claim)
+            && typeof claim.resource_id === 'string' && claim.resource_id.length <= 1024
+            && claim.resource_id.includes(':') && claim.resource_id.split(':').pop() === expected.checkout_id
+            && Number.isSafeInteger(claim.exp) && claim.exp > Math.floor(Date.now() / 1000);
+          if (this.#scope) {
+            this.#token = tokens[0];
+            this.#expires = claim.exp;
+          }
+        } catch { /* No raw URL/token/claim becomes an error or diagnostic. */ }
+      }
+    }
+  }
+
+  claimPayerRequest(value, method, type, headers, body = null) {
+    const url = parse(value);
+    const initial = new URL(this.#initial);
+    if (!this.requestScopeVerified() || this.#payerAttempted || !url || method !== 'GET'
+        || !['xhr', 'fetch'].includes(type) || body !== null || url.origin !== initial.origin
+        || url.pathname !== '/billing/payer-web-api/checkout'
+        || !/^\?ts=[0-9]{13}$/u.test(url.search) || url.hash || value !== url.origin + url.pathname + url.search
+        || headers.authorization !== `Bearer ${this.#token}`) return false;
+    // Set before sending: the public application's interceptor may otherwise retry network/5xx failures.
+    this.#payerAttempted = true;
+    return true;
+  }
+
+  requestScopeVerified() {
+    return this.#scope && this.#expires > Math.floor(Date.now() / 1000)
+      && (this.#fixture !== null || this.candidateOrigin() === 'sandbox');
+  }
+
+  bindingEvidence() {
+    return { checkout_token_matches: this.#scope, payer_request_scope_verified: this.requestScopeVerified(),
+      payer_get_attempted: this.#payerAttempted, payer_customer_mapping_verified: false,
+      payer_payload_delivered: false, financial_routing_verified: false };
+  }
+
+  observePayer(body) {
+    try {
+      if (!Buffer.isBuffer(body) || body.length > 65536) throw new Error();
+      const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
+      const mode = data.mode === this.#expected?.mode;
+      const currency = data.currency === this.#expected?.currency;
+      return { payer_observation: mode && currency ? 'matched' : 'mode_or_currency_mismatch',
+        payer_mode_matches: mode, payer_currency_matches: currency };
+    } catch {
+      return { payer_observation: 'invalid_response', payer_mode_matches: false, payer_currency_matches: false };
+    }
   }
 
   decide(value, method, type) {

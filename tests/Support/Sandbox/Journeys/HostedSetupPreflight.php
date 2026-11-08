@@ -16,7 +16,8 @@ final class HostedSetupPreflight
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string):array<string,mixed>)|null $browser Fixture-only private handoff.
+     * @param (Closure(string,array{checkout_id:string,mode:string,currency:string}):array<string,mixed>)|null $browser
+     * Fixture-only private handoff.
      * @return array<string,mixed>
      */
     public static function run(array $options, ?Closure $sessions = null, ?Closure $browser = null): array
@@ -91,8 +92,12 @@ final class HostedSetupPreflight
             if (!is_string($url) || !HostedBrowser::candidate($url)) {
                 throw new RuntimeException('Owned checkout has no recognized candidate URL.');
             }
+            $browserExpected = ['checkout_id' => $checkout, 'mode' => 'SETUP', 'currency' => 'EUR'];
+            $ledger->requestId('preflight_payer_read', $browserExpected + [
+                'method' => 'GET', 'path' => '/billing/payer-web-api/checkout',
+            ], $fingerprint);
             $phase = 'browser_read_only';
-            $safe['browser'] = HostedBrowser::sanitize($browser($url));
+            $safe['browser'] = HostedBrowser::sanitize($browser($url, $browserExpected));
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {
                 throw new RuntimeException('Browser tooling changed during the preflight.');
