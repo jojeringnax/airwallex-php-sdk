@@ -19,7 +19,7 @@ final class HostedSetupPreflight
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool):array<string,mixed>)|null $browser
+     * @param (Closure(string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -34,7 +34,7 @@ final class HostedSetupPreflight
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
                 'playwright-module', 'create-one-hosted-setup', 'render-owned-data',
                 'observe-one-method-config', 'observe-normal-reads', 'observe-risk-bootstrap',
-                'observe-parent-country'];
+                'observe-parent-country', 'observe-one-currency-settings'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -75,6 +75,13 @@ final class HostedSetupPreflight
             }
             if ($observeParentCountry) {
                 $safe['parent_country_requested'] = true;
+            }
+            $observeCurrencySettings = $options['observe-one-currency-settings'] ?? false;
+            if (!is_bool($observeCurrencySettings) || ($observeCurrencySettings && !$observeNormal)) {
+                throw new RuntimeException('Currency settings require explicit normal reads.');
+            }
+            if ($observeCurrencySettings) {
+                $safe['currency_settings_requested'] = true;
             }
             $safe['render_requested'] = $render;
             $safe['method_config_requested'] = $observeConfig;
@@ -165,6 +172,13 @@ final class HostedSetupPreflight
                     'startup_window_max_ms' => 8000, 'normal_window_max_ms' => 8000, 'limit' => 1,
                 ], $fingerprint);
             }
+            if ($observeCurrencySettings) {
+                $ledger->requestId('preflight_currency_settings', $browserExpected + [
+                    'method' => 'GET', 'path' => '/api/v1/pa/config/currency_settings',
+                    'scope' => 'original_main_and_matched_payer_transaction_secret', 'limit' => 1,
+                    'normal_window_max_ms' => 8000,
+                ], $fingerprint); // Generic role intent; no future private wire or provider-ID claim.
+            }
             $phase = 'browser_read_only';
             $riskJournal = $observeRisk
                 ? new HostedRiskJournal($ledger, $fingerprint, $browserExpected, $safe['browser_tool_hashes']) : null;
@@ -178,12 +192,14 @@ final class HostedSetupPreflight
                     $observeRisk,
                     $riskJournal,
                     $observeParentCountry,
+                    $observeCurrencySettings,
                 ),
                 $render,
                 $observeConfig,
                 $observeNormal,
                 $observeRisk,
                 $observeParentCountry,
+                $observeCurrencySettings,
             );
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {
