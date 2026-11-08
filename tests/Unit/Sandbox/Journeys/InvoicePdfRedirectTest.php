@@ -92,6 +92,64 @@ final class InvoicePdfRedirectTest extends TestCase
         self::assertStringNotContainsString('PRIVATE', json_encode($decision, JSON_THROW_ON_ERROR));
     }
 
+    /** @return iterable<string,array{string,string,string,string}> */
+    public static function diagnosticFamilies(): iterable
+    {
+        yield 'same' => ['/next.pdf?PRIVATE', 'https', 'same_named_sandbox', 'admitted'];
+        yield 'shared invoice' => ['https://invoice.airwallex.com/PRIVATE?token=PRIVATE',
+            'https', 'shared_invoice', 'origin'];
+        yield 'other sandbox' => ['https://api.sandbox.airwallex.com/PRIVATE', 'https', 'other_airwallex', 'origin'];
+        yield 'other Airwallex' => ['https://static.airwallex.com/PRIVATE', 'https', 'other_airwallex', 'origin'];
+        yield 'root namespace' => ['https://airwallex.com/PRIVATE', 'https', 'other_airwallex', 'origin'];
+        yield 'other' => ['https://private.example.test/PRIVATE', 'https', 'other', 'origin'];
+        yield 'prefix lookalike' => ['https://evilairwallex.com/PRIVATE', 'https', 'other', 'origin'];
+        yield 'suffix lookalike' => ['https://airwallex.com.private.test/PRIVATE', 'https', 'other', 'origin'];
+        yield 'invoice lookalike' => ['https://invoice.sandbox.airwallex.com.private.test/PRIVATE',
+            'https', 'other', 'origin'];
+        yield 'malformed label' => ['https://bad..airwallex.com/PRIVATE', 'https', 'unavailable', 'origin'];
+        yield 'downgrade unchanged' => ['http://invoice.sandbox.airwallex.com/PRIVATE',
+            'http', 'same_named_sandbox', 'origin'];
+        yield 'other scheme' => ['ftp://invoice.airwallex.com/PRIVATE', 'other', 'shared_invoice', 'origin'];
+        yield 'port remains denied' => ['https://invoice.sandbox.airwallex.com:444/PRIVATE',
+            'https', 'same_named_sandbox', 'origin'];
+        yield 'userinfo remains denied' => ['https://private@invoice.airwallex.com/PRIVATE',
+            'https', 'shared_invoice', 'origin'];
+        yield 'opaque scheme' => ['mailto:private@example.test', 'other', 'unavailable', 'origin'];
+    }
+
+    #[DataProvider('diagnosticFamilies')]
+    public function testClosedDiagnosticNeverChangesTheExistingAdmissionDecision(
+        string $location,
+        string $scheme,
+        string $family,
+        string $policy,
+    ): void {
+        $decision = InvoicePdfRedirect::inspect(self::BASE, new Response(301, ['Location' => $location]));
+        self::assertSame($policy, $decision['policy']);
+        self::assertSame($scheme, $decision['target_scheme']);
+        self::assertSame($family, $decision['target_origin_family']);
+        self::assertSame($policy === 'admitted', $decision['target'] !== null);
+        $diagnostic = ['scheme' => $decision['target_scheme'], 'origin_family' => $decision['target_origin_family']];
+        $raw = json_encode($diagnostic, JSON_THROW_ON_ERROR);
+        foreach (['PRIVATE', 'private', '://', 'airwallex.com', 'token', '@', '444'] as $value) {
+            self::assertStringNotContainsString($value, $raw);
+        }
+    }
+
+    public function testUnambiguousResolutionIsRequiredBeforeAnyTargetDiagnostic(): void
+    {
+        foreach (
+            [['Location' => ['/one', '/two']], ['Location' => '/PRIVATE%GG'],
+            ['Location' => '/PRIVATE<normalization'], ['Location' => '/PRIVATE%0a'],
+            ['Location' => '../PRIVATE'], ['Location' => '/PRIVATE#fragment'], []] as $headers
+        ) {
+            $decision = InvoicePdfRedirect::inspect(self::BASE, new Response(301, $headers));
+            self::assertSame('unavailable', $decision['target_scheme']);
+            self::assertSame('unavailable', $decision['target_origin_family']);
+            self::assertNull($decision['target']);
+        }
+    }
+
     public function testBaseDotSegmentsAreNotNormalizedDuringRelativeResolution(): void
     {
         $decision = InvoicePdfRedirect::inspect(

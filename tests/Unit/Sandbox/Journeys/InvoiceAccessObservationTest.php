@@ -362,6 +362,48 @@ final class InvoiceAccessObservationTest extends TestCase
         self::sanitized($result);
     }
 
+    public function testOriginDiagnosticDoesNotTurnAWithheldSharedInvoiceLocationIntoASend(): void
+    {
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => 'https://invoice.airwallex.com/PRIVATE?capability=PRIVATE']),
+        ])]));
+        $result = InvoiceAccessCommand::run($this->options(payer: false, follow: true), $this->sdk(), $links);
+        self::assertSame('pending', $result['result']);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertSame('origin', $result['pdf_redirect_policy']);
+        self::assertSame('withheld', $result['pdf_redirect_outcome']);
+        self::assertSame('https', $result['pdf_redirect_target_scheme']);
+        self::assertSame('shared_invoice', $result['pdf_redirect_target_origin_family']);
+        self::assertFalse($result['pdf_redirect_send_started']);
+        self::assertFalse($result['pdf_prefix_matched']);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    public function testDefaultStillPerformsZeroLocationInspectionOrTargetClassification(): void
+    {
+        $reads = 0;
+        $original = new Response(301, ['Location' => 'https://private.example.test/PRIVATE?secret=PRIVATE']);
+        $response = $this->getMockBuilder(Response::class)->setConstructorArgs([301])
+            ->onlyMethods(['getHeader'])->getMock();
+        $response->expects(self::atLeastOnce())->method('getHeader')->willReturnCallback(
+            static function (string $name) use (&$reads, $original): array {
+                if (strtolower($name) === 'location') {
+                    ++$reads;
+                }
+                return $original->getHeader($name);
+            }
+        );
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([$response])]));
+        $result = InvoiceAccessCommand::run($this->options(payer: false), $this->sdk(), $links);
+        self::assertSame(0, $reads);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertArrayNotHasKey('pdf_redirect_target_scheme', $result);
+        self::assertArrayNotHasKey('pdf_redirect_target_origin_family', $result);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
     public function testCoherentFinal206StillRequiresAllSeparatelySelectedPayerIdentityFields(): void
     {
         $payer = self::payer();

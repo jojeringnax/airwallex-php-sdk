@@ -100,6 +100,8 @@ final class InvoiceAccessObservation
                             $safe['pdf_initial_outcome'] = $safe['pdf_outcome'];
                             $decision = InvoicePdfRedirect::inspect($pdf, $response);
                             $safe['pdf_redirect_policy'] = $decision['policy'];
+                            $safe['pdf_redirect_target_scheme'] = $decision['target_scheme'];
+                            $safe['pdf_redirect_target_origin_family'] = $decision['target_origin_family'];
                             $safe['pdf_redirect_outcome'] = $decision['policy'] === 'not_redirect'
                                 ? 'not_applicable' : 'withheld';
                             $target = $decision['target'];
