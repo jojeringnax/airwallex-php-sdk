@@ -26,3 +26,5 @@ composer check:consumer -- --lowest
 CI runs those checks and clean consumer installation for PHP 8.3, 8.4 and 8.5 with both lowest and latest allowed dependencies. `composer check:consumer` copies package source and metadata into a temporary path repository, resolves runtime dependencies without development dependencies, checks platform requirements and autoloads a temporary SDK-namespace probe and required PSR interfaces. The fixture is removed after the check. It validates the package foundation; it does not establish an implemented Billing or Payments workflow.
 
 Keep sandbox validation opt-in, configured explicitly and separate from the deterministic suite. Never add credentials or captured customer data to fixtures. Supported provider versions, contract evidence and account eligibility are recorded in [API contracts](docs/api-contracts.md); release evidence must distinguish deterministic checks from sandbox observations.
+
+For explicit sandbox configuration, safe external credential loading and journey evidence prerequisites, see [sandbox validation](docs/sandbox-validation.md).

@@ -17,6 +17,7 @@
         "psr/simple-cache": "^3.0"
     },
     "require-dev": {
+        "guzzlehttp/guzzle": "^7.10",
         "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^12.5",
         "squizlabs/php_codesniffer": "^4.0"
@@ -37,7 +38,8 @@
         "style:fix": "phpcbf",
         "analyse": "phpstan analyse --no-progress --memory-limit=512M",
         "check": ["@test", "@style", "@analyse"],
-        "check:consumer": "@php tools/check-consumer.php"
+        "check:consumer": "@php tools/check-consumer.php",
+        "test:sandbox": "@php tools/sandbox.php"
     },
     "config": {
         "allow-plugins": {},
