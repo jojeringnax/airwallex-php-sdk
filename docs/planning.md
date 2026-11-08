@@ -4,6 +4,7 @@
 
 - Develop a framework-independent PHP SDK for the accepted Billing and Payments scope.
 - Distribute the SDK through Composer.
+- Provide a separate Laravel integration package, following the accepted [package architecture](architecture.md).
 
 The initial scope is limited to the Billing and Payments capabilities below. Other Airwallex product families and connected-account onboarding operations require separate scope decisions.
 
