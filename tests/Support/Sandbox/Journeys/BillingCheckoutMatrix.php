@@ -75,6 +75,13 @@ final class BillingCheckoutMatrix
                         if ($mode !== 'SETUP') {
                             $body['line_items'] = [['price_id' => $prices[$mode], 'quantity' => 1]];
                         }
+                        if ($mode === 'PAYMENT') {
+                            $body['invoice_data'] = ['days_until_due' => 0];
+                        } elseif ($mode === 'SUBSCRIPTION') {
+                            $body['subscription_data'] = [
+                                'days_until_due' => 0, 'duration' => ['period' => 1, 'period_unit' => 'MONTH'],
+                            ];
+                        }
                         $body['request_id'] = $ledger->requestId('checkout_' . $key, $body, $fingerprint);
                         $id = self::id($billing->checkouts()->create($body));
                         $ledger->recordCreated('checkouts', $id);

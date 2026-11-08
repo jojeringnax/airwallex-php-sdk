@@ -84,6 +84,18 @@ final class BillingCheckoutMatrixTest extends TestCase
                 $body = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
                 self::assertIsArray($body);
                 self::assertSame('EUR', $body['currency']);
+                if ($body['mode'] === 'PAYMENT') {
+                    self::assertSame(['days_until_due' => 0], $body['invoice_data']);
+                    self::assertArrayNotHasKey('subscription_data', $body);
+                } elseif ($body['mode'] === 'SUBSCRIPTION') {
+                    self::assertSame([
+                        'days_until_due' => 0, 'duration' => ['period' => 1, 'period_unit' => 'MONTH'],
+                    ], $body['subscription_data']);
+                    self::assertArrayNotHasKey('invoice_data', $body);
+                } else {
+                    self::assertArrayNotHasKey('invoice_data', $body);
+                    self::assertArrayNotHasKey('subscription_data', $body);
+                }
                 if ($body['ui_mode'] === 'HOSTED') {
                     self::assertSame('https://example.com', $body['success_url']);
                     self::assertSame('https://example.com', $body['back_url']);
