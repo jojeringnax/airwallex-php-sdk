@@ -172,6 +172,65 @@ final class HostedBrowserTest extends TestCase
         HostedBrowser::sanitize($data, true, true, true);
     }
 
+    /** @return array<string,mixed> */
+    private static function parentCountryEvidence(): array
+    {
+        return ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'candidate_origin' => 'sandbox', 'payer_request_scope_verified' => true,
+            'checkout_token_matches' => true,
+            'parent_country_requested' => true, 'parent_country_startup_started' => true,
+            'parent_country_window_closed' => true, 'parent_country_attempts' => 1, 'parent_country_sends' => 1,
+            'parent_country_delivered' => 1, 'parent_country_http_status' => 200,
+            'parent_country_outcome' => 'matched'];
+    }
+
+    public function testParentCountryCanPrecedePayerAndRetainsOnlyClosedPrivateFacts(): void
+    {
+        $data = self::parentCountryEvidence() + ['countryCode' => 'PRIVATE', 'parent_country_url' => 'PRIVATE',
+            'parent_country_request_timeout_ms' => 7990];
+        $safe = HostedBrowser::sanitize($data, true, true, true, true);
+        self::assertSame(1, $safe['parent_country_delivered']);
+        self::assertSame(7990, $safe['parent_country_request_timeout_ms']);
+        self::assertArrayNotHasKey('payer_payload_delivered', $safe);
+        self::assertArrayNotHasKey('bound_render_frames', $safe);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertArrayNotHasKey('parent_country_delivered', HostedBrowser::sanitize($data, true, true, true));
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function invalidParentFacts(): iterable
+    {
+        yield 'unscoped document' => ['payer_request_scope_verified', false];
+        yield 'uncorrelated token' => ['checkout_token_matches', false];
+        yield 'wrong origin' => ['candidate_origin', 'shared'];
+        yield 'startup absent' => ['parent_country_startup_started', false];
+        yield 'second attempt' => ['parent_country_attempts', 2];
+        yield 'uninvoked delivery' => ['parent_country_sends', 0];
+        yield 'bad HTTP proof' => ['parent_country_http_status', 302];
+        yield 'bad body proof' => ['parent_country_outcome', 'invalid_response'];
+    }
+
+    #[DataProvider('invalidParentFacts')]
+    public function testParentCountryCannotInventScopeBudgetOrDelivery(string $key, mixed $value): void
+    {
+        $data = self::parentCountryEvidence();
+        $data[$key] = $value;
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true, true);
+    }
+
+    public function testOpaqueParentFailureDoesNotInventUnavailableCountsAndRejectsPartialCounts(): void
+    {
+        $safe = HostedBrowser::sanitize(['result' => 'fail', 'reason' => 'browser_preflight_failed',
+            'card_entry_enabled' => false, 'parent_country_failure_phase' => 'get'], true, true, true, true);
+        self::assertSame('get', $safe['parent_country_failure_phase']);
+        self::assertArrayNotHasKey('parent_country_attempts', $safe);
+        $data = self::parentCountryEvidence();
+        unset($data['parent_country_attempts']);
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true, true);
+    }
+
     /** @return iterable<string,array{string,mixed}> */
     public static function unsafeNormalFacts(): iterable
     {

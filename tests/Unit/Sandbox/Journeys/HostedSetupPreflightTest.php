@@ -127,6 +127,7 @@ final class HostedSetupPreflightTest extends TestCase
                 bool $render,
                 bool $observeConfig,
                 bool $observeNormal,
+                bool $observeParentCountry,
             ) use (
                 $fault,
                 $options
@@ -134,6 +135,7 @@ final class HostedSetupPreflightTest extends TestCase
                 self::assertSame(($options['render-owned-data'] ?? false) === true, $render);
                 self::assertSame(($options['observe-one-method-config'] ?? false) === true, $observeConfig);
                 self::assertSame(($options['observe-normal-reads'] ?? false) === true, $observeNormal);
+                self::assertSame(($options['observe-parent-country'] ?? false) === true, $observeParentCountry);
                 self::assertSame([
                     'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
                 ], $expected);
@@ -145,6 +147,16 @@ final class HostedSetupPreflightTest extends TestCase
                 $state = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
                 self::assertIsArray($state);
                 self::assertIsArray($state['actions']);
+                if ($observeParentCountry) {
+                    self::assertIsArray($state['actions']['preflight_parent_country']);
+                    self::assertSame(hash('sha256', json_encode($expected + [
+                        'method' => 'GET', 'role' => 'parent_country',
+                        'scope' => 'original_sdk_correlated_main_document',
+                        'startup_window_max_ms' => 8000, 'normal_window_max_ms' => 8000, 'limit' => 1,
+                    ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_parent_country']['body_hash']);
+                } else {
+                    self::assertArrayNotHasKey('preflight_parent_country', $state['actions']);
+                }
                 self::assertIsArray($state['actions']['preflight_payer_read']);
                 self::assertSame(hash('sha256', json_encode($expected + [
                     'method' => 'GET', 'path' => '/billing/payer-web-api/checkout',
@@ -230,7 +242,8 @@ final class HostedSetupPreflightTest extends TestCase
             self::assertStringNotContainsString($private, $encoded);
         }
         self::assertIsArray($result['browser_tool_hashes']);
-        self::assertCount(5, $result['browser_tool_hashes']);
+        self::assertCount(6, $result['browser_tool_hashes']);
+        self::assertArrayHasKey('hosted-parent-country.cjs', $result['browser_tool_hashes']);
     }
 
     public function testExplicitRenderingStillCreatesAndCancelsOnlyOneOwnedSetup(): void
@@ -253,6 +266,22 @@ final class HostedSetupPreflightTest extends TestCase
         $options['observe-normal-reads'] = true;
         $result = $this->execute(options: $options);
         self::assertTrue($result['normal_reads_requested']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testParentCountryHasItsOwnPrivateSlotBeforeBrowserHandoffAndNoFinancialPermission(): void
+    {
+        $options = $this->options();
+        foreach (
+            ['render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
+            'observe-parent-country'] as $flag
+        ) {
+            $options[$flag] = true;
+        }
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['parent_country_requested']);
         self::assertSame(1, $this->browserCalls);
         self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
         self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
@@ -372,6 +401,8 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'invalid method mode' => ['observe-one-method-config', 'PRIVATE_MODE'];
         yield 'normal without method' => ['observe-normal-reads', true];
         yield 'invalid normal flag' => ['observe-normal-reads', 'PRIVATE_MODE'];
+        yield 'parent without normal' => ['observe-parent-country', true];
+        yield 'parent invalid flag' => ['observe-parent-country', 'PRIVATE_MODE'];
     }
 
     #[DataProvider('invalidOptions')]
@@ -390,6 +421,10 @@ final class HostedSetupPreflightTest extends TestCase
     public static function invalidMethodFlags(): iterable
     {
         yield 'requires rendering' => [['--observe-one-method-config']];
+        yield 'parent missing normal' => [['--render-owned-data', '--observe-one-method-config',
+            '--observe-parent-country']];
+        yield 'parent value' => [['--observe-parent-country=true']];
+        yield 'parent duplicate' => [['--observe-parent-country', '--observe-parent-country']];
         yield 'normal missing method' => [['--render-owned-data', '--observe-normal-reads']];
         yield 'normal value' => [['--observe-normal-reads=true']];
         yield 'normal duplicate' => [['--observe-normal-reads', '--observe-normal-reads']];

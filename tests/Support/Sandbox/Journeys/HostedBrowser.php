@@ -51,11 +51,13 @@ final readonly class HostedBrowser
         bool $render = false,
         bool $observeConfig = false,
         bool $observeNormal = false,
+        bool $observeParentCountry = false,
     ): array {
         $keys = array_keys($expected);
         sort($keys);
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
+            || ($observeParentCountry && !$observeNormal)
             || !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
             || $expected['checkout_id'] === '' || strlen($expected['checkout_id']) > 256
             || preg_match('/[\x00-\x20]/', $expected['checkout_id']) === 1
@@ -78,6 +80,7 @@ final readonly class HostedBrowser
             $payload = json_encode([
                 'url' => $url, 'expected' => $expected, 'render' => $render,
                 'observeConfig' => $observeConfig, 'observeNormal' => $observeNormal,
+                ...($observeParentCountry ? ['observeParentCountry' => true] : []),
             ], JSON_THROW_ON_ERROR);
             if (@fwrite($input, $payload) !== strlen($payload)) {
                 throw new RuntimeException('Private browser handoff failed.');
@@ -116,6 +119,7 @@ final readonly class HostedBrowser
                 $render,
                 $observeConfig,
                 $observeNormal,
+                $observeParentCountry,
             );
             if ($safe['result'] === 'blocked' && $status['exitcode'] !== 0) {
                 throw new RuntimeException('Browser preflight process failed.');
@@ -140,8 +144,12 @@ final readonly class HostedBrowser
         bool $render = false,
         bool $observeConfig = false,
         bool $observeNormal = false,
+        bool $observeParentCountry = false,
     ): array {
-        if (($observeConfig && !$render) || ($observeNormal && !$observeConfig)) {
+        if (
+            ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
+            || ($observeParentCountry && !$observeNormal)
+        ) {
             throw new RuntimeException('Method observation requires explicit rendering.');
         }
         if (!is_array($data) || ($data['card_entry_enabled'] ?? null) !== false) {
@@ -163,7 +171,7 @@ final readonly class HostedBrowser
             'shutdown_browser_context', 'shutdown_browser', 'shutdown_request_context', 'shutdown_proxy',
             'shutdown_directory', 'readiness_attachment', 'unclassified', 'normal_observation_deadline',
             'normal_context', 'normal_get', 'normal_status', 'normal_headers', 'normal_body',
-            'normal_fulfill', 'normal_response_dispose', 'normal_abort'];
+            'normal_fulfill', 'normal_response_dispose', 'normal_abort', 'parent_country_read'];
         foreach (['cardnumber', 'expiry', 'cvc'] as $field) {
             foreach (['locator', 'count', 'visible', 'enabled'] as $step) {
                 $failurePhases[] = 'readiness_' . $field . '_' . $step;
@@ -486,6 +494,9 @@ final readonly class HostedBrowser
         if (is_int($payerStatus) && $payerStatus >= 100 && $payerStatus <= 599) {
             $safe['payer_http_status'] = $payerStatus;
         }
+        if ($observeParentCountry) {
+            $safe += self::parentCountryEvidence($data, $safe);
+        }
         $version = $data['browser_version'] ?? null;
         if (is_string($version) && preg_match('/^[0-9]+(?:\.[0-9]+){1,3}$/D', $version) === 1) {
             $safe['browser_version'] = $version;
@@ -498,7 +509,10 @@ final readonly class HostedBrowser
     {
         $root = dirname(__DIR__, 4);
         $hashes = [];
-        foreach (['hosted-policy.cjs', 'hosted-browser.cjs', 'hosted-smoke.cjs', 'hosted-policy.test.cjs'] as $file) {
+        foreach (
+            ['hosted-policy.cjs', 'hosted-browser.cjs', 'hosted-smoke.cjs', 'hosted-policy.test.cjs',
+            'hosted-parent-country.cjs'] as $file
+        ) {
             $hash = hash_file('sha256', $root . '/tools/browser/' . $file);
             if ($hash === false) {
                 throw new RuntimeException('Browser preflight source is unavailable.');
@@ -511,6 +525,76 @@ final readonly class HostedBrowser
         }
         $hashes['hosted-setup-preflight.php'] = $hash;
         return $hashes;
+    }
+
+    /**
+     * @param array<array-key,mixed> $data
+     * @param array<string,mixed> $base
+     * @return array<string,string|int|bool>
+     */
+    private static function parentCountryEvidence(array $data, array $base): array
+    {
+        $safe = ['parent_country_requested' => true];
+        if (isset($data['parent_country_requested']) && $data['parent_country_requested'] !== true) {
+            throw new RuntimeException('Parent country configuration did not match.');
+        }
+        foreach (['parent_country_startup_started', 'parent_country_window_closed'] as $key) {
+            if (is_bool($data[$key] ?? null)) {
+                $safe[$key] = $data[$key];
+            }
+        }
+        $countKeys = ['parent_country_attempts', 'parent_country_sends', 'parent_country_delivered'];
+        if (array_intersect($countKeys, array_keys($data)) !== [] && array_diff($countKeys, array_keys($data)) !== []) {
+            throw new RuntimeException('Parent country returned incomplete finite counts.');
+        }
+        $previous = 1;
+        foreach (['attempts', 'sends', 'delivered'] as $kind) {
+            $key = 'parent_country_' . $kind;
+            if (!array_key_exists($key, $data)) {
+                continue;
+            }
+            $value = $data[$key];
+            if (!is_int($value) || $value < 0 || $value > $previous) {
+                throw new RuntimeException('Parent country exceeded its finite slot.');
+            }
+            $safe[$key] = $value;
+            $previous = $value;
+        }
+        $outcome = $data['parent_country_outcome'] ?? null;
+        if (
+            in_array($outcome, ['not_observed', 'matched', 'invalid_response', 'unavailable',
+            'redirect_rejected', 'http_rejected'], true)
+        ) {
+            $safe['parent_country_outcome'] = $outcome;
+        }
+        $status = $data['parent_country_http_status'] ?? null;
+        if (is_int($status) && $status >= 100 && $status <= 599) {
+            $safe['parent_country_http_status'] = $status;
+        }
+        if (
+            ($safe['parent_country_sends'] ?? 0) > 0
+            && (($base['candidate_origin'] ?? null) !== 'sandbox'
+                || ($base['payer_request_scope_verified'] ?? null) !== true
+                || ($base['checkout_token_matches'] ?? null) !== true
+                || ($safe['parent_country_startup_started'] ?? null) !== true)
+        ) {
+            throw new RuntimeException('Parent country lacked the SDK-correlated initial document.');
+        }
+        if (($safe['parent_country_delivered'] ?? 0) > 0 && ($status !== 200 || $outcome !== 'matched')) {
+            throw new RuntimeException('Parent country delivery lacked its validated body.');
+        }
+        $timeout = $data['parent_country_request_timeout_ms'] ?? null;
+        if (is_int($timeout) && $timeout >= 1 && $timeout <= 8000) {
+            $safe['parent_country_request_timeout_ms'] = $timeout;
+        }
+        $phase = $data['parent_country_failure_phase'] ?? null;
+        if (
+            in_array($phase, ['scope', 'context', 'get', 'status', 'headers', 'body', 'fulfill',
+            'dispose', 'abort', 'context_dispose'], true)
+        ) {
+            $safe['parent_country_failure_phase'] = $phase;
+        }
+        return $safe;
     }
 
     /** @return array<string,string> */

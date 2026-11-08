@@ -191,6 +191,12 @@ class HostedPolicy {
   #controllerAttempted = false;
   #observeConfig;
   #observeNormal;
+  #observeParentCountry;
+  #parentCountryDeadline = 0;
+  #parentMainRequested = false;
+  #parentCountryClosed = false;
+  #parentCountryAttempted = false;
+  #parentCountryFailed = false;
   #normalClock;
   #normalDeadline = 0;
   #normalClosed = false;
@@ -202,7 +208,7 @@ class HostedPolicy {
   #configMatched = false;
   #deniedReads = Object.fromEntries(deniedReadNames.map(name => [name, 0]));
   #renderChecks = Object.fromEntries(renderCheckNames.map(name => [name, 0]));
-  constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false, observeNormal = false, clock = () => performance.now()) {
+  constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false, observeNormal = false, clock = () => performance.now(), observeParentCountry = false) {
     if (typeof render !== 'boolean' || (render && expected === null)) {
       throw new Error('Invalid read-only render configuration.');
     }
@@ -212,6 +218,10 @@ class HostedPolicy {
     if (typeof observeNormal !== 'boolean' || (observeNormal && !observeConfig) || typeof clock !== 'function') {
       throw new Error('Normal reads require explicit method observation.');
     }
+    if (typeof observeParentCountry !== 'boolean' || (observeParentCountry && !observeNormal)) {
+      throw new Error('Parent country requires explicit normal reads.');
+    }
+    this.#observeParentCountry = observeParentCountry;
     this.#observeNormal = observeNormal;
     this.#normalClock = clock;
     this.#observeConfig = observeConfig;
@@ -456,6 +466,63 @@ class HostedPolicy {
       && url.href === (main ? this.#initial : this.#frameSource);
   }
 
+  noteParentMainDocument(value) {
+    if (!this.#observeParentCountry) return;
+    if (this.#parentMainRequested || value !== this.#initial) this.closeParentCountryWindow();
+    else this.#parentMainRequested = true;
+  }
+
+  startParentCountryWindow() {
+    if (this.#observeParentCountry && this.#parentMainRequested && !this.#parentCountryClosed
+        && this.renderEnabled() && this.#parentCountryDeadline === 0) {
+      this.#parentCountryDeadline = this.#normalClock() + 8000;
+    }
+  }
+
+  parentCountryWindowRemaining() {
+    if (!this.#observeParentCountry || !this.renderEnabled() || this.#parentCountryClosed || this.#normalClosed
+        || this.#parentCountryDeadline === 0) return 0;
+    const remaining = this.#parentCountryDeadline - this.#normalClock();
+    if (!Number.isFinite(remaining) || remaining <= 0) return 0;
+    return this.#normalDeadline === 0 ? remaining : Math.min(remaining, this.normalWindowRemaining());
+  }
+
+  closeParentCountryWindow() { this.#parentCountryClosed = true; }
+  failParentCountry() { this.#parentCountryFailed = true; }
+
+  claimParentCountry(value, method, type, headers, body, fromMain) {
+    const url = parse(value);
+    if (!this.#observeParentCountry || !fromMain || this.#parentCountryAttempted
+        || this.parentCountryWindowRemaining() <= 0 || !url || method !== 'GET'
+        || !['fetch', 'xhr'].includes(type) || body !== null || url.search || url.hash
+        || url.origin !== (this.#fixture ?? 'https://www.sandbox.airwallex.com') || url.pathname !== '/country'
+        || value !== url.origin + url.pathname) return null;
+    const outgoing = this.#normalHeaders(headers, 'parent_country');
+    if (outgoing === null) return null;
+    this.#parentCountryAttempted = true;
+    return outgoing;
+  }
+
+  parentCountrySendAllowed() {
+    return this.#parentCountryAttempted && !this.#parentCountryFailed && this.parentCountryWindowRemaining() > 0;
+  }
+
+  observeParentCountry(body) {
+    try {
+      const data = privateJson(body);
+      if (typeof data.countryCode !== 'string' || !/^[A-Z]{2}$/u.test(data.countryCode)) throw new Error();
+      return true;
+    } catch { this.failParentCountry(); return false; }
+  }
+
+  parentCountryEvidence() {
+    return this.#observeParentCountry ? { parent_country_requested: true,
+      parent_country_startup_started: this.#parentCountryDeadline !== 0,
+      parent_country_window_closed: this.#parentCountryClosed || this.#normalClosed
+        || (this.#parentCountryDeadline !== 0 && this.parentCountryWindowRemaining() <= 0),
+      parent_country_attempts: this.#parentCountryAttempted ? 1 : 0 } : {};
+  }
+
   normalSendAllowed(role) {
     return this.#observeNormal && this.#payerDelivered && this.normalWindowRemaining() > 0
       && Object.hasOwn(this.#normalAttempts, role) && this.#normalAttempts[role] > 0
@@ -496,10 +563,11 @@ class HostedPolicy {
       for (const key of pa) if (Object.hasOwn(headers, key)) result[key] = headers[key];
       return result;
     }
+    if (role === 'parent_country' && headers.accept !== 'application/json, text/plain, */*') return null;
     if (role === 'checkout_status' && headers.authorization !== `Bearer ${this.#token}`) return null;
     return { accept: role === 'country' ? '*/*' : 'application/json, text/plain, */*', cookie: '', referer: '',
       ...(role === 'checkout_status' ? { authorization: headers.authorization } : {}),
-      ...(role === 'country' && Object.hasOwn(headers, 'origin') ? { origin: headers.origin } : {}) };
+      ...(['country', 'parent_country'].includes(role) && Object.hasOwn(headers, 'origin') ? { origin: headers.origin } : {}) };
   }
 
   claimNormalRead(value, method, type, headers, body, fromMain, fromBound) {
@@ -677,7 +745,8 @@ class HostedPolicy {
     return url.origin === new URL(this.#initial).origin
       || (this.renderEnabled() && url.origin === controllerAsset.origin)
       || (this.#observeNormal && this.#payerDelivered && this.normalWindowRemaining() > 0
-        && url.origin === 'https://www.sandbox.airwallex.com');
+        && url.origin === 'https://www.sandbox.airwallex.com')
+      || (this.parentCountrySendAllowed() && url.origin === 'https://www.sandbox.airwallex.com');
   }
 
   allowsHttp(value) {

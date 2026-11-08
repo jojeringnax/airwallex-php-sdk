@@ -33,6 +33,12 @@ async function smoke(playwright) {
           const headers = { Authorization: 'Bearer ' + new URL(location.href).searchParams.get('s') };
           const getter = '/billing/payer-web-api/checkout?ts=' + Date.now();
           window.payerDelivered = false;
+          window.parentCountryMatched = false; window.parentCountryBeforePayer = false;
+          const parentCountryReady = new URL(location.href).searchParams.has('parent')
+            ? fetch('/country', { headers: { Accept: 'application/json, text/plain, */*' } }).then(r => r.json()).then(data => {
+              window.parentCountryMatched = data.countryCode === 'DE';
+              window.parentCountryBeforePayer = !window.payerDelivered;
+            }).catch(() => {}) : Promise.resolve();
           const bootstrap = new URL(location.href).searchParams.has('render') ? new Promise((resolve, reject) => {
             const preload = document.createElement('link'); preload.rel = 'modulepreload';
             preload.href = 'https://static.airwallex.com/widgets/sdk-controller/sdk/v1/index.js?ts=' + Date.now();
@@ -42,7 +48,7 @@ async function smoke(playwright) {
             module.onload = resolve; module.onerror = reject; document.head.append(module);
           }) : Promise.resolve();
           bootstrap.catch(() => {});
-          fetch(getter, { headers }).then(r => r.json()).then(async data => {
+          parentCountryReady.then(() => fetch(getter, { headers })).then(r => r.json()).then(async data => {
             window.payerDelivered = true;
             if (new URL(location.href).searchParams.has('poll')) {
               window.pollsStarted = 0; window.firstPayerDelivery = performance.now();
@@ -482,6 +488,33 @@ async function smoke(playwright) {
         || ['cardnumber', 'expiry', 'cvc'].some(name => delayedNormal[name + '_unique'] !== false)) {
       throw new Error('Local drain changed the field snapshot or cancelled an admitted bounded read.');
     }
+    normalStatusDelay = 0; lateFields = false;
+    const parentBefore = hits.country;
+    const parentRead = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&parent=1',
+      playwright, origin, async (page, context) => {
+        if (!await page.evaluate(() => window.parentCountryMatched && window.parentCountryBeforePayer)) {
+          throw new Error('Local parent country was not delivered before the payer.');
+        }
+        if ((await context.cookies()).some(cookie => cookie.name.startsWith('synthetic_normal_'))) {
+          throw new Error('Local parent response cookie crossed contexts.');
+        }
+      }, expected, true, true, true, true);
+    if (parentRead.parent_country_attempts !== 1 || parentRead.parent_country_sends !== 1
+        || parentRead.parent_country_delivered !== 1 || parentRead.parent_country_http_status !== 200
+        || parentRead.parent_country_outcome !== 'matched' || !parentRead.parent_country_startup_started
+        || !parentRead.parent_country_window_closed || parentRead.normal_country_sends !== 1
+        || parentRead.normal_country_delivered !== 1 || hits.country !== parentBefore + 2
+        || parentRead.parent_country_request_timeout_ms > 8000 || hits.forbidden !== 0
+        || parentRead.proxy_external_connections !== 0) throw new Error('Local distinct country slots failed.');
+    const deniedParentBefore = hits.country;
+    const deniedParent = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&parent=1',
+      playwright, origin, async page => {
+        if (await page.evaluate(() => window.parentCountryMatched)) throw new Error('Default admitted parent country.');
+      }, expected, true, true, true);
+    if (Object.hasOwn(deniedParent, 'parent_country_requested') || hits.country !== deniedParentBefore + 1
+        || deniedParent.normal_country_sends !== 1 || hits.forbidden !== 0) {
+      throw new Error('Local default parent denial changed the bound-country slot.');
+    }
     // Both failure probes keep the payer mismatched, so no private body or frame can be delivered.
     payerReply = 'wrong_mode'; tamperController = true;
     let controllerRejected = false;
@@ -502,7 +535,8 @@ async function smoke(playwright) {
       altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
       method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
       normal_poll_window_verified: true, normal_status_poison_verified: true, normal_failure_diagnostics_verified: true,
-      normal_inflight_drain_verified: true };
+      normal_inflight_drain_verified: true, parent_country_pre_payer_verified: true,
+      parent_country_distinct_slots_verified: true, parent_country_default_denial_verified: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 
