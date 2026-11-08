@@ -90,6 +90,9 @@ final class PaymentsLifecycleTest extends TestCase
         self::assertSame(0, $result['ambiguous_mutations']);
         self::assertFalse($result['reconciliation_required']);
         self::assertSame(2, $result['login_requests']);
+        foreach ($this->ledger->created('payment_refunds') as $refund) {
+            self::assertSame('HKD', $this->provider->resources[$refund]['currency']);
+        }
         foreach ($this->provider->requests as $request) {
             self::assertSame('api.sandbox.airwallex.com', $request->getUri()->getHost());
             self::assertSame('https', $request->getUri()->getScheme());
@@ -177,6 +180,56 @@ final class PaymentsLifecycleTest extends TestCase
         }
     }
 
+    /** @return iterable<string,array{bool}> */
+    public static function unavailableRefundCurrencies(): iterable
+    {
+        yield 'missing' => [true];
+        yield 'wrong' => [false];
+    }
+
+    #[DataProvider('unavailableRefundCurrencies')]
+    public function testRefundReadbackRequiresOwnedCurrencyWithoutRepeatingFinancialActions(bool $missing): void
+    {
+        $this->provider->response = static function (RequestInterface $request, array $resource) use ($missing): array {
+            if ($request->getMethod() === 'GET' && str_contains($request->getUri()->getPath(), '/refunds/')) {
+                if ($missing) {
+                    unset($resource['currency']);
+                } else {
+                    $resource['currency'] = 'PRIVATE_WRONG_CURRENCY';
+                }
+            }
+            return $resource;
+        };
+        $result = $this->runJourney();
+        self::assertSame('fail', $result['result']);
+        self::assertTrue($result['reconciliation_required']);
+        self::assertSame(0, $result['ambiguous_mutations']);
+        self::assertIsArray($result['steps']);
+        foreach (['alipay_saved_consent', 'alipay_one_time', 'card_capture_refund'] as $step) {
+            self::assertSame(['result' => 'fail', 'stage' => match ($step) {
+                'alipay_saved_consent' => 'alipay_saved_refund_create_retrieve',
+                'alipay_one_time' => 'alipay_one_time_refund_create_retrieve',
+                default => 'card_capture_refund_create_retrieve',
+            }, 'reason' => 'local_protocol_or_transport'], $result['steps'][$step]);
+        }
+        $refunds = $this->ledger->created('payment_refunds');
+        self::assertCount(3, $refunds);
+        foreach ($refunds as $refund) {
+            $parent = $this->provider->resources[$refund]['payment_intent_id'];
+            self::assertIsString($parent);
+            $reads = array_filter($this->provider->requests, static fn (RequestInterface $request): bool
+                => $request->getMethod() === 'GET' && str_ends_with($request->getUri()->getPath(), '/' . $refund));
+            self::assertCount(1, $reads);
+            $writes = array_filter($this->provider->mutationBodies, static fn (array $body): bool
+                => ($body['payment_intent_id'] ?? null) === $parent);
+            self::assertCount(1, $writes, 'A failed refund observation must not create another refund.');
+            $cancels = array_filter($this->provider->requests, static fn (RequestInterface $request): bool
+                => str_ends_with($request->getUri()->getPath(), '/' . $parent . '/cancel'));
+            self::assertCount(0, $cancels);
+        }
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
     public function testPendingRefundReadsAreBoundedAndDoNotCreateAnotherRefund(): void
     {
         $this->provider->pendingRefunds = true;
@@ -188,6 +241,15 @@ final class PaymentsLifecycleTest extends TestCase
             $reads = array_filter($this->provider->requests, static fn (RequestInterface $r): bool
                 => $r->getMethod() === 'GET' && str_ends_with($r->getUri()->getPath(), '/' . $id));
             self::assertCount(3, $reads);
+            $parent = $this->provider->resources[$id]['payment_intent_id'];
+            self::assertIsString($parent);
+            $index = array_search($parent, $this->ledger->created('payment_intents'), true);
+            self::assertIsInt($index);
+            self::assertIsArray($result['cleanup']);
+            self::assertSame('pending', $result['cleanup']['intent_' . $index]);
+            $cancels = array_filter($this->provider->requests, static fn (RequestInterface $request): bool
+                => str_ends_with($request->getUri()->getPath(), '/' . $parent . '/cancel'));
+            self::assertCount(0, $cancels);
         }
     }
 
