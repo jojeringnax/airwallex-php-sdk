@@ -43,6 +43,8 @@ Source: selected [Webhooks API](https://www.airwallex.com/docs/api/webhooks/webh
 
 The selected management category exposes configuration operations, not an inspected delivery-log/raw-header API. The [Events guide](https://www.airwallex.com/docs/developer-tools/webhooks/view-and-re-trigger-webhook-events) documents web-app payload/status details with 30-day retention; it does not promise a byte-preserving export with original signing headers. Existing controlled receiver logs could supply the remaining evidence without a new receiver. Actual verification still needs that delivery's exact raw body, timestamp/signature headers and matching secret/version, plus same-family ownership retrieval. Generated signatures and configuration reads do not supply network delivery. Archived MAC correctness and original freshness are separate observations; see [webhook evidence requirements](webhook-contracts.md#remaining-integration-evidence).
 
+A [fresh actual account-context observation](https://github.com/jojeringnax/airwallex-php-sdk/issues/42#issuecomment-6724895222), committed source `b8611ee353f2b1eaf3be3a645850a8a4eeaa0787`, passed one account login and one bare configuration GET. HTTP 200 returned zero registrations with both cursors explicitly null, and private snapshot retention passed. No receiver was followed or provider mutation sent; credentials stayed unchanged and stderr was empty. This response supplied no receiver or signing secret for delivery verification. The result is limited to that account-context response: organization-wide absence, receiver ownership, product eligibility and actual signed delivery remain unverified.
+
 ## Billing catalogue writes
 
 Run the explicit organization-only catalogue scenario after read/authentication checks:
