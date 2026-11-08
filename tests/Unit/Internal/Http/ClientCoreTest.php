@@ -385,7 +385,8 @@ final class ClientCoreTest extends HttpTestCase
         $this->send($this->client($http, cache: $cache));
         $this->send($this->client($http, cache: $cache)->forConnectedAccount('acct_A'));
         $this->send($this->client($http, Environment::Production, cache: $cache));
-        self::assertSame($keys[0], $keys[1]);
+        self::assertCount(4, $keys);
+        self::assertSame(array_slice($keys, 0, 1), array_slice($keys, 1, 1));
         self::assertCount(3, array_unique($keys));
         foreach ($keys as $key) {
             self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $key);

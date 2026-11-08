@@ -35,7 +35,7 @@
         "test": "phpunit",
         "style": "phpcs",
         "style:fix": "phpcbf",
-        "analyse": "phpstan analyse --no-progress",
+        "analyse": "phpstan analyse --no-progress --memory-limit=512M",
         "check": ["@test", "@style", "@analyse"],
         "check:consumer": "@php tools/check-consumer.php"
     },
