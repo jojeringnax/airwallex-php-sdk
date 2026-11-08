@@ -5,7 +5,9 @@ const path = require('node:path');
 const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
-  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0 };
+  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0 };
+  let tamper = false;
+  let payerReply = 'matched';
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
       case '/page':
@@ -15,7 +17,44 @@ async function smoke(playwright) {
         break;
       case '/asset.js':
         hits.asset++;
-        response.writeHead(200, { 'Content-Type': 'application/javascript' }).end('window.fixtureLoaded = true;');
+        response.writeHead(200, { 'Content-Type': 'application/javascript' })
+          .end(tamper ? 'window.fixtureLoaded = "altered";' : 'window.fixtureLoaded = true;');
+        break;
+      case '/payer-page':
+        response.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'synthetic_cookie=PRIVATE_COOKIE; Path=/' });
+        response.end(`<!doctype html><p>Fixture</p><script>
+          const headers = { Authorization: 'Bearer ' + new URL(location.href).searchParams.get('s') };
+          const getter = '/billing/payer-web-api/checkout?ts=' + Date.now();
+          window.payerDelivered = false;
+          fetch(getter, { headers }).then(r => r.json()).then(() => { window.payerDelivered = true; }).catch(async () => {
+            await Promise.all([
+              fetch(getter, { headers }).catch(() => {}),
+              fetch('/billing/payer-web-api/checkout/status', { headers }).catch(() => {}),
+              fetch('/billing/payer-web-api/checkout/collect', { method: 'POST', headers }).catch(() => {}),
+              fetch('/billing/payer-web-api/checkout/complete', { method: 'POST', headers }).catch(() => {}),
+            ]);
+            window.payerRejected = true;
+          });
+        </script>`);
+        break;
+      case '/billing/payer-web-api/checkout':
+        hits.payer++;
+        if (request.method !== 'GET' || !/^\?ts=[0-9]{13}$/u.test(new URL(request.url, 'http://fixture.test').search)
+            || request.headers.authorization !== 'Bearer ' + token || request.headers.referer || request.headers.cookie) {
+          hits.forbidden++;
+          response.writeHead(500).end();
+        } else if (payerReply === 'redirect_rejected') {
+          response.writeHead(302, { Location: '/forbidden?PRIVATE_REDIRECT' }).end();
+        } else if (payerReply === 'http_rejected') {
+          response.writeHead(503).end('PRIVATE_PROVIDER_ERROR');
+        } else {
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(payerReply === 'invalid_response' ? 'PRIVATE_MALFORMED'
+            : payerReply === 'oversized' ? 'x'.repeat(65537)
+            : JSON.stringify({ mode: payerReply === 'wrong_mode' ? 'PAYMENT' : 'SETUP',
+              currency: payerReply === 'wrong_currency' ? 'USD' : 'EUR',
+              setupModeDetails: { billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER' } }));
+        }
         break;
       case '/frame':
         hits.frame++;
@@ -43,6 +82,10 @@ async function smoke(playwright) {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Local smoke failed.');
   const origin = `http://127.0.0.1:${address.port}`;
+  const expected = { checkout_id: 'SYNTHETIC_CHECKOUT', mode: 'SETUP', currency: 'EUR' };
+  const token = Buffer.from('{"alg":"SYNTHETIC"}').toString('base64url') + '.'
+    + Buffer.from(JSON.stringify({ resource_id: 'checkout:SYNTHETIC_CHECKOUT', exp: 4070908800 })).toString('base64url')
+    + '.SYNTHETIC_SIGNATURE';
   try {
     const result = await inspect(origin + '/page?s=SYNTHETIC_SECRET', playwright, origin, async (page, context) => {
       if (await page.evaluate(() => window.fixtureLoaded) !== true) throw new Error('Local smoke failed.');
@@ -89,8 +132,45 @@ async function smoke(playwright) {
     if (!result.test_mode_visible || result.blocked_requests < 4 || result.blocked_websockets !== 2
         || result.returns_intercepted !== 1 || hits.page !== 1 || hits.asset !== 1 || hits.frame !== 1
         || hits.redirect !== 3 || hits.forbidden !== 0 || hits.websocket !== 0
-        || result.proxy_external_connections !== 0) throw new Error('Local smoke failed.');
-    return { ...result, deny_before_send: true, fixture_forbidden_hits: 0, fixture_websocket_hits: 0 };
+        || result.proxy_external_connections !== 0 || result.verified_static_assets !== 1) {
+      throw new Error('Local smoke failed.');
+    }
+    tamper = true;
+    let rejected = false;
+    let alteredExecuted = false;
+    try {
+      await inspect(origin + '/page?s=SYNTHETIC_SECRET', playwright, origin, async page => {
+        alteredExecuted = await page.evaluate(() => window.fixtureLoaded !== undefined);
+      });
+    } catch { rejected = true; }
+    if (!rejected || alteredExecuted || hits.forbidden !== 0) throw new Error('Local integrity guard failed.');
+    let payerChecks = 0;
+    for (const reply of ['matched', 'wrong_mode', 'wrong_currency', 'invalid_response', 'oversized',
+      'redirect_rejected', 'http_rejected']) {
+      payerReply = reply;
+      const before = hits.payer;
+      const observed = await inspect(origin + '/payer-page?s=' + token, playwright, origin, async (page, context) => {
+        await page.waitForFunction(() => window.payerRejected === true);
+        if (await page.evaluate(() => window.payerDelivered) !== false) throw new Error('Local payer body escaped.');
+        if (!(await context.cookies()).some(cookie => cookie.name === 'synthetic_cookie')) {
+          throw new Error('Local cookie fixture did not populate its browser context.');
+        }
+      }, expected);
+      const outcome = ['wrong_mode', 'wrong_currency'].includes(reply) ? 'mode_or_currency_mismatch'
+        : reply === 'oversized' ? 'invalid_response' : reply;
+      if (hits.payer !== before + 1 || observed.payer_observation !== outcome
+          || !observed.payer_get_attempted || !observed.payer_response_observed
+          || observed.payer_payload_delivered || observed.payer_customer_mapping_verified
+          || observed.financial_routing_verified || observed.blocked_requests < 4
+          || observed.payer_http_status !== (reply === 'http_rejected' ? 503 : reply === 'redirect_rejected' ? 302 : 200)
+          || observed.proxy_external_connections !== 0 || hits.forbidden !== 0) {
+        throw new Error('Local payer scope guard failed.');
+      }
+      payerChecks++;
+    }
+    return { ...result, deny_before_send: true, fixture_forbidden_hits: 0, fixture_websocket_hits: 0,
+      altered_script_blocked: true, payer_binding_checks: payerChecks, payer_payloads_delivered: 0,
+      payer_cookie_forwarding_blocked: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

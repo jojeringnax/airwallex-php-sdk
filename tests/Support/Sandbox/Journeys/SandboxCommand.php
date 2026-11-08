@@ -21,7 +21,10 @@ final class SandboxCommand
     public static function run(array $options, ?Closure $sessions = null): array
     {
         $scenario = $options['scenario'] ?? null;
-        $allowed = ['authentication', 'billing-catalogue', 'billing-checkouts', 'payments-lifecycle'];
+        $allowed = [
+            'authentication', 'billing-catalogue', 'billing-checkouts', 'payments-lifecycle',
+            'billing-lifecycle', 'billing-lifecycle-no-trial',
+        ];
         $label = in_array($scenario, $allowed, true) ? $scenario : 'configuration';
         $result = ['scenario' => $label, 'api_version' => '2026-08-21', 'result' => 'fail'];
         $session = null;
@@ -56,7 +59,7 @@ final class SandboxCommand
                 return array_replace($result, PaymentsLifecycle::execute($session, $ledger));
             }
             if (!$session->isOrganization()) {
-                throw new RuntimeException('Billing catalogue validation requires organization context.');
+                throw new RuntimeException('Billing validation requires organization context.');
             }
             $legalEntity = $session->legalEntity();
             if ($legalEntity === null) {
@@ -64,9 +67,22 @@ final class SandboxCommand
                 $result['reason'] = 'legal_entity_configuration_absent';
             } else {
                 $ledger = RunLedger::create($session->contextFingerprint(), $directory);
-                $journey = $scenario === 'billing-catalogue'
-                    ? BillingCatalogue::execute($session, $ledger, $legalEntity)
-                    : BillingCheckoutMatrix::execute($session, $ledger, $legalEntity, $configuration->accountId());
+                $journey = match ($scenario) {
+                    'billing-catalogue' => BillingCatalogue::execute($session, $ledger, $legalEntity),
+                    'billing-lifecycle' => BillingLifecycle::execute($session, $ledger, $legalEntity),
+                    'billing-lifecycle-no-trial' => BillingLifecycle::execute(
+                        $session,
+                        $ledger,
+                        $legalEntity,
+                        withTrial: false,
+                    ),
+                    'billing-checkouts' => BillingCheckoutMatrix::execute(
+                        $session,
+                        $ledger,
+                        $legalEntity,
+                        $configuration->accountId(),
+                    ),
+                };
                 $result = array_replace($result, $journey);
             }
         } catch (\Throwable $error) {
@@ -76,7 +92,12 @@ final class SandboxCommand
                 $result['http_status'] = $error->httpStatus();
             }
         }
-        if ($session !== null && in_array($scenario, ['billing-catalogue', 'billing-checkouts'], true)) {
+        if (
+            $session !== null
+            && in_array($scenario, [
+                'billing-catalogue', 'billing-checkouts', 'billing-lifecycle', 'billing-lifecycle-no-trial',
+            ], true)
+        ) {
             $result['login_requests'] = $session->loginRequests();
         }
         return $result;
