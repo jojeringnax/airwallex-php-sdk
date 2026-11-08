@@ -50,11 +50,13 @@ final readonly class HostedBrowser
         #[SensitiveParameter] array $expected,
         bool $render = false,
         bool $observeConfig = false,
+        bool $observeNormal = false,
     ): array {
         $keys = array_keys($expected);
         sort($keys);
         if (
-            ($observeConfig && !$render) || !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
+            ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
+            || !self::candidate($url) || $keys !== ['checkout_id', 'currency', 'mode']
             || $expected['checkout_id'] === '' || strlen($expected['checkout_id']) > 256
             || preg_match('/[\x00-\x20]/', $expected['checkout_id']) === 1
             || $expected['mode'] !== 'SETUP' || preg_match('/^[A-Z]{3}$/D', $expected['currency']) !== 1
@@ -74,7 +76,8 @@ final readonly class HostedBrowser
         [$input, $output, $errors] = self::pipes($pipes);
         try {
             $payload = json_encode([
-                'url' => $url, 'expected' => $expected, 'render' => $render, 'observeConfig' => $observeConfig,
+                'url' => $url, 'expected' => $expected, 'render' => $render,
+                'observeConfig' => $observeConfig, 'observeNormal' => $observeNormal,
             ], JSON_THROW_ON_ERROR);
             if (@fwrite($input, $payload) !== strlen($payload)) {
                 throw new RuntimeException('Private browser handoff failed.');
@@ -108,7 +111,12 @@ final readonly class HostedBrowser
             if ($hadErrors) {
                 throw new RuntimeException('Browser preflight emitted unexpected diagnostics.');
             }
-            $safe = self::sanitize(json_decode($contents, true, 16, JSON_THROW_ON_ERROR), $render, $observeConfig);
+            $safe = self::sanitize(
+                json_decode($contents, true, 16, JSON_THROW_ON_ERROR),
+                $render,
+                $observeConfig,
+                $observeNormal,
+            );
             if ($safe['result'] === 'blocked' && $status['exitcode'] !== 0) {
                 throw new RuntimeException('Browser preflight process failed.');
             }
@@ -131,8 +139,9 @@ final readonly class HostedBrowser
         #[SensitiveParameter] mixed $data,
         bool $render = false,
         bool $observeConfig = false,
+        bool $observeNormal = false,
     ): array {
-        if ($observeConfig && !$render) {
+        if (($observeConfig && !$render) || ($observeNormal && !$observeConfig)) {
             throw new RuntimeException('Method observation requires explicit rendering.');
         }
         if (!is_array($data) || ($data['card_entry_enabled'] ?? null) !== false) {
@@ -152,7 +161,9 @@ final readonly class HostedBrowser
             'method_context', 'method_get', 'method_status', 'method_headers', 'method_body', 'method_fulfill',
             'method_response_dispose', 'method_abort', 'websocket_close', 'dialog_dismiss',
             'shutdown_browser_context', 'shutdown_browser', 'shutdown_request_context', 'shutdown_proxy',
-            'shutdown_directory', 'readiness_attachment', 'unclassified'];
+            'shutdown_directory', 'readiness_attachment', 'unclassified', 'normal_observation_deadline',
+            'normal_context', 'normal_get', 'normal_status', 'normal_headers', 'normal_body',
+            'normal_fulfill', 'normal_response_dispose', 'normal_abort'];
         foreach (['cardnumber', 'expiry', 'cvc'] as $field) {
             foreach (['locator', 'count', 'visible', 'enabled'] as $step) {
                 $failurePhases[] = 'readiness_' . $field . '_' . $step;
@@ -305,6 +316,81 @@ final readonly class HostedBrowser
             ], true)
         ) {
             $safe['payer_observation'] = $data['payer_observation'];
+        }
+        if (array_key_exists('normal_reads_requested', $data) && $data['normal_reads_requested'] !== $observeNormal) {
+            throw new RuntimeException('Normal reads did not match the explicit configuration.');
+        }
+        if ($observeNormal) {
+            $safe['normal_reads_requested'] = true;
+            foreach (
+                ['normal_read_window_closed', 'normal_read_inspection_completed',
+                'normal_checkout_status_poisoned'] as $key
+            ) {
+                if (is_bool($data[$key] ?? null)) {
+                    $safe[$key] = $data[$key];
+                }
+            }
+            if (
+                ($data['normal_read_inspection_completed'] ?? null) === true
+                && (($data['card_readiness_observed'] ?? null) !== true
+                    || ($data['normal_read_window_closed'] ?? null) !== true
+                    || ($safe['payer_payload_delivered'] ?? null) !== true
+                    || ($data['bound_render_frames'] ?? 0) < 1)
+            ) {
+                throw new RuntimeException('Normal-read inspection lacked its completed bounded observation.');
+            }
+            foreach (['customer', 'consent_list', 'country', 'checkout_status'] as $role) {
+                $limit = $role === 'checkout_status' ? 3 : 1;
+                $key = 'normal_' . $role . '_';
+                if (
+                    !array_key_exists($key . 'attempts', $data)
+                    && !array_key_exists($key . 'sends', $data) && !array_key_exists($key . 'delivered', $data)
+                ) {
+                    continue;
+                }
+                $counts = ['attempts' => 0, 'sends' => 0, 'delivered' => 0];
+                foreach (['attempts', 'sends', 'delivered'] as $fact) {
+                    $count = $data[$key . $fact] ?? null;
+                    if (!is_int($count) || $count < 0 || $count > $limit) {
+                        throw new RuntimeException('Normal-read evidence exceeded its finite budget.');
+                    }
+                    $counts[$fact] = $count;
+                    $safe[$key . $fact] = $count;
+                }
+                if (
+                    $counts['delivered'] > $counts['sends'] || $counts['sends'] > $counts['attempts']
+                    || ($counts['sends'] > 0 && (($safe['payer_payload_delivered'] ?? null) !== true
+                        || ($role !== 'checkout_status' && ($data['bound_render_frames'] ?? 0) < 1)))
+                ) {
+                    throw new RuntimeException('Normal reads lacked the verified own handoff.');
+                }
+                $observation = $data[$key . 'observation'] ?? null;
+                if (
+                    in_array($observation, ['not_observed', 'matched', 'invalid_response', 'unavailable',
+                    'redirect_rejected', 'http_rejected'], true)
+                ) {
+                    $safe[$key . 'observation'] = $observation;
+                }
+                $status = $data[$key . 'http_status'] ?? null;
+                if (is_int($status) && $status >= 100 && $status <= 599) {
+                    $safe[$key . 'http_status'] = $status;
+                }
+                if (
+                    $role !== 'checkout_status' && $counts['delivered'] > 0
+                    && ($observation !== 'matched' || $status !== 200)
+                ) {
+                    throw new RuntimeException('Normal delivery lacked its validated response.');
+                }
+            }
+            $items = $data['normal_consent_list_items'] ?? null;
+            if (is_int($items) && $items >= 0 && $items <= 100) {
+                $safe['normal_consent_list_items'] = $items;
+            }
+            foreach (['normal_consent_list_pagination_known', 'normal_consent_list_has_more'] as $key) {
+                if (is_bool($data[$key] ?? null)) {
+                    $safe[$key] = $data[$key];
+                }
+            }
         }
         $counters = ['blocked_requests', 'blocked_websockets', 'returns_intercepted',
             'proxy_rejections', 'proxy_connections', 'proxy_external_connections',

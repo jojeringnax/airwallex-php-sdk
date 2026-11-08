@@ -9,9 +9,9 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 $arguments = $argv ?? [];
 $options = getopt('', [
     'environment:', 'credentials-file:', 'state-dir:', 'node-bin:', 'playwright-module:',
-    'create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config',
+    'create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
 ], $lastArgument);
-$flags = ['create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config'];
+$flags = ['create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config', 'observe-normal-reads'];
 $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin', 'playwright-module', ...$flags];
 if (is_array($options)) {
     $valid = $lastArgument === count($arguments);
