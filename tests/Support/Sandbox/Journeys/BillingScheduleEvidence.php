@@ -17,8 +17,9 @@ final class BillingScheduleEvidence
     public const array CASES = [
         'flag-one-day', 'flag-seven-days', 'finite-ends', 'finite-duration', 'finite-remaining',
         'clear-all-pending', 'cancel-all', 'cancel-prorated', 'checkout-trial',
-        'remaining-active-only', 'flag-restore-end',
+        'remaining-active-only', 'flag-restore-end', 'immediate-oob-trial',
     ];
+    private ?string $trialEnd = null;
     private bool $ambiguous = false;
     private bool $cancelAttempted = false;
     private bool $cancelVerified = false;
@@ -129,10 +130,17 @@ final class BillingScheduleEvidence
     private function run(): void
     {
         $now = ($this->clock)();
-        if (!is_int($now) || $now < 0) {
+        if (
+            !is_int($now) || $now < 0
+            || ($this->case === 'immediate-oob-trial' && $now > PHP_INT_MAX - 172800)
+        ) {
             throw new RuntimeException('A case requires a Unix-second clock.');
         }
         $this->catalogue();
+        if ($this->case === 'immediate-oob-trial') {
+            $this->immediateTrial($now);
+            return;
+        }
         $trial = $this->case === 'checkout-trial';
         $start = gmdate('Y-m-d\TH:i:s\Z', $now + ($this->case === 'clear-all-pending' || $trial ? 86400 : 3600));
         $this->scope = [
@@ -207,6 +215,60 @@ final class BillingScheduleEvidence
                 }
             }
         }
+    }
+
+    private function immediateTrial(int $now): void
+    {
+        $this->trialEnd = gmdate('Y-m-d\TH:i:s\Z', $now + 172800);
+        $this->scope = ['billing_customer_id' => $this->customer, 'legal_entity_id' => $this->entity,
+            'currency' => 'EUR', 'collection_method' => 'OUT_OF_BAND', 'metadata' => $this->metadata()];
+        $body = $this->scope + ['days_until_due' => 30, 'duration' => ['period' => 1, 'period_unit' => 'MONTH'],
+            'trial_ends_at' => $this->trialEnd, 'items' => [['price_id' => $this->price, 'quantity' => 1]]];
+        $this->observations['trial_requested_without_starts_at'] = true;
+        $created = $this->mutate(
+            'create_subscription',
+            'subscriptions',
+            null,
+            $body,
+            fn (array $wire): array => $this->session->client->billing()->subscriptions()->create($wire)
+        );
+        $this->subscription = self::id($created);
+        $this->ledger->recordCreated('subscriptions', $this->subscription);
+        $observed = $this->readState('immediate_trial_observed', 'IN_TRIAL');
+        $this->guardImmediateTrial($observed);
+        $this->observations['trial_observed_without_payment_action'] = true;
+        $this->cancelImmediateTrial();
+    }
+
+    /** @param array<array-key,mixed> $resource */
+    private function guardImmediateTrial(array $resource): void
+    {
+        $this->ownSubscription($resource);
+        self::fields($resource, ['status' => 'IN_TRIAL', 'days_until_due' => 30,
+            'duration' => ['period' => 1, 'period_unit' => 'MONTH']]);
+        $now = ($this->clock)();
+        $start = $resource['starts_at'] ?? null;
+        if (
+            !is_string($start) || $this->trialEnd === null || !is_int($now) || $now < 0
+            || !self::sameInstant($resource['trial_ends_at'] ?? null, $this->trialEnd)
+            || self::compareInstants($start, $this->trialEnd) >= 0
+            || self::seconds($this->trialEnd) <= $now
+        ) {
+            throw new ProtocolException('The owned immediate trial interval is not safe for cancellation.');
+        }
+        $this->observations['trial_end_matches_requested'] = true;
+        $this->observations['trial_start_before_end_verified'] = true;
+    }
+
+    private function cancelImmediateTrial(): void
+    {
+        $this->phase = 'immediate_trial_cancel_guard';
+        $subscriptions = $this->session->client->billing()->subscriptions();
+        $this->guardImmediateTrial($subscriptions->retrieve($this->subscription));
+        $this->initialItem();
+        $this->guardImmediateTrial($subscriptions->retrieve($this->subscription));
+        $this->observations['trial_cancel_before_end_guard'] = true;
+        $this->cancel('NONE', 'cleanup_cancel');
     }
 
     private function initialItem(): void
@@ -292,7 +354,11 @@ final class BillingScheduleEvidence
         self::fields($billing->products()->retrieve($this->product), $body + ['id' => $this->product]);
         $body = ['product_id' => $this->product, 'currency' => 'EUR', 'pricing_model' => 'PER_UNIT',
             'unit_amount' => '1.23', 'billing_type' => 'IN_ADVANCE', 'active' => true,
-            'recurring' => ['period' => 1, 'period_unit' => $this->case === 'checkout-trial' ? 'MONTH' : 'DAY'],
+            'recurring' => ['period' => 1, 'period_unit' => in_array(
+                $this->case,
+                ['checkout-trial', 'immediate-oob-trial'],
+                true
+            ) ? 'MONTH' : 'DAY'],
             'metadata' => $this->metadata()];
         $created = $this->mutate(
             'create_price',
@@ -622,6 +688,8 @@ final class BillingScheduleEvidence
                     $this->cancelVerified = true;
                 } elseif ($this->cancelAttempted) {
                     throw new ProtocolException('An attempted cancellation is not yet confirmed.');
+                } elseif ($this->case === 'immediate-oob-trial') {
+                    $this->cancelImmediateTrial();
                 } elseif (in_array($resource['status'] ?? null, ['PENDING', 'IN_TRIAL', 'ACTIVE', 'UNPAID'], true)) {
                     $this->cancel('NONE', 'cleanup_cancel');
                 } else {
