@@ -341,12 +341,16 @@ final class PaymentsLifecycle
         $refund = self::id($created);
         $this->ledger->recordCreated('payment_refunds', $refund);
         $this->refundsRequested[$id] = true;
+        $this->uncertainIntents[$id] = true;
         $observed = $this->poll(
             fn (): array => $this->session->client->payments()->refunds()->retrieve($refund),
             $refund,
             ['ACCEPTED', 'SETTLED'],
-            ['payment_intent_id' => $id, 'amount' => self::AMOUNT],
+            ['payment_intent_id' => $id, 'amount' => self::AMOUNT, 'currency' => self::CURRENCY],
         );
+        if ($observed !== null) {
+            unset($this->uncertainIntents[$id]);
+        }
         return $observed === null ? $this->pending() : ['result' => 'pass'];
     }
 

@@ -67,6 +67,7 @@ final class HostedBrowserTest extends TestCase
             || ($data['expected'] ?? null) !== [
                 'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
             ]
+            || ($data['render'] ?? null) !== true
             || ($data['url'] ?? null) !== 'https://checkout.airwallex.com/pay?s=PRIVATE_SESSION') {
             exit(3);
         }
@@ -77,7 +78,7 @@ final class HostedBrowserTest extends TestCase
         try {
             $safe = $bridge->inspect('https://checkout.airwallex.com/pay?s=PRIVATE_SESSION', [
                 'checkout_id' => 'PRIVATE_CHECKOUT', 'mode' => 'SETUP', 'currency' => 'EUR',
-            ]);
+            ], true);
         } finally {
             putenv('AIRWALLEX_BRIDGE_SENTINEL');
         }
@@ -191,6 +192,65 @@ final class HostedBrowserTest extends TestCase
             self::assertArrayNotHasKey('payer_http_status', HostedBrowser::sanitize($base + [
                 'payer_http_status' => $status,
             ]));
+        }
+    }
+
+    public function testPayerDeliveryRequiresExplicitRenderAndTheCompleteOwnedResponseTuple(): void
+    {
+        $evidence = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'candidate_origin' => 'sandbox', 'render_requested' => true,
+            'checkout_token_matches' => true, 'payer_request_scope_verified' => true, 'payer_get_attempted' => true,
+            'payer_response_observed' => true, 'payer_mode_matches' => true, 'payer_currency_matches' => true,
+            'payer_http_status' => 200, 'payer_observation' => 'matched', 'payer_payload_delivered' => true,
+            'financial_routing_verified' => false, 'payer_customer_mapping_verified' => false,
+            'bound_render_frames' => 1, 'verified_render_assets' => 43, 'url' => 'PRIVATE_URL'];
+        $safe = HostedBrowser::sanitize($evidence, true);
+        self::assertTrue($safe['payer_payload_delivered']);
+        self::assertFalse($safe['financial_routing_verified']);
+        self::assertSame(1, $safe['bound_render_frames']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+        foreach (
+            ['candidate_origin', 'checkout_token_matches', 'payer_request_scope_verified', 'payer_get_attempted',
+            'payer_response_observed', 'payer_mode_matches', 'payer_currency_matches', 'payer_http_status',
+            'payer_observation'] as $field
+        ) {
+            $invalid = $evidence;
+            unset($invalid[$field]);
+            $caught = null;
+            try {
+                HostedBrowser::sanitize($invalid, true);
+            } catch (RuntimeException $error) {
+                $caught = $error;
+                self::assertStringNotContainsString('PRIVATE_', $error->getMessage());
+            }
+            self::assertNotNull($caught, 'Every response-binding fact must be present before delivery.');
+        }
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($evidence);
+    }
+
+    public function testRenderCliRejectsValueAndDuplicateFlagsBeforeAnyConfigurationRead(): void
+    {
+        foreach ([['--render-owned-data=false'], ['--render-owned-data', '--render-owned-data']] as $flags) {
+            $process = proc_open([
+                PHP_BINARY, dirname(__DIR__, 4) . '/tools/hosted-setup-preflight.php',
+                '--environment=sandbox', '--credentials-file=/nonexistent-synthetic-config',
+                '--state-dir=/nonexistent-synthetic-state', '--node-bin=' . PHP_BINARY,
+                '--playwright-module=/nonexistent-synthetic-module', '--create-one-hosted-setup', ...$flags,
+            ], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            self::assertIsResource($process);
+            [$output, $errors] = self::outputPipes($pipes);
+            $contents = stream_get_contents($output);
+            self::assertSame('', stream_get_contents($errors));
+            fclose($output);
+            fclose($errors);
+            self::assertSame(1, proc_close($process));
+            self::assertIsString($contents);
+            $safe = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($safe);
+            self::assertSame('configuration', $safe['phase']);
+            self::assertArrayNotHasKey('source', $safe);
+            self::assertArrayNotHasKey('run_id', $safe);
         }
     }
 

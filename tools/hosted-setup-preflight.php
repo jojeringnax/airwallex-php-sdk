@@ -8,30 +8,36 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 $arguments = $argv ?? [];
 $options = getopt('', [
-    'environment:', 'credentials-file:', 'state-dir:', 'node-bin:', 'playwright-module:', 'create-one-hosted-setup',
+    'environment:', 'credentials-file:', 'state-dir:', 'node-bin:', 'playwright-module:',
+    'create-one-hosted-setup', 'render-owned-data',
 ], $lastArgument);
-$allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin', 'playwright-module', 'create-one-hosted-setup'];
+$flags = ['create-one-hosted-setup', 'render-owned-data'];
+$allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin', 'playwright-module', ...$flags];
 if (is_array($options)) {
     $valid = $lastArgument === count($arguments);
 } else {
     $options = [];
     $valid = false;
 }
+$seen = [];
 foreach (array_slice($arguments, 1) as $argument) {
     $name = explode('=', substr($argument, 2), 2)[0];
-    if (!str_starts_with($argument, '--') || !in_array($name, $allowed, true)) {
+    if (!str_starts_with($argument, '--') || !in_array($name, $allowed, true) || isset($seen[$name])) {
         $valid = false;
     }
+    $seen[$name] = true;
     if (
-        ($name === 'create-one-hosted-setup' && $argument !== '--create-one-hosted-setup')
-        || ($name !== 'create-one-hosted-setup' && !str_contains($argument, '='))
+        (in_array($name, $flags, true) && $argument !== '--' . $name)
+        || (!in_array($name, $flags, true) && !str_contains($argument, '='))
     ) {
         $valid = false;
     }
 }
 if ($valid) {
-    if (array_key_exists('create-one-hosted-setup', $options)) {
-        $options['create-one-hosted-setup'] = $options['create-one-hosted-setup'] === false;
+    foreach ($flags as $flag) {
+        if (array_key_exists($flag, $options)) {
+            $options[$flag] = $options[$flag] === false;
+        }
     }
     $result = HostedSetupPreflight::run($options);
 } else {
