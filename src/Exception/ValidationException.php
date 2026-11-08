@@ -6,4 +6,5 @@ namespace Jojeringnax\Airwallex\Exception;
 
 final class ValidationException extends \InvalidArgumentException implements SdkException
 {
+    use RedactedException;
 }

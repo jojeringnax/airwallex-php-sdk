@@ -24,6 +24,8 @@ Use resource-oriented synchronous methods with provider-shaped associative array
 
 These choices establish the future public surface before an initial release. Once shipped, changes follow the [compatibility and release policy](release-policy.md), including its release gates. Resource contracts determine operation coverage.
 
+For implemented environment, token, transport, retry and diagnostic behavior, see [client configuration](client-configuration.md). Its optional clock and retry configuration remain a delegated provisional decision under [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60).
+
 ## Workflow references
 
 Read the relevant [consumer example](consumer-examples.md) when implementing or reviewing a workflow:

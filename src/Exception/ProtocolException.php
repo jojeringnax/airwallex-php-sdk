@@ -6,4 +6,5 @@ namespace Jojeringnax\Airwallex\Exception;
 
 final class ProtocolException extends \RuntimeException implements SdkException
 {
+    use RedactedException;
 }
