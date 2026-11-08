@@ -129,6 +129,23 @@ final class HostedBrowserTest extends TestCase
         self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
     }
 
+    public function testCandidateOriginIsAnAllowlistedObservationSeparateFromFinancialVerification(): void
+    {
+        $base = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'sandbox_origin_verified' => false];
+        foreach (['shared', 'sandbox'] as $origin) {
+            $safe = HostedBrowser::sanitize($base + ['candidate_origin' => $origin,
+                'verified_static_assets' => 3, 'integrity_rejections' => 0]);
+            self::assertSame($origin, $safe['candidate_origin']);
+            self::assertFalse($safe['sandbox_origin_verified']);
+            self::assertFalse($safe['card_entry_enabled']);
+            self::assertSame(3, $safe['verified_static_assets']);
+        }
+        $safe = HostedBrowser::sanitize($base + ['candidate_origin' => 'PRIVATE_HOST']);
+        self::assertArrayNotHasKey('candidate_origin', $safe);
+        self::assertStringNotContainsString('PRIVATE_HOST', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
     public function testFalseCreationFlagCannotBecomeOptInAtTheCliBoundary(): void
     {
         $process = proc_open([
