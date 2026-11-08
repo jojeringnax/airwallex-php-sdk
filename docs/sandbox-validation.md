@@ -45,6 +45,18 @@ Before writes, the harness resolves configuration through the documented account
 
 Organization read/write success remains distinct from merchant Billing activation, eligible cross-family collection linkage, financial lifecycle outcomes and actual webhook deliveries. Those scenarios remain in #42's journey matrix.
 
+## Billing checkout server matrix
+
+Run `--scenario=billing-checkouts --context=organization` with the same explicit sandbox credentials/state options. The configured account is supplied as the proposed collection account, after the independent account/legal-entity read. The provider must accept that linkage; knowing an account ID alone does not establish eligibility.
+
+This scenario creates a fresh synthetic Customer, Product, one recurring Price and one non-recurring Price. It creates, retrieves, updates metadata, cancels and retrieves Checkouts for all nine `SETUP`/`PAYMENT`/`SUBSCRIPTION` and `HOSTED`/`EMBEDDED`/`ELEMENTS` combinations, supplying the intended EUR currency explicitly in every mode. It checks owner/entity/collector, currency, mode, UI, metadata and applicable item identity/quantity; active hosted URLs and embedded client secrets remain private. A creation-to-expiry timestamp interval differing from the documented hour fails the overall contract observation, while independent metadata/cancellation checks continue. That timestamp check is not an observed transition to `EXPIRED`.
+
+The test supplies public reserved `https://example.com` success/back destinations for `HOSTED`, and a return destination for `EMBEDDED`/`ELEMENTS`. No browser follows them. A controlled sandbox HOSTED probe accepted success/back URLs without `return_url`; another HOSTED request with `return_url` returned validation error terms identifying `return_url`/`ui_mode`. This is observed test configuration, not an added global SDK requiredness rule for fields absent from the selected schema's required list.
+
+Each mode records its own outcome so a rejected setup path does not hide independent payment/subscription results. There is no browser purchase or instrument collection, no completed checkout, and no inference of paid invoices or active subscriptions. These completion/reconciliation and actual expiration journeys remain required under #42. The run cancels only its returned-created active Checkouts and archives its own catalogue; Customer/history remain. If a cancellation outcome is ambiguous, cleanup reads its current state and does not repeat the mutation. Update and cancel have no documented provider request identifier; the ledger records local intent without adding an undocumented field.
+
+Source: [Billing Checkouts API](https://www.airwallex.com/docs/api/billing/billing_checkouts), selected version `2026-08-21`. The SDK supplies server operations; browser initialization and completion belong to the application.
+
 ## Payments lifecycle writes
 
 Run this scenario with explicit account login after the account authentication check:
