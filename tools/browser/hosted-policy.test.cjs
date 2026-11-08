@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { HostedPolicy, egressProxy, staticAssets, assetMatches } = require('./hosted-policy.cjs');
+const { HostedPolicy, egressProxy, staticAssets, renderAssets, assetMatches } = require('./hosted-policy.cjs');
 const { createHash } = require('node:crypto');
 const initial = 'https://checkout.airwallex.com/pay?s=SYNTHETIC_SECRET';
 
@@ -186,8 +186,9 @@ function fixtureModule(fault) {
     module.exports = { chromium: { async launch(options) {
       if (!options.headless || !options.proxy || !options.args.includes('--disable-quic')) fail();
       let routeHandler, websocketHandler, pageHandler, dialogHandler;
+      const mainFrame = {};
       const page = {
-        setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
+        setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, mainFrame: () => mainFrame,
         on(name, handler) { if (name === 'dialog') dialogHandler = handler; },
         getByText() { return { first() { return { async isVisible() { return false; } }; } }; },
         async goto(url) {
@@ -195,17 +196,18 @@ function fixtureModule(fault) {
           const target = payer ? 'https://checkout.sandbox.airwallex.com/billing/payer-web-api/checkout?ts=1794130000000' : fault === 'abort' ? 'https://unknown.invalid/SYNTHETIC_PRIVATE_URL'
             : fault === 'asset_integrity' ? 'https://checkout.airwallex.com/pay/static/v2.286.0/js/main.ddc4fcf3b752ddbd5f14.js' : url;
           await routeHandler({
-            request() { return { url: () => target, method: () => 'GET',
+            request() { return { url: () => target, method: () => 'GET', frame: () => mainFrame,
               resourceType: () => payer ? 'fetch' : fault === 'asset_integrity' ? 'script' : 'document',
               headers: () => ({ referer: 'SYNTHETIC_PRIVATE_URL', authorization: 'Bearer ' + new URL(url).searchParams.get('s') }), postData: () => null }; },
             async abort() { if (fault === 'abort' || fault === 'payer_abort') fail(); },
             async fetch(options) {
               if (fault === 'fetch' || fault === 'payer_fetch' || options.maxRedirects !== 0 || options.maxRetries !== 0
                   || 'referer' in options.headers || (payer && options.headers.cookie !== '')) fail();
-              return { status: () => fault.startsWith('payer_http_') ? Number(fault.slice(11)) : 200, body: async () => { if (fault === 'payer_body') fail(); return Buffer.from('<!doctype html>'); },
+              return { status: () => fault.startsWith('payer_http_') ? Number(fault.slice(11)) : 200, body: async () => { if (fault === 'payer_body') fail(); return Buffer.from(fault === 'payer_render_fulfill'
+                  ? JSON.stringify({ mode: 'SETUP', currency: 'EUR' }) : '<!doctype html>'); },
                 async dispose() { if (fault === 'dispose' || fault === 'payer_dispose') fail(); } };
             },
-            async fulfill() { if (fault === 'fulfill') fail(); },
+            async fulfill() { if (fault === 'fulfill' || fault === 'payer_render_fulfill') fail(); },
           });
           if (fault === 'websocket') await websocketHandler({ async close() { fail(); } });
           if (fault === 'dialog') dialogHandler({ async dismiss() { fail(); } });
@@ -230,14 +232,15 @@ function fixtureModule(fault) {
 }
 
 for (const fault of ['none', 'abort', 'fetch', 'fulfill', 'dispose', 'websocket', 'dialog', 'context_close',
-  'browser_close', 'asset_integrity', 'payer_fetch', 'payer_body', 'payer_dispose', 'payer_abort', 'payer_http_401', 'payer_http_403', 'payer_http_404', 'payer_http_503']) {
+  'browser_close', 'asset_integrity', 'payer_fetch', 'payer_body', 'payer_dispose', 'payer_abort', 'payer_http_401', 'payer_http_403', 'payer_http_404', 'payer_http_503', 'payer_render_fulfill']) {
   test(`async actions and cleanup have a fixed private failure boundary: ${fault}`, () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-browser-module-fixture-'));
     try {
       fs.writeFileSync(path.join(directory, 'index.js'), fixtureModule(fault));
       const child = spawnSync(process.execPath, [path.join(__dirname, 'hosted-browser.cjs'), directory],
         { input: JSON.stringify({ url: fault.startsWith('payer_')
-          ? 'https://checkout.sandbox.airwallex.com/pay?s=' + sessionToken() : initial, expected: { checkout_id: 'SYNTHETIC_CHECKOUT', mode: 'SETUP', currency: 'EUR' } }), encoding: 'utf8', timeout: 4000 });
+          ? 'https://checkout.sandbox.airwallex.com/pay?s=' + sessionToken() : initial,
+          render: fault === 'payer_render_fulfill', expected: { checkout_id: 'SYNTHETIC_CHECKOUT', mode: 'SETUP', currency: 'EUR' } }), encoding: 'utf8', timeout: 4000 });
       assert.equal(child.stderr, '');
       assert.doesNotMatch(child.stdout, /SYNTHETIC_PRIVATE_URL|SYNTHETIC_SECRET/u);
       const output = JSON.parse(child.stdout);
@@ -265,8 +268,8 @@ function sessionToken(claim = {}) {
     + Buffer.from(JSON.stringify({ resource_id: 'checkout:SYNTHETIC_CHECKOUT', exp: 4070908800, ...claim })).toString('base64url')
     + '.SYNTHETIC_SIGNATURE';
 }
-function boundPolicy(origin = 'https://checkout.sandbox.airwallex.com', token = sessionToken(), expected = expectedCheckout) {
-  return new HostedPolicy(origin + '/pay?s=' + token, null, expected);
+function boundPolicy(origin = 'https://checkout.sandbox.airwallex.com', token = sessionToken(), expected = expectedCheckout, render = false) {
+  return new HostedPolicy(origin + '/pay?s=' + token, null, expected, render);
 }
 const payerUrl = 'https://checkout.sandbox.airwallex.com/billing/payer-web-api/checkout?ts=1794130000000';
 
@@ -280,7 +283,7 @@ test('one named Sandbox getter is bound to the SDK-owned ID and private URL toke
   assert.equal(policy.claimPayerRequest(payerUrl.replace('0000', '0001'), 'GET', 'xhr', headers), false);
   assert.deepEqual(policy.bindingEvidence(), { checkout_token_matches: true, payer_request_scope_verified: true,
     payer_get_attempted: true, payer_customer_mapping_verified: false, payer_payload_delivered: false,
-    financial_routing_verified: false });
+    financial_routing_verified: false, render_requested: false, render_frame_binding_available: false });
   assert.doesNotMatch(util.inspect(policy, { depth: null }), /SYNTHETIC_CHECKOUT|SYNTHETIC_SIGNATURE/u);
   assert.throws(() => JSON.stringify(policy), /cannot be serialized/u);
 });
@@ -347,4 +350,95 @@ test('payer observation validates only known mode/currency, never invents extern
   assert.equal(policy.observePayer(Buffer.from([0xff])).payer_observation, 'invalid_response');
   assert.equal(policy.bindingEvidence().payer_customer_mapping_verified, false);
   assert.equal(policy.bindingEvidence().payer_payload_delivered, false);
+});
+
+
+const privatePayer = { mode: 'SETUP', currency: 'EUR', setupModeDetails: {
+  externalCustomerClientSecret: 'PRIVATE_CLIENT_SECRET', billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER',
+} };
+function renderingPolicy() {
+  const policy = boundPolicy(undefined, undefined, undefined, true);
+  assert.equal(policy.claimPayerRequest(payerUrl, 'GET', 'fetch', { authorization: 'Bearer ' + sessionToken() }), true);
+  assert.equal(policy.observePayer(Buffer.from(JSON.stringify(privatePayer))).payer_observation, 'matched');
+  return policy;
+}
+function privateFrame(options = {}) {
+  const query = new URLSearchParams({ options: JSON.stringify({ mode: 'recurring', currency: 'EUR',
+    client_secret: 'PRIVATE_CLIENT_SECRET', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER', ...options }),
+  lang: 'en', appVersion: 'v2.56.0' });
+  return 'https://checkout.sandbox.airwallex.com/#/elements/dropin?' + query;
+}
+
+test('explicit rendering delivers only matched own payer data and permits one privately bound Drop-in frame', () => {
+  const policy = renderingPolicy();
+  assert.equal(policy.mayDeliverPayer(), true);
+  assert.equal(policy.claimRenderFrame(privateFrame()), false);
+  policy.markPayerDelivered();
+  assert.equal(policy.claimRenderFrame(privateFrame()), true);
+  assert.equal(policy.claimRenderFrame(privateFrame()), false);
+  assert.equal(policy.bindingEvidence().payer_payload_delivered, true);
+  assert.equal(policy.bindingEvidence().payer_customer_mapping_verified, false);
+  assert.equal(policy.bindingEvidence().financial_routing_verified, false);
+  assert.doesNotMatch(util.inspect(policy, { depth: null }), /PRIVATE_/u);
+  assert.throws(() => JSON.stringify(policy), /cannot be serialized/u);
+});
+
+test('default/shared/mismatched/unreadable data cannot enable delivery or a frame', () => {
+  const plain = boundPolicy();
+  plain.claimPayerRequest(payerUrl, 'GET', 'fetch', { authorization: 'Bearer ' + sessionToken() });
+  plain.observePayer(Buffer.from(JSON.stringify(privatePayer)));
+  assert.equal(plain.mayDeliverPayer(), false);
+  assert.throws(() => plain.markPayerDelivered(), /not been verified/u);
+  for (const body of [Buffer.from('{}'), Buffer.from('{"mode":"PAYMENT","currency":"EUR"}'),
+    Buffer.from('{"mode":"SETUP","currency":"USD"}'), Buffer.from('invalid'), Buffer.from('x'.repeat(65537))]) {
+    const policy = renderingPolicy();
+    policy.observePayer(body);
+    assert.equal(policy.mayDeliverPayer(), false);
+    assert.equal(policy.claimRenderFrame(privateFrame()), false);
+  }
+  const shared = boundPolicy('https://checkout.airwallex.com', undefined, undefined, true);
+  assert.equal(shared.renderEnabled(), false);
+  assert.equal(shared.mayDeliverPayer(), false);
+});
+
+test('frame options/route/build/language and private session must match, without SDK Customer-ID inference', () => {
+  const variants = [privateFrame({ mode: 'payment' }), privateFrame({ currency: 'USD' }),
+    privateFrame({ client_secret: 'PRIVATE_OTHER_SECRET' }), privateFrame({ customer_id: 'PRIVATE_OTHER_CUSTOMER' }),
+    privateFrame({ intent_id: 'PRIVATE_OTHER_INTENT' }),
+    privateFrame().replace('checkout.sandbox.', 'checkout.'), privateFrame().replace('/#/elements/dropin', '/pay#/elements/dropin'),
+    privateFrame().replace('/#/elements/dropin', '/#/elements/3ds-frictionless'),
+    privateFrame().replace('v2.56.0', 'v2.57.0'), privateFrame().replace('lang=en', 'lang=PRIVATE'),
+    privateFrame() + '&extra=PRIVATE', privateFrame() + '&options=%7B%7D'];
+  for (const frame of variants) {
+    const policy = renderingPolicy(); policy.markPayerDelivered();
+    assert.equal(policy.claimRenderFrame(frame), false);
+  }
+  const policy = renderingPolicy();
+  policy.observePayer(Buffer.from('{"mode":"SETUP","currency":"EUR"}'));
+  assert.equal(policy.mayDeliverPayer(), true); // Missing Web API mapping is not an invented data-delivery gate.
+  policy.markPayerDelivered();
+  assert.equal(policy.claimRenderFrame(privateFrame()), false);
+  assert.equal(policy.bindingEvidence().render_frame_binding_available, false);
+});
+
+test('render scripts are a closed byte-pinned Sandbox graph with only the source-defined loader timestamp', () => {
+  const policy = renderingPolicy();
+  assert.equal(Object.keys(renderAssets).length, 43);
+  for (const [pathname, hash] of Object.entries(renderAssets)) {
+    const target = 'https://checkout.sandbox.airwallex.com' + pathname;
+    const suffix = pathname === '/assets/elements.bundle.min.js' ? '?ts=1794130000000' : '';
+    assert.equal(policy.assetHash(target + suffix, 'GET', 'script'), hash);
+    assert.equal(boundPolicy().assetHash(target + suffix, 'GET', 'script'), null);
+    for (const variant of [target + suffix + '#', target + suffix + '&extra=PRIVATE',
+      (target + suffix).replace('checkout.sandbox.', 'checkout.'), target + '?other=1794130000000']) {
+      assert.equal(policy.assetHash(variant, 'GET', 'script'), null);
+    }
+    assert.equal(policy.assetHash(target + suffix, 'POST', 'script'), null);
+    assert.equal(policy.assetHash(target + suffix, 'GET', 'fetch'), null);
+  }
+  for (const pathname of ['/billing/payer-web-api/checkout/status', '/billing/payer-web-api/checkout/collect',
+    '/billing/payer-web-api/checkout/complete', '/api/v1/pa/payment_intents/PRIVATE/confirm',
+    '/static/js/unknown.chunk.js', '/assets/unknown.js']) {
+    for (const method of ['GET', 'POST']) assert.equal(policy.decide('https://checkout.sandbox.airwallex.com' + pathname, method, 'fetch'), 'block');
+  }
 });
