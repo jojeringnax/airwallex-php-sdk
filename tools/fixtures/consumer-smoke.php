@@ -1,0 +1,107 @@
+<?php
+
+declare(strict_types=1);
+
+use Composer\InstalledVersions;
+use GuzzleHttp\Client as HttpClient;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\HttpFactory;
+use GuzzleHttp\Psr7\Response;
+use Jojeringnax\Airwallex\Client;
+use Jojeringnax\Airwallex\Credentials;
+use Jojeringnax\Airwallex\Environment;
+use Jojeringnax\Airwallex\Exception\WebhookVerificationException;
+use Jojeringnax\Airwallex\Webhook\WebhookEvent;
+use Jojeringnax\Airwallex\Webhook\WebhookVerifier;
+use Psr\Http\Message\RequestInterface;
+
+require __DIR__ . '/vendor/autoload.php';
+
+$expectConsumer = static function (bool $condition, string $message): void {
+    if (!$condition) {
+        throw new RuntimeException($message);
+    }
+};
+
+foreach (['phpunit/phpunit', 'phpstan/phpstan', 'squizlabs/php_codesniffer'] as $developmentPackage) {
+    $expectConsumer(
+        !InstalledVersions::isInstalled($developmentPackage),
+        'SDK development dependency leaked into consumer.'
+    );
+}
+$expectConsumer(interface_exists(\Psr\SimpleCache\CacheInterface::class), 'Optional cache interface is unavailable.');
+/** @var list<array{request:\Psr\Http\Message\RequestInterface}> $history */
+$history = [];
+$mock = new MockHandler([
+    new Response(201, [], '{"token":"synthetic-consumer-token","expires_at":"2100-01-01T00:00:00Z"}'),
+    new Response(201, [], '{"id":"synthetic-billing-customer"}'),
+    new Response(200, [], '{"items":[],"page_after":"next-bookmark","page_before":null}'),
+    new Response(201, [], '{"id":"synthetic-intent","amount":19.90,"unknown_numeric":12345678901234567890.123400}'),
+    new Response(200, [], '{"items":[],"has_more":false}'),
+]);
+$handler = HandlerStack::create($mock);
+$handler->push(Middleware::history($history));
+$factory = new HttpFactory();
+$client = new Client(
+    environment: Environment::Sandbox,
+    credentials: new Credentials('synthetic-client-id', 'synthetic-api-key'),
+    httpClient: new HttpClient(['handler' => $handler, 'verify' => true, 'allow_redirects' => false]),
+    requestFactory: $factory,
+    streamFactory: $factory,
+);
+$customer = $client->billing()->customers()->create([
+    'request_id' => 'persisted-billing-action', 'email' => 'buyer@example.test',
+]);
+$expectConsumer($customer['id'] === 'synthetic-billing-customer', 'Installed Billing operation failed.');
+$billingPage = $client->billing()->customers()->list(['page_size' => 20]);
+$expectConsumer(
+    $billingPage === ['items' => [],
+     'page_after' => 'next-bookmark',
+     'page_before' => null],
+    'Billing envelope changed.'
+);
+$intent = $client->payments()->paymentIntents()->create([
+    'request_id' => 'persisted-intent-action', 'merchant_order_id' => 'synthetic-order',
+    'amount' => '19.90', 'currency' => 'EUR', 'metadata' => ['opaque_id' => '00123'],
+]);
+$expectConsumer($intent['amount'] === '19.90', 'Installed Payments amount lost precision.');
+$expectConsumer($intent['unknown_numeric'] === '12345678901234567890.123400', 'Unknown numeric text was changed.');
+$paymentPage = $client->payments()->paymentIntents()->list(['page_num' => 0, 'page_size' => 10]);
+$expectConsumer($paymentPage === ['items' => [], 'has_more' => false], 'Payments envelope changed.');
+if (!is_array($history)) {
+    throw new RuntimeException('Consumer request capture is unavailable.');
+}
+$expectConsumer(count($history) === 5, 'Installed SDK did not reuse its authentication token.');
+$requests = [];
+foreach ($history as $entry) {
+    $request = is_array($entry) ? ($entry['request'] ?? null) : null;
+    if (!$request instanceof RequestInterface) {
+        throw new RuntimeException('Consumer request capture has an unexpected type.');
+    }
+    $requests[] = $request;
+    $expectConsumer($request->getUri()->getHost() === 'api.sandbox.airwallex.com', 'Unexpected consumer request host.');
+    $expectConsumer($request->getHeaderLine('x-api-version') === '2026-08-21', 'Installed API pin changed.');
+}
+$intentBody = (string) $requests[3]->getBody();
+$expectConsumer(str_contains($intentBody, '"amount":19.90'), 'Exact financial wire number was changed.');
+$expectConsumer(str_contains($intentBody, '"opaque_id":"00123"'), 'Opaque metadata was converted to a number.');
+$expectConsumer(str_contains((string) $requests[4]->getUri(), 'page_num=0'), 'Zero-based paging was changed.');
+$body = '{"name":"future.event","amount":19.9000,"nested":{},"list":[]}';
+$timestamp = '1700000000000';
+$signature = hash_hmac('sha256', $timestamp . $body, 'synthetic-webhook-secret');
+$verifier = new WebhookVerifier('synthetic-webhook-secret', 0, static fn (): int => 1700000000000);
+$verifier->verify($body, $timestamp, $signature);
+$event = WebhookEvent::fromJson($body)->toArray();
+$expectConsumer(
+    $event['amount'] === '19.9000' && $event['nested'] instanceof stdClass,
+    'Installed webhook decoding changed.'
+);
+try {
+    $verifier->verify($body . ' ', $timestamp, $signature);
+    throw new RuntimeException('Installed webhook verifier accepted tampered bytes.');
+} catch (WebhookVerificationException) {
+    // Expected failure after changing the exact signed body.
+}
+echo "Clean consumer Billing, Payments, precision, paging, token reuse and webhooks passed.\n";
