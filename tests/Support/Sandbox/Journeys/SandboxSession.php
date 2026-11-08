@@ -9,6 +9,8 @@ use GuzzleHttp\Psr7\HttpFactory;
 use Psr\Http\Client\ClientInterface;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Environment;
+use Jojeringnax\Airwallex\Exception\ProtocolException;
+use Jojeringnax\Airwallex\Exception\ValidationException;
 use Jojeringnax\Airwallex\Internal\Auth\TokenProvider;
 use Jojeringnax\Airwallex\Internal\Http\HttpExchange;
 use Jojeringnax\Airwallex\Internal\Http\ResponseDecoder;
@@ -25,6 +27,7 @@ final readonly class SandboxSession
     private GuardedTransport $transport;
     private HttpFactory $factory;
     private Closure $clock;
+    private ?TokenProvider $simulationTokens;
 
     public function __construct(
         #[SensitiveParameter] private Configuration $configuration,
@@ -51,6 +54,64 @@ final readonly class SandboxSession
             retryPolicy: new RetryPolicy(maxAttempts: 1),
             clock: $this->clock,
         );
+        $this->simulationTokens = $context === 'account' ? new TokenProvider(
+            new HttpExchange(Environment::Sandbox, $this->transport, $this->factory, $this->factory),
+            new ResponseDecoder(),
+            $configuration->credentials(),
+            Environment::Sandbox,
+            $configuration->accountId(),
+            null,
+            null,
+            $this->clock,
+        ) : null;
+    }
+
+    /**
+     * Test-only API 2026-08-21 support: simulation:write, account level, selected metadata OBO=false.
+     * Product prose describes OBO support; this harness uses explicit account login while that conflict remains.
+     * @see https://www.airwallex.com/docs/api/simulation/payments
+     */
+    public function simulateShopperAction(string $action, #[SensitiveParameter] string $url): void
+    {
+        $parts = parse_url($url);
+        if (
+            $this->simulationTokens === null || !in_array($action, ['pay', 'reject', 'verify'], true)
+            || !is_array($parts) || ($parts['scheme'] ?? null) !== 'https'
+            || !in_array($parts['host'] ?? null, [
+                'api.sandbox.airwallex.com', 'checkout.sandbox.airwallex.com',
+            ], true)
+            || isset($parts['user']) || isset($parts['pass'])
+            || (isset($parts['port']) && $parts['port'] !== 443)
+            || preg_match('/[\x00-\x20\x7f]/', $url) === 1
+        ) {
+            throw new ValidationException('Shopper simulation requires an account-owned sandbox redirect.');
+        }
+        $exchange = new HttpExchange(Environment::Sandbox, $this->transport, $this->factory, $this->factory);
+        $response = $exchange->send('POST', '/api/v1/simulation/pa/shopper_actions/' . $action, [
+            'Authorization' => 'Bearer ' . $this->simulationTokens->token(),
+            'x-api-version' => '2026-08-21', 'Content-Type' => 'application/json',
+        ], json_encode(['url' => $url], JSON_THROW_ON_ERROR));
+        if ($response->getStatusCode() === 200) {
+            try {
+                $body = (string) $response->getBody();
+            } catch (\Throwable) {
+                throw new ProtocolException('Shopper simulation response could not be read.');
+            }
+            if ($body === '') {
+                return;
+            }
+        }
+        if ($response->getStatusCode() >= 400) {
+            $sensitive = $this->simulationTokens->sensitiveValues();
+            if ($response->getStatusCode() === 401) {
+                $this->simulationTokens->invalidate();
+            }
+            (new ResponseDecoder())->decode(
+                $response,
+                sensitiveValues: [...$sensitive, $url],
+            );
+        }
+        throw new ProtocolException('Shopper simulation did not return the documented empty success.');
     }
 
     /**
