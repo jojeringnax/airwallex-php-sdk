@@ -336,6 +336,63 @@ final class BillingWorkflowTest extends HttpTestCase
             yield $mode => [$mode];
         }
     }
+
+    /** @return iterable<string,array{string}> */
+    public static function cancellationObservations(): iterable
+    {
+        yield 'already cancelled observation' => ['CANCELLED'];
+        yield 'state may change after active observation' => ['ACTIVE'];
+    }
+
+    #[DataProvider('cancellationObservations')]
+    // Chosen responses use the selected endpoint's codes; they do not establish universal state/error behavior.
+    public function testExplicitCancellationPreservesAProviderStateRejectionWithoutReplaying(string $observed): void
+    {
+        $http = $this->scenario([
+            [201, self::LOGIN],
+            [200, json_encode(['id' => 'sub_test', 'status' => $observed], JSON_THROW_ON_ERROR)],
+            [400, '{"code":"invalid_status_for_operation","message":"fixture-private-rejection"}'],
+        ]);
+        $subscriptions = $this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3))->billing()->subscriptions();
+        self::assertSame($observed, $subscriptions->retrieve('sub_test')['status']);
+        try {
+            $subscriptions->cancel('sub_test', [
+                'request_id' => 'persisted-cancel-action', 'proration_behavior' => 'NONE',
+            ]);
+            self::fail('Expected the selected cancel endpoint state error.');
+        } catch (ApiException $error) {
+            self::assertSame(400, $error->httpStatus());
+            self::assertSame('invalid_status_for_operation', $error->providerCode());
+            self::assertStringNotContainsString('fixture-private-rejection', (string) $error);
+        }
+        self::assertCount(3, $http->requests);
+        self::assertSame('POST', $http->requests[2]->getMethod());
+        self::assertStringEndsWith('/subscriptions/sub_test/cancel', (string) $http->requests[2]->getUri());
+        self::assertSame(
+            '{"request_id":"persisted-cancel-action","proration_behavior":"NONE"}',
+            (string) $http->requests[2]->getBody(),
+        );
+    }
+
+    public function testAmbiguousSubscriptionCancellationKeepsItsOriginalIdentityAndIsNotReplayed(): void
+    {
+        $http = $this->scenario([[201, self::LOGIN], [500, '{"code":"internal_error"}']]);
+        try {
+            $this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3))->billing()->subscriptions()->cancel(
+                'sub_test',
+                ['request_id' => 'persisted-uncertain-cancel', 'proration_behavior' => 'PRORATED'],
+            );
+            self::fail('Expected the selected cancel endpoint server error.');
+        } catch (ApiException $error) {
+            self::assertSame(500, $error->httpStatus());
+            self::assertSame('internal_error', $error->providerCode());
+        }
+        self::assertCount(2, $http->requests);
+        self::assertSame(
+            '{"request_id":"persisted-uncertain-cancel","proration_behavior":"PRORATED"}',
+            (string) $http->requests[1]->getBody(),
+        );
+    }
     public function testInvoiceDocumentsAmountsAndNestedPaginationPreserveObservedState(): void
     {
         $http = $this->scenario(

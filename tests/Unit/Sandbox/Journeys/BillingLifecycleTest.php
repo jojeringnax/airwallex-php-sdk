@@ -226,13 +226,16 @@ final class BillingLifecycleTest extends TestCase
     public function testOwnedManualLifecycleObservesAllChangesAndCancelsBeforeArchiving(): void
     {
         [$result, $http, $ledger, $waits] = $this->runJourney($this->fixtures());
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
+        self::assertSame('scheduled_replacement_effectiveness_requires_next_cycle_evidence', $result['reason']);
         self::assertSame('billing-lifecycle', $result['scenario']);
         self::assertTrue($result['trial_requested']);
         self::assertFalse($result['ambiguous_mutation']);
         self::assertSame(0, $waits);
         self::assertSame([
             'quantity_item_identity_retained' => true,
+            'effective_replacement_unverified' => true, 'old_entry_present' => false,
+            'scheduled_items_page_complete' => true,
             'pdf_url_present' => true, 'pdf_url_nonempty' => false,
             'hosted_url_present' => true, 'hosted_url_nonempty' => true,
             'invoice_status' => 'DRAFT', 'invoice_payment_status' => 'UNPAID',
@@ -293,7 +296,7 @@ final class BillingLifecycleTest extends TestCase
             ...array_slice($fixtures, 12),
         ];
         [$result, $http, , $waits] = $this->runJourney($responses);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertSame(1, $waits);
         self::assertCount(35, $http->requests);
         self::assertSame('GET', $http->requests[12]->getMethod());
@@ -311,7 +314,7 @@ final class BillingLifecycleTest extends TestCase
                 ? [200, self::json(['items' => [$updated], 'page_after' => null])] : $response;
         }
         [$result, $http, $ledger] = $this->runJourney($responses);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertIsArray($result['observations']);
         self::assertFalse($result['observations']['quantity_item_identity_retained']);
         self::assertStringContainsString(
@@ -335,6 +338,125 @@ final class BillingLifecycleTest extends TestCase
     }
 
     /** @return iterable<string,array{bool}> */
+    public static function scheduledPageShapes(): iterable
+    {
+        yield 'explicit terminal cursor' => [true];
+        yield 'missing cursor is not complete inventory evidence' => [false];
+    }
+
+    #[DataProvider('scheduledPageShapes')]
+    public function testNoneSchedulingAllowsKnownPriorEntryWithoutClaimingEffectiveReplacement(bool $terminal): void
+    {
+        $page = ['items' => [self::item('2'), self::item('1', 'owned-second-price')]];
+        if ($terminal) {
+            $page['page_after'] = null;
+        }
+        $responses = [];
+        foreach ($this->fixtures() as $index => $response) {
+            $responses[] = $index === 20 ? [200, self::json($page)] : $response;
+        }
+        [$result, $http, $ledger] = $this->runJourney($responses);
+        self::assertSame('pending', $result['result']);
+        self::assertSame('scheduled_replacement_effectiveness_requires_next_cycle_evidence', $result['reason']);
+        self::assertIsArray($result['observations']);
+        self::assertTrue($result['observations']['old_entry_present']);
+        self::assertTrue($result['observations']['effective_replacement_unverified']);
+        self::assertSame($terminal, $result['observations']['scheduled_items_page_complete']);
+        self::assertIsArray($result['steps']);
+        foreach (
+            ['scheduled_replacement_listed', 'plan_cycle_kept', 'ending_scheduled', 'period_end_flag_cleared'] as $step
+        ) {
+            self::assertSame('pass', $result['steps'][$step]);
+        }
+        self::assertArrayNotHasKey('replacement_observed', $result['steps']);
+        self::assertSame('UNPAID', $result['observations']['invoice_payment_status']);
+        self::assertIsArray($result['cleanup']);
+        self::assertNotContains('fail', $result['cleanup']);
+        self::assertCount(34, $http->requests);
+        $private = json_decode((string) file_get_contents(
+            $this->directory . '/' . $ledger->runId() . '/ledger.json',
+        ), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($private);
+        self::assertIsArray($private['observations']);
+        self::assertIsArray($private['observations']['scheduled_subscription_item']);
+        self::assertSame('owned-second-item', $private['observations']['scheduled_subscription_item']['item_id']);
+        self::assertStringNotContainsString('owned-second-item', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return iterable<string,array{string,bool}> */
+    public static function unverifiedScheduledItems(): iterable
+    {
+        foreach (
+            ['missing_target', 'two_candidates', 'unexpected_entry', 'wrong_quantity', 'wrong_currency',
+            'wrong_prior', 'next_page'] as $fault
+        ) {
+            yield $fault => [$fault, false];
+        }
+        yield 'foreign owner' => ['foreign_owner', true];
+        yield 'duplicate identity' => ['duplicate_identity', true];
+    }
+
+    #[DataProvider('unverifiedScheduledItems')]
+    public function testScheduledRowsCannotHideAmbiguousOrUnownedEntries(string $fault, bool $protocolFailure): void
+    {
+        $prior = self::item('2');
+        $target = self::item('1', 'owned-second-price');
+        $page = ['items' => [$prior, $target], 'page_after' => null];
+        switch ($fault) {
+            case 'missing_target':
+                $page['items'] = [$prior];
+                break;
+            case 'two_candidates':
+                $other = $target;
+                $other['id'] = 'ambiguous-scheduled-item';
+                $page['items'] = [$target, $other];
+                break;
+            case 'unexpected_entry':
+                $other = $prior;
+                $other['id'] = 'unclassified-item';
+                $page['items'][] = $other;
+                break;
+            case 'wrong_quantity':
+                $target['quantity'] = '2';
+                $page['items'] = [$prior, $target];
+                break;
+            case 'wrong_currency':
+                $target['price'] = ['id' => 'owned-second-price', 'currency' => 'USD'];
+                $page['items'] = [$prior, $target];
+                break;
+            case 'wrong_prior':
+                $prior['quantity'] = '3';
+                $page['items'] = [$prior, $target];
+                break;
+            case 'next_page':
+                $page['page_after'] = 'private-next-page';
+                break;
+            case 'foreign_owner':
+                $target['subscription_id'] = 'foreign-subscription';
+                $page['items'] = [$prior, $target];
+                break;
+            case 'duplicate_identity':
+                $page['items'] = [$target, $target];
+                break;
+        }
+        $responses = array_slice($this->fixtures(), 0, 20);
+        for ($index = 0; $index < ($protocolFailure ? 1 : 3); ++$index) {
+            $responses[] = [200, self::json($page)];
+        }
+        $responses = [...$responses, ...$this->cleanupFixtures()];
+        [$result, $http] = $this->runJourney($responses);
+        self::assertSame($protocolFailure ? 'fail' : 'pending', $result['result']);
+        self::assertIsArray($result['observations']);
+        self::assertTrue($result['observations']['effective_replacement_unverified']);
+        self::assertIsArray($result['steps']);
+        self::assertArrayNotHasKey('scheduled_replacement_listed', $result['steps']);
+        foreach (array_slice($http->requests, 20) as $request) {
+            self::assertStringNotContainsString('"cancel_at_period_end"', (string) $request->getBody());
+            self::assertStringNotContainsString('/invoices/', $request->getUri()->getPath());
+        }
+    }
+
+    /** @return iterable<string,array{bool}> */
     public static function cancelledDurations(): iterable
     {
         yield 'null duration' => [false];
@@ -354,7 +476,7 @@ final class BillingLifecycleTest extends TestCase
             $responses[] = $index === 30 ? [200, self::json($cancelled)] : $response;
         }
         [$result, $http] = $this->runJourney($responses);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertIsArray($result['cleanup']);
         self::assertSame('pass', $result['cleanup']['subscriptions_0']);
         self::assertCount(34, $http->requests);
@@ -369,7 +491,7 @@ final class BillingLifecycleTest extends TestCase
             [200, self::json($cancelled)], ...array_slice($this->fixtures(), 31),
         ];
         [$result, $http] = $this->runJourney($responses);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertCount(32, $http->requests);
         foreach ($http->requests as $request) {
             self::assertStringNotContainsString('/cancel', $request->getUri()->getPath());
@@ -403,7 +525,7 @@ final class BillingLifecycleTest extends TestCase
     public function testSeparatelyLabeledNoTrialJourneyObservesActivationAndAllRemainingCheckpoints(): void
     {
         [$result, $http, $ledger, $waits] = $this->runJourney($this->withoutTrialFixtures(), withTrial: false);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertSame('billing-lifecycle-no-trial', $result['scenario']);
         self::assertFalse($result['trial_requested']);
         self::assertSame(0, $waits);
@@ -413,7 +535,7 @@ final class BillingLifecycleTest extends TestCase
         foreach (
             [
             'future_start', 'activated_without_trial', 'quantity_observed', 'quantity_cycle_kept',
-            'replacement_observed', 'plan_cycle_kept', 'ending_scheduled', 'period_end_flag_cleared',
+            'scheduled_replacement_listed', 'plan_cycle_kept', 'ending_scheduled', 'period_end_flag_cleared',
             ] as $step
         ) {
             self::assertSame('pass', $result['steps'][$step]);
@@ -439,7 +561,7 @@ final class BillingLifecycleTest extends TestCase
             ...array_slice($fixtures, 12),
         ];
         [$result, $http, , $waits] = $this->runJourney($responses, withTrial: false);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertFalse($result['trial_requested']);
         self::assertSame(1, $waits);
         self::assertSame('GET', $http->requests[12]->getMethod());
@@ -608,7 +730,7 @@ final class BillingLifecycleTest extends TestCase
             ...array_slice($fixtures, 26),
         ];
         [$result, $http, , $waits] = $this->runJourney($responses);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertSame(1, $waits);
         self::assertCount(36, $http->requests);
         foreach ([26, 27] as $index) {
@@ -657,7 +779,7 @@ final class BillingLifecycleTest extends TestCase
             ...array_slice($fixtures, 0, 14), [200, self::json($body)], ...array_slice($fixtures, 14),
         ];
         [$result, $http, , $waits] = $this->runJourney($responses);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
         self::assertSame(1, $waits);
         self::assertCount(35, $http->requests);
     }
@@ -739,7 +861,7 @@ final class BillingLifecycleTest extends TestCase
             ...array_slice($fixtures, 0, 10), [200, self::json($body)], ...array_slice($fixtures, 11),
         ];
         [$result] = $this->runJourney($responses);
-        self::assertSame('pass', $result['result']);
+        self::assertSame('pending', $result['result']);
     }
 
     public function testLongObservationBudgetWaitsThirtySecondsWithoutRepeatingAnyMutation(): void

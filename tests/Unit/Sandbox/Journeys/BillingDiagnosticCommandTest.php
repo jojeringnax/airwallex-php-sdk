@@ -51,12 +51,17 @@ final class BillingDiagnosticCommandTest extends TestCase
         }
     }
 
-    /** @return iterable<string,array{string,?string,string}> */
+    /** @return iterable<string,array{string,?string,string,bool}> */
     public static function providerCodes(): iterable
     {
-        yield 'public code' => ['validation_error', 'validation_error', 'billing-lifecycle'];
-        yield 'opaque lowercase code' => ['private_provider_identifier', null, 'billing-lifecycle'];
-        yield 'separate no-trial scenario' => ['validation_error', 'validation_error', 'billing-lifecycle-no-trial'];
+        yield 'public code' => ['validation_error', 'validation_error', 'billing-lifecycle', false];
+        yield 'opaque lowercase code' => ['private_provider_identifier', null, 'billing-lifecycle', false];
+        yield 'separate no-trial scenario' => [
+            'validation_error', 'validation_error', 'billing-lifecycle-no-trial', false,
+        ];
+        yield 'opaque later no-trial read failure' => [
+            'private_provider_identifier', null, 'billing-lifecycle-no-trial', true,
+        ];
     }
 
     #[DataProvider('providerCodes')]
@@ -64,6 +69,7 @@ final class BillingDiagnosticCommandTest extends TestCase
         string $code,
         ?string $expectedCode,
         string $scenario,
+        bool $failAfterCreate,
     ): void {
         $directory = sys_get_temp_dir() . '/airwallex-billing-diagnostic-fixture-' . bin2hex(random_bytes(6));
         mkdir($directory, 0700);
@@ -77,7 +83,7 @@ final class BillingDiagnosticCommandTest extends TestCase
         $objects = [];
         $inner = $this->createStub(ClientInterface::class);
         $inner->method('sendRequest')->willReturnCallback(
-            static function (RequestInterface $request) use (&$objects, $code): ResponseInterface {
+            static function (RequestInterface $request) use (&$objects, $code, $failAfterCreate): ResponseInterface {
                 $path = $request->getUri()->getPath();
                 if ($path === '/api/v1/authentication/login') {
                     return new Response(201, [], '{"token":"fixture_token","expires_at":"2100-01-01T00:00:00Z"}');
@@ -87,9 +93,17 @@ final class BillingDiagnosticCommandTest extends TestCase
                         . '"account_details":{"legal_entity_id":"fixture_entity"}}');
                 }
                 if ($path === '/api/v1/billing/subscriptions/create') {
+                    if ($failAfterCreate) {
+                        return new Response(201, [], '{"id":"fixture-returned-subscription"}');
+                    }
                     return new Response(400, [], json_encode([
                         'code' => $code, 'source' => 'duration.period',
                         'message' => 'duration contains SENTINEL_PRIVATE_DATA',
+                    ], JSON_THROW_ON_ERROR));
+                }
+                if ($path === '/api/v1/billing/subscriptions/fixture-returned-subscription') {
+                    return new Response(400, [], json_encode([
+                        'code' => $code, 'source' => 'customer_id', 'message' => 'SENTINEL_PRIVATE_DATA',
                     ], JSON_THROW_ON_ERROR));
                 }
                 if ($request->getMethod() === 'POST' && str_ends_with($path, '/create')) {
@@ -118,16 +132,21 @@ final class BillingDiagnosticCommandTest extends TestCase
             self::assertSame($scenario, $result['scenario']);
             self::assertSame($scenario === 'billing-lifecycle', $result['trial_requested']);
             self::assertSame('organization', $result['context']);
-            self::assertTrue($result['ambiguous_mutation']);
+            self::assertSame(!$failAfterCreate, $result['ambiguous_mutation']);
             self::assertIsArray($result['steps']);
             self::assertIsArray($result['diagnostics']);
             self::assertSame('pass', $result['steps']['fresh_catalogue']);
-            self::assertSame($expectedCode, $result['diagnostics']['provider_code']);
-            self::assertSame(['duration', 'period'], $result['diagnostics']['mentioned_fields']);
-            self::assertSame('fresh_subscription_create', $result['diagnostics']['phase']);
+            if ($failAfterCreate) {
+                self::assertSame([], $result['diagnostics']);
+                self::assertSame(400, $result['http_status']);
+            } else {
+                self::assertSame($expectedCode, $result['diagnostics']['provider_code']);
+                self::assertSame(['duration', 'period'], $result['diagnostics']['mentioned_fields']);
+                self::assertSame('fresh_subscription_create', $result['diagnostics']['phase']);
+            }
             self::assertArrayNotHasKey('provider_code', $result);
             self::assertArrayNotHasKey('provider_source', $result);
-            self::assertCount(12, $http->requests);
+            self::assertCount($failAfterCreate ? 14 : 12, $http->requests);
             foreach ($http->requests as $request) {
                 self::assertSame('api.sandbox.airwallex.com', $request->getUri()->getHost());
                 self::assertFalse($request->hasHeader('x-on-behalf-of'));
@@ -139,7 +158,9 @@ final class BillingDiagnosticCommandTest extends TestCase
             self::assertIsArray($create);
             self::assertSame($scenario === 'billing-lifecycle', array_key_exists('trial_ends_at', $create));
             $json = json_encode($result, JSON_THROW_ON_ERROR);
-            foreach (['SENTINEL_PRIVATE_DATA', 'fixture_', 'private_provider_identifier'] as $private) {
+            foreach (
+                ['SENTINEL_PRIVATE_DATA', 'fixture_', 'fixture-returned', 'private_provider_identifier'] as $private
+            ) {
                 self::assertStringNotContainsString($private, $json);
             }
         } finally {

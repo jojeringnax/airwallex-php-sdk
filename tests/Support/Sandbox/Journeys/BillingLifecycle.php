@@ -76,6 +76,10 @@ final class BillingLifecycle
             }
             $journey->catalogue();
             $journey->lifecycle($now);
+            if ($journey->observations['effective_replacement_unverified'] ?? false) {
+                $result['result'] = 'pending';
+                $result['reason'] = 'scheduled_replacement_effectiveness_requires_next_cycle_evidence';
+            }
         } catch (ApiException $error) {
             $result['result'] = 'fail';
             $result['http_status'] = $error->httpStatus();
@@ -214,7 +218,8 @@ final class BillingLifecycle
             'items' => [['id' => $itemId, 'deleted' => true], ['price_id' => $this->secondPrice, 'quantity' => 1]],
             'default_proration_mode' => 'NONE', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE',
         ]);
-        $this->item('replacement_observed', $this->secondPrice, '1', absentId: $itemId);
+        $this->observations['effective_replacement_unverified'] = true;
+        $this->scheduledReplacement($itemId);
         $this->keepAnchor('plan_cycle_kept', $anchor);
         $this->update('schedule_ending', ['cancel_at_period_end' => true]);
         $this->subscriptionState('ending_scheduled', 'ACTIVE', ['cancel_at_period_end' => true]);
@@ -333,7 +338,6 @@ final class BillingLifecycle
         string $step,
         string $price,
         string $quantity,
-        ?string $absentId = null,
     ): array {
         $found = [];
         $this->observe(
@@ -342,7 +346,7 @@ final class BillingLifecycle
                 $this->subscription,
                 ['page_size' => 20],
             ),
-            function (array $page) use ($price, $quantity, $absentId, &$found): bool {
+            function (array $page) use ($price, $quantity, &$found): bool {
                 $found = [];
                 $items = self::items($page);
                 if (count($items) !== 1 || ($page['page_after'] ?? null) !== null) {
@@ -350,10 +354,7 @@ final class BillingLifecycle
                 }
                 foreach ($items as $resource) {
                     self::fields($resource, ['subscription_id' => $this->subscription]);
-                    $id = self::id($resource);
-                    if ($id === $absentId) {
-                        return false;
-                    }
+                    self::id($resource);
                     if (
                         self::contains($resource, ['price' => ['id' => $price, 'currency' => 'EUR']])
                         && ExactDecimal::equalsLiteral($resource['quantity'] ?? null, $quantity)
@@ -365,6 +366,63 @@ final class BillingLifecycle
             },
         );
         return $found;
+    }
+
+    /** NONE schedules the requested fee change; a listed row does not prove current/ended membership. */
+    private function scheduledReplacement(#[SensitiveParameter] string $priorId): void
+    {
+        $target = [];
+        $priorPresent = false;
+        $completePage = false;
+        $this->observe(
+            'scheduled_replacement_listed',
+            fn (): array => $this->session->client->billing()->subscriptions()->listItems(
+                $this->subscription,
+                ['page_size' => 20],
+            ),
+            function (array $page) use ($priorId, &$target, &$priorPresent, &$completePage): bool {
+                $target = [];
+                $priorPresent = false;
+                $completePage = array_key_exists('page_after', $page) && $page['page_after'] === null;
+                if (($page['page_after'] ?? null) !== null) {
+                    return false;
+                }
+                $items = self::items($page);
+                $seen = [];
+                $known = true;
+                foreach ($items as $resource) {
+                    self::fields($resource, ['subscription_id' => $this->subscription]);
+                    $id = self::id($resource);
+                    if (isset($seen[$id])) {
+                        throw new ProtocolException('Scheduled item observation contains a repeated identity.');
+                    }
+                    $seen[$id] = true;
+                    if ($id === $priorId) {
+                        $priorPresent = true;
+                        $known = $known && self::contains($resource, [
+                            'price' => ['id' => $this->firstPrice, 'currency' => 'EUR'],
+                        ]) && ExactDecimal::equalsLiteral($resource['quantity'] ?? null, '2');
+                        continue;
+                    }
+                    if (
+                        $target !== [] || !self::contains($resource, [
+                            'price' => ['id' => $this->secondPrice, 'currency' => 'EUR'],
+                        ]) || !ExactDecimal::equalsLiteral($resource['quantity'] ?? null, '1')
+                    ) {
+                        $known = false;
+                        continue;
+                    }
+                    $target = $resource;
+                }
+                return $known && $target !== [];
+            },
+        );
+        $this->ledger->recordObservation('scheduled_subscription_item', [
+            'subscription_id' => $this->subscription, 'item_id' => self::id($target),
+            'price_id' => $this->secondPrice, 'prior_item_id' => $priorId,
+        ], $this->session->contextFingerprint());
+        $this->observations['old_entry_present'] = $priorPresent;
+        $this->observations['scheduled_items_page_complete'] = $completePage;
     }
 
     /** @param array<array-key,mixed> $subscription */

@@ -117,14 +117,15 @@ For provider trials/future starts, add timezone-bearing `starts_at` and later `t
 ```php
 $changed = $billing->billing()->subscriptions()->update($subscription['id'], [
     'request_id' => '<persisted-quantity-change-request-id>',
-    'items' => [['id' => '<existing-item-id>', 'quantity' => 3]],
+    'items' => [['id' => '<verified-initial-item-id>', 'quantity' => 3]],
     'default_proration_mode' => 'PRORATED',
 ]);
-// Replacing a price removes the old item and adds a new one in the same update.
+// Refresh listItems/retrieveItem and reconcile the intended owned item before this separate action.
+// NONE requests a next-cycle fee change; listing the new entry does not establish immediate replacement.
 $changedPlan = $billing->billing()->subscriptions()->update($subscription['id'], [
     'request_id' => '<persisted-plan-change-request-id>',
     'items' => [
-        ['id' => '<existing-item-id>', 'deleted' => true],
+        ['id' => '<refreshed-selected-item-id>', 'deleted' => true],
         ['price_id' => '<new-recurring-price-id>', 'quantity' => 3],
     ],
     'default_proration_mode' => 'NONE',
@@ -132,6 +133,8 @@ $changedPlan = $billing->billing()->subscriptions()->update($subscription['id'],
 ```
 
 An omitted existing item stays unchanged; its `price_id` cannot be edited in place. `NONE`, `PRORATED` and `ALL` follow provider proration semantics; per-item `proration_mode` overrides the default. The SDK does not compute credits or hide a billing-cycle reset. The [Billing financial-control reference](billing-resources.md#choosing-subscription-financial-controls) documents provider defaults, explicit billing actions and deterministic coverage; current-state restrictions remain provider-enforced.
+
+Item IDs are provider references, and their retention across updates is not guaranteed. Before each later item mutation, refresh the same owning Subscription's `listItems()`/`retrieveItem()` data and match its Subscription, nested `price.id`, currency, exact quantity and the application's known action. Do not reuse an earlier ID without reconciliation or choose the first/latest row. The selected item schema has no active/deleted/effective-date classifier; its `current_period_*` fields describe invoiced periods. A list can contain the known prior entry and a scheduled target. If the intended item cannot be selected unambiguously, stop and resolve its lifecycle before another mutation. The recipes accept an already verified caller-selected ID and perform no hidden selection.
 
 Choose **one** cancellation action according to consumer intent:
 
