@@ -24,6 +24,9 @@ final class InvoiceAccessTransport implements ClientInterface
     private readonly Closure $clock;
     private bool $pdfSent = false;
     private bool $payerSent = false;
+    private bool $redirectSent = false;
+    private ?string $redirectCandidate = null;
+    private ?string $redirectTarget = null;
 
     /**
      * @param ClientInterface|null $http Fixture or already-streaming seam; arbitrary clients may prebuffer.
@@ -34,6 +37,7 @@ final class InvoiceAccessTransport implements ClientInterface
         #[SensitiveParameter] private readonly ?string $payerToken,
         ?ClientInterface $http = null,
         ?Closure $clock = null,
+        private readonly bool $allowPdfRedirect = false,
     ) {
         if (
             ($pdf !== null && InvoiceAccessPolicy::pdf($pdf) !== $pdf)
@@ -60,34 +64,32 @@ final class InvoiceAccessTransport implements ClientInterface
         }
     }
 
+    /** @throws ProtocolException|TransportException */
     public function sendRequest(#[SensitiveParameter] RequestInterface $request): ResponseInterface
     {
         $uri = (string) $request->getUri();
-        $pdf = $this->pdf !== null && $uri === $this->pdf;
-        $payer = $this->payerToken !== null && $uri === InvoiceAccessPolicy::PAYER;
-        $expected = ['accept' => $pdf ? 'application/pdf' : 'application/json', 'accept-encoding' => 'identity',
-            'host' => 'invoice.sandbox.airwallex.com'];
-        if ($pdf) {
-            $expected['range'] = 'bytes=0-1023';
-        } elseif ($payer) {
-            $expected['authorization'] = 'Bearer ' . $this->payerToken;
-        }
         $headers = [];
         foreach ($request->getHeaders() as $name => $values) {
             $headers[strtolower($name)] = $values;
         }
-        $valid = count($headers) === count($expected);
-        foreach ($expected as $name => $value) {
-            $valid = $valid && ($headers[$name] ?? null) === [$value];
-        }
+        $pdfHeaders = self::headers($headers, ['accept' => 'application/pdf', 'accept-encoding' => 'identity',
+            'host' => 'invoice.sandbox.airwallex.com', 'range' => 'bytes=0-1023']);
+        $initial = $this->pdf !== null && $uri === $this->pdf && $pdfHeaders;
+        $redirect = $this->redirectTarget !== null && $uri === $this->redirectTarget && $pdfHeaders;
+        $payer = $this->payerToken !== null && $uri === InvoiceAccessPolicy::PAYER
+            && self::headers($headers, ['accept' => 'application/json', 'accept-encoding' => 'identity',
+                'host' => 'invoice.sandbox.airwallex.com', 'authorization' => 'Bearer ' . $this->payerToken]);
         if (
-            (!$pdf && !$payer) || !$valid || $request->getMethod() !== 'GET'
-            || $request->getBody()->getSize() !== 0 || ($pdf && $this->pdfSent) || ($payer && $this->payerSent)
+            (!$initial && !$redirect && !$payer) || $request->getMethod() !== 'GET'
+            || $request->getBody()->getSize() !== 0 || ($initial && $this->pdfSent)
+            || ($redirect && $this->redirectSent) || ($payer && $this->payerSent)
         ) {
             throw new ProtocolException('Only the separately bound Invoice reads are permitted once.');
         }
-        $this->pdfSent = $this->pdfSent || $pdf;
+        $this->pdfSent = $this->pdfSent || $initial;
+        $this->redirectSent = $this->redirectSent || $redirect;
         $this->payerSent = $this->payerSent || $payer;
+        $pdf = $initial || $redirect;
         try {
             $response = $this->http->sendRequest($request);
         } catch (Throwable) {
@@ -124,10 +126,50 @@ final class InvoiceAccessTransport implements ClientInterface
                 $stream->close();
             }
             $this->deadline($started);
+            if ($initial && $this->allowPdfRedirect) {
+                $this->rememberPdfRedirect($bounded);
+            }
             return $bounded;
         } catch (Throwable) {
             throw new ProtocolException('Invoice access response could not be safely observed.');
         }
+    }
+
+    private function rememberPdfRedirect(#[SensitiveParameter] ResponseInterface $response): void
+    {
+        if ($this->pdf === null) {
+            throw new ProtocolException('An original PDF capability is required for redirect binding.');
+        }
+        $this->redirectCandidate = InvoicePdfRedirect::inspect($this->pdf, $response)['target'];
+    }
+
+    /** @throws ProtocolException */
+    public function bindPdfRedirect(#[SensitiveParameter] string $target): void
+    {
+        if (
+            !$this->allowPdfRedirect || !$this->pdfSent || $this->redirectCandidate === null
+            || $target !== $this->redirectCandidate || $this->redirectTarget !== null || $this->redirectSent
+        ) {
+            throw new ProtocolException('Only the original response can select the one PDF redirect target.');
+        }
+        $this->redirectTarget = $target;
+    }
+
+    /**
+     * @param array<string,array<array-key,string>> $actual
+     * @param array<string,string> $expected
+     */
+    private static function headers(#[SensitiveParameter] array $actual, #[SensitiveParameter] array $expected): bool
+    {
+        if (count($actual) !== count($expected)) {
+            return false;
+        }
+        foreach ($expected as $name => $value) {
+            if (($actual[$name] ?? null) !== [$value]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private function deadline(float $started): void

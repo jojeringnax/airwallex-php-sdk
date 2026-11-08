@@ -10,6 +10,7 @@ use GuzzleHttp\Handler\StreamHandler;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
+use GuzzleHttp\Psr7\Uri;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Exception\TransportException;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\InvoiceAccessPolicy;
@@ -72,6 +73,120 @@ final class InvoiceAccessTransportTest extends TestCase
         self::assertSame(0, $stream->bytes);
         self::assertTrue($stream->closed);
         self::assertCount(1, $client->requests);
+    }
+
+    public function testRedirectTargetRequiresOptInItsActualFirstResponseAndOnePrivateBinding(): void
+    {
+        $target = InvoiceAccessPolicy::ORIGIN . '/next?cap=PRIVATE';
+        foreach ([false, true] as $allow) {
+            $client = new RecordingClient(new Client(['handler' => new MockHandler([
+                new Response(301, ['Location' => '/next?cap=PRIVATE']),
+                new Response(200, ['Content-Type' => 'application/pdf'], str_repeat('x', 100000)),
+            ])]));
+            $http = new InvoiceAccessTransport(self::PDF, null, $client, allowPdfRedirect: $allow);
+            try {
+                $http->bindPdfRedirect($target);
+                self::fail('A target was bound before its original response.');
+            } catch (ProtocolException) {
+                self::assertSame([], $client->requests);
+            }
+            $http->sendRequest(self::request());
+            try {
+                $http->bindPdfRedirect(InvoiceAccessPolicy::ORIGIN . '/unreturned?PRIVATE');
+                self::fail('A caller target replaced the original response.');
+            } catch (ProtocolException) {
+                self::assertCount(1, $client->requests);
+            }
+            if (!$allow) {
+                try {
+                    $http->bindPdfRedirect($target);
+                    self::fail('A default request acquired a redirect allowance.');
+                } catch (ProtocolException) {
+                    self::assertCount(1, $client->requests);
+                }
+                continue;
+            }
+            $http->bindPdfRedirect($target);
+            $request = self::request()->withUri(new Uri($target));
+            $response = $http->sendRequest($request);
+            self::assertSame(1025, strlen((string) $response->getBody()));
+            self::assertCount(2, $client->requests);
+            try {
+                $http->sendRequest($request);
+                self::fail('A completed redirect read was replayed.');
+            } catch (ProtocolException) {
+                self::assertCount(2, $client->requests);
+            }
+            try {
+                $http->bindPdfRedirect($target);
+                self::fail('A redirect allowance was reset.');
+            } catch (ProtocolException) {
+                self::assertCount(2, $client->requests);
+            }
+        }
+    }
+
+    #[DataProvider('rejectedData')]
+    public function testRedirectCannotForwardCredentialsOrAnyUnreviewedApplicationHeader(string $name): void
+    {
+        $target = InvoiceAccessPolicy::ORIGIN . '/next?cap=PRIVATE';
+        $client = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => $target]),
+        ])]));
+        $http = new InvoiceAccessTransport(self::PDF, null, $client, allowPdfRedirect: true);
+        $http->sendRequest(self::request());
+        $http->bindPdfRedirect($target);
+        try {
+            $http->sendRequest(self::request()->withUri(new Uri($target))->withHeader($name, 'PRIVATE'));
+            self::fail('An extra header entered the redirect read.');
+        } catch (ProtocolException) {
+            self::assertCount(1, $client->requests);
+        }
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function redirectReadFailures(): iterable
+    {
+        foreach (['transport', 'stalled', 'broken', 'close_failure', 'slow'] as $mode) {
+            yield $mode => [$mode];
+        }
+    }
+
+    #[DataProvider('redirectReadFailures')]
+    public function testFailedRedirectReadIsBoundedClosedPrivateAndNeverReplayable(string $mode): void
+    {
+        $target = InvoiceAccessPolicy::ORIGIN . '/next?cap=PRIVATE';
+        $stream = new SimulationProbeStream(str_repeat('x', 100000), $mode === 'slow' ? 'one_byte' : $mode);
+        $clockCalls = 0;
+        $client = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => $target]),
+            $mode === 'transport' ? new RuntimeException('PRIVATE_TRANSPORT') : new Response(200, [], $stream),
+        ])]));
+        $http = new InvoiceAccessTransport(
+            self::PDF,
+            null,
+            $client,
+            static function () use (&$clockCalls, $mode): float {
+                return $mode === 'slow' ? ++$clockCalls * 2.0 : 0.0;
+            },
+            allowPdfRedirect: true
+        );
+        $http->sendRequest(self::request());
+        $http->bindPdfRedirect($target);
+        foreach ([1, 2] as $attempt) {
+            try {
+                $http->sendRequest(self::request()->withUri(new Uri($target)));
+                self::fail('A failed redirect read passed or replayed.');
+            } catch (ProtocolException | TransportException $error) {
+                self::assertStringNotContainsString('PRIVATE', (string) $error);
+                self::assertNull($error->getPrevious());
+                self::assertCount(2, $client->requests);
+            }
+        }
+        if ($mode !== 'transport') {
+            self::assertTrue($stream->closed);
+            self::assertLessThanOrEqual(1025, $stream->bytes);
+        }
     }
 
     /** @return iterable<string,array{string}> */

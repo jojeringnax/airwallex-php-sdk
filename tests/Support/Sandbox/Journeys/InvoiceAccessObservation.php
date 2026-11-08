@@ -25,6 +25,7 @@ final class InvoiceAccessObservation
         private readonly bool $readPayer = false,
         private readonly ?ClientInterface $http = null,
         private readonly ?Closure $clock = null,
+        private readonly bool $followPdfRedirect = false,
     ) {
     }
 
@@ -42,6 +43,8 @@ final class InvoiceAccessObservation
             'pdf_read_requested' => $this->readPdf, 'payer_read_requested' => $this->readPayer,
             'pdf_outcome' => 'not_requested', 'payer_outcome' => 'not_requested',
             'pdf_send_started' => false, 'payer_send_started' => false,
+            'pdf_redirect_requested' => $this->followPdfRedirect, 'pdf_redirect_send_started' => false,
+            'pdf_redirect_policy' => 'not_requested', 'pdf_redirect_outcome' => 'not_requested',
             'pdf_prefix_matched' => false, 'payer_invoice_matched' => false,
             'payer_customer_direct_match_verified' => false, 'payer_customer_indirect_anchor_matched' => false,
             'complete_pdf_verified' => false, 'rendering_verified' => false,
@@ -53,6 +56,9 @@ final class InvoiceAccessObservation
         $this->used = true;
         try {
             $ledger->assertContext($fingerprint);
+            if ($this->followPdfRedirect && !$this->readPdf) {
+                throw new ProtocolException('A PDF redirect requires the explicit original PDF read.');
+            }
             if (
                 preg_match('/^[a-f0-9]{64}$/D', $priorDigest) !== 1
                 || !is_string($invoice['id'] ?? null) || trim($invoice['id']) === ''
@@ -72,7 +78,7 @@ final class InvoiceAccessObservation
             if (!in_array($invoice['status'] ?? null, ['DRAFT', 'FINALIZED', 'VOIDED'], true)) {
                 $token = null;
             }
-            $http = new InvoiceAccessTransport($pdf, $token, $this->http, $this->clock);
+            $http = new InvoiceAccessTransport($pdf, $token, $this->http, $this->clock, $this->followPdfRedirect);
             if ($this->readPdf) {
                 $safe['pdf_policy'] = InvoiceAccessPolicy::pdfPolicy($invoice['pdf_url'] ?? null);
                 $safe['pdf_outcome'] = 'withheld';
@@ -90,6 +96,51 @@ final class InvoiceAccessObservation
                         $safe['pdf_outcome'] = $safe['pdf_observed_outcome'];
                         $safe['pdf_prefix_matched'] = $safe['pdf_outcome'] === 'bounded_prefix_observed';
                         unset($safe['pdf_observed_outcome']);
+                        if ($this->followPdfRedirect) {
+                            $safe['pdf_initial_outcome'] = $safe['pdf_outcome'];
+                            $decision = InvoicePdfRedirect::inspect($pdf, $response);
+                            $safe['pdf_redirect_policy'] = $decision['policy'];
+                            $safe['pdf_redirect_outcome'] = $decision['policy'] === 'not_redirect'
+                                ? 'not_applicable' : 'withheld';
+                            $target = $decision['target'];
+                            $locationHash = $decision['location_sha256'];
+                            if ($target !== null && $locationHash !== null) {
+                                try {
+                                    $references = ['original_status' => (string) $response->getStatusCode(),
+                                        'original_url_sha256' => hash('sha256', $pdf),
+                                        'location_sha256' => $locationHash, 'target_sha256' => hash('sha256', $target)];
+                                    $ledger->recordObservation(
+                                        'invoice_pdf_redirect_response',
+                                        $references,
+                                        $fingerprint
+                                    );
+                                    $ledger->requestId('invoice_pdf_redirect_prefix_read', ['method' => 'GET',
+                                        'invoice_id' => $invoice['id'], 'prior_ledger_sha256' => $priorDigest,
+                                        'range' => 'bytes=0-1023', ...$references], $fingerprint);
+                                    $http->bindPdfRedirect($target);
+                                    $safe['phase'] = 'pdf_redirect_read';
+                                    $safe['pdf_redirect_send_started'] = true;
+                                    $safe['redirect_followed'] = true;
+                                    $followed = $http->sendRequest(new Request('GET', $target, [
+                                        'Accept' => 'application/pdf', 'Accept-Encoding' => 'identity',
+                                        'Range' => 'bytes=0-1023',
+                                    ]));
+                                    $followedFacts = self::pdf($followed);
+                                    foreach ($followedFacts as $name => $value) {
+                                        $label = $name === 'pdf_observed_outcome' ? 'pdf_redirect_outcome'
+                                            : 'pdf_redirect_' . substr($name, 4);
+                                        $safe[$label] = $value;
+                                    }
+                                    $safe['pdf_redirect_outcome'] = $followedFacts['pdf_observed_outcome'];
+                                    $safe['pdf_outcome'] = $followedFacts['pdf_observed_outcome'];
+                                    $safe['pdf_prefix_matched'] = $safe['pdf_outcome'] === 'bounded_prefix_observed';
+                                } catch (\Throwable) {
+                                    $safe['pdf_redirect_outcome'] = 'unavailable';
+                                    $safe['pdf_outcome'] = 'unavailable';
+                                    $safe['pdf_prefix_matched'] = false;
+                                }
+                            }
+                        }
                     } catch (\Throwable) {
                         $safe['pdf_outcome'] = 'unavailable';
                     }

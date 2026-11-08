@@ -14,6 +14,7 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\InvoiceAccessPolicy;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\DataProviderExternal;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
 
@@ -101,11 +102,11 @@ final class InvoiceAccessObservationTest extends TestCase
     }
 
     /** @return array<string,mixed> */
-    private function options(bool $pdf = true, bool $payer = true): array
+    private function options(bool $pdf = true, bool $payer = true, bool $follow = false): array
     {
         return ['environment' => 'sandbox', 'credentials-file' => $this->directory . '/credentials',
             'prior-ledger' => $this->prior, 'state-dir' => $this->directory,
-            'read-one-pdf-prefix' => $pdf, 'read-one-payer-invoice' => $payer];
+            'read-one-pdf-prefix' => $pdf, 'read-one-payer-invoice' => $payer, 'follow-one-pdf-redirect' => $follow];
     }
 
     /** @return array<array-key,mixed> */
@@ -124,14 +125,15 @@ final class InvoiceAccessObservationTest extends TestCase
     }
 
     /** @param array<string,mixed> $safe */
-    private static function sanitized(array $safe): void
+    private static function sanitized(array $safe, bool $followed = false): void
     {
+        self::assertSame($followed, $safe['redirect_followed']);
         $raw = json_encode($safe, JSON_THROW_ON_ERROR);
         foreach (['PRIVATE', 'invoice-access-fixture', 'https:', 'sdk-validation-'] as $value) {
             self::assertStringNotContainsString($value, $raw);
         }
         foreach (
-            ['mutation_sent', 'redirect_followed', 'third_party_followed', 'renewal_verified',
+            ['mutation_sent', 'third_party_followed', 'renewal_verified',
             'expiry_verified', 'complete_pdf_verified', 'rendering_verified'] as $field
         ) {
             self::assertFalse($safe[$field]);
@@ -198,6 +200,200 @@ final class InvoiceAccessObservationTest extends TestCase
             $state['observations']['invoice_access_anchor']
         );
         self::assertStringNotContainsString('PRIVATE_CAPABILITY', json_encode($state, JSON_THROW_ON_ERROR));
+        self::sanitized($result);
+    }
+
+    public function testExplicitRedirectRetainsFirst301AndJournalsExactTargetBeforeAnonymousPrefixRead(): void
+    {
+        $location = 'next%2fpdf?signature=PRIVATE+VALUE%3D&x=one&x=two';
+        $target = InvoiceAccessPolicy::ORIGIN . '/billing/invoices/' . $location;
+        $redirect = new SimulationProbeStream('PRIVATE_REDIRECT_BODY', 'broken');
+        $prefix = new SimulationProbeStream("%PDF-1.7\n" . str_repeat('x', 100000));
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => $location], $redirect),
+            function (RequestInterface $request) use ($target, $location, $prefix): Response {
+                self::assertSame($target, (string) $request->getUri());
+                self::assertSame('bytes=0-1023', $request->getHeaderLine('Range'));
+                self::assertSame('application/pdf', $request->getHeaderLine('Accept'));
+                self::assertSame('identity', $request->getHeaderLine('Accept-Encoding'));
+                self::assertFalse($request->hasHeader('Authorization'));
+                $journal = $this->journal();
+                self::assertIsArray($journal['observations']);
+                self::assertIsArray($journal['actions']);
+                $response = $journal['observations']['invoice_pdf_redirect_response'];
+                self::assertIsArray($response);
+                self::assertSame('301', $response['original_status']);
+                self::assertSame(hash('sha256', $location), $response['location_sha256']);
+                self::assertSame(hash('sha256', $target), $response['target_sha256']);
+                self::assertArrayHasKey('invoice_pdf_redirect_prefix_read', $journal['actions']);
+                self::assertStringNotContainsString('PRIVATE+VALUE', json_encode($journal, JSON_THROW_ON_ERROR));
+                return new Response(200, ['Content-Type' => 'application/pdf'], $prefix);
+            },
+        ])]));
+        $before = file_get_contents($this->prior);
+        $result = InvoiceAccessCommand::run($this->options(payer: false, follow: true), $this->sdk(), $links);
+        self::assertSame('pass', $result['result']);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertSame('redirect_unfollowed', $result['pdf_initial_outcome']);
+        self::assertSame(200, $result['pdf_redirect_http_status']);
+        self::assertSame('bounded_prefix_observed', $result['pdf_redirect_outcome']);
+        self::assertSame('bounded_prefix_observed', $result['pdf_outcome']);
+        self::assertSame('admitted', $result['pdf_redirect_policy']);
+        self::assertTrue($result['pdf_redirect_send_started']);
+        self::assertTrue($result['pdf_prefix_matched']);
+        self::assertSame(1024, $result['pdf_redirect_prefix_bytes']);
+        self::assertTrue($result['pdf_redirect_prefix_cut']);
+        self::assertSame(0, $redirect->bytes);
+        self::assertTrue($redirect->closed);
+        self::assertSame(1025, $prefix->bytes);
+        self::assertTrue($prefix->closed);
+        self::assertCount(2, $links->requests);
+        self::assertSame($before, file_get_contents($this->prior));
+        self::sanitized($result, true);
+    }
+
+    public function testDefaultDoesNotReadOrFollowLocationEvenWhenSameOrigin(): void
+    {
+        $stream = new SimulationProbeStream('PRIVATE_REDIRECT', 'broken');
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => '/next.pdf'], $stream),
+        ])]));
+        $result = InvoiceAccessCommand::run($this->options(payer: false), $this->sdk(), $links);
+        self::assertSame('pending', $result['result']);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertSame('redirect_unfollowed', $result['pdf_outcome']);
+        self::assertFalse($result['pdf_redirect_requested']);
+        self::assertSame('not_requested', $result['pdf_redirect_policy']);
+        self::assertFalse($result['pdf_redirect_send_started']);
+        self::assertSame(0, $stream->bytes);
+        self::assertTrue($stream->closed);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    /** @return iterable<string,array{int}> */
+    public static function redirectFollowStatuses(): iterable
+    {
+        foreach ([301, 302, 303, 304, 307, 308, 400, 403, 500] as $status) {
+            yield (string) $status => [$status];
+        }
+    }
+
+    #[DataProvider('redirectFollowStatuses')]
+    public function testSecondRedirectOrErrorNeverReadsItsBodyOrSelectsAThirdHop(int $status): void
+    {
+        $stream = new SimulationProbeStream('PRIVATE_UNREAD_BODY', 'broken');
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => '/next.pdf']),
+            new Response($status, ['Location' => '/third.pdf'], $stream),
+            new Response(200, ['Content-Type' => 'application/pdf'], "%PDF-1.7\n"),
+        ])]));
+        $result = InvoiceAccessCommand::run($this->options(payer: false, follow: true), $this->sdk(), $links);
+        self::assertSame('pending', $result['result']);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertSame($status, $result['pdf_redirect_http_status']);
+        self::assertFalse($result['pdf_prefix_matched']);
+        self::assertCount(2, $links->requests);
+        self::assertSame(0, $stream->bytes);
+        self::assertTrue($stream->closed);
+        self::sanitized($result, true);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function failedRedirectReservations(): iterable
+    {
+        yield 'response observation' => ['invoice_pdf_redirect_response'];
+        yield 'target identity' => ['invoice_pdf_redirect_prefix_read'];
+    }
+
+    #[DataProvider('failedRedirectReservations')]
+    public function testFailedRedirectPersistenceCannotSendFollowOrUseAPoisonedJournal(string $phase): void
+    {
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => '/next.pdf']),
+            new Response(200, ['Content-Type' => 'application/pdf'], "%PDF-1.7\n"),
+        ])]));
+        $result = InvoiceAccessCommand::run(
+            $this->options(follow: true),
+            $this->sdk(),
+            $links,
+            static function (string $fingerprint, string $directory) use ($phase): RunLedger {
+                return RunLedger::create($fingerprint, $directory, synchronize: static function () use (
+                    $directory,
+                    $phase,
+                ): bool {
+                    foreach (glob($directory . '/sdk-validation-*/ledger.json.writing') ?: [] as $file) {
+                        $bytes = file_get_contents($file);
+                        if (is_string($bytes) && str_contains($bytes, $phase)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+            }
+        );
+        self::assertSame('pending', $result['result']);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertSame('unavailable', $result['pdf_redirect_outcome']);
+        self::assertFalse($result['pdf_redirect_send_started']);
+        self::assertFalse($result['payer_send_started']);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    /** @param array<string,string|list<string>> $headers */
+    #[DataProviderExternal(InvoicePdfRedirectTest::class, 'withheld')]
+    public function testWithheldRedirectPolicySendsOnlyOriginalAndPreservesItsFirstStatus(
+        array $headers,
+        string $policy,
+    ): void {
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, $headers),
+        ])]));
+        $invoice = $this->invoice();
+        $invoice['pdf_url'] = InvoiceAccessPolicy::ORIGIN . '/private/initial.pdf?old=PRIVATE%3D';
+        $result = InvoiceAccessCommand::run($this->options(payer: false, follow: true), $this->sdk($invoice), $links);
+        self::assertSame('pending', $result['result']);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertSame($policy, $result['pdf_redirect_policy']);
+        self::assertSame('withheld', $result['pdf_redirect_outcome']);
+        self::assertFalse($result['pdf_redirect_send_started']);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    public function testCoherentFinal206StillRequiresAllSeparatelySelectedPayerIdentityFields(): void
+    {
+        $payer = self::payer();
+        unset($payer['invoice']['id']);
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => InvoiceAccessPolicy::PAYER]),
+            new Response(206, ['Content-Type' => 'application/pdf', 'Content-Range' => 'bytes 0-8/900'], "%PDF-1.7\n"),
+            self::json($payer),
+        ])]));
+        $result = InvoiceAccessCommand::run($this->options(follow: true), $this->sdk(), $links);
+        self::assertSame('pending', $result['result']);
+        self::assertTrue($result['pdf_prefix_matched']);
+        self::assertTrue($result['pdf_redirect_range_coherent']);
+        self::assertSame(206, $result['pdf_redirect_http_status']);
+        self::assertFalse($result['payer_id_present']);
+        self::assertFalse($result['payer_invoice_matched']);
+        self::assertCount(3, $links->requests);
+        self::assertSame(InvoiceAccessPolicy::PAYER, (string) $links->requests[1]->getUri());
+        self::assertFalse($links->requests[1]->hasHeader('Authorization'));
+        self::assertSame('bytes=0-1023', $links->requests[1]->getHeaderLine('Range'));
+        self::assertSame('Bearer PRIVATE_CAPABILITY', $links->requests[2]->getHeaderLine('Authorization'));
+        self::assertFalse($links->requests[2]->hasHeader('Range'));
+        self::sanitized($result, true);
+    }
+
+    public function testFollowFlagWithoutPdfFailsBeforeAuthentication(): void
+    {
+        $sdk = $this->sdk();
+        $result = InvoiceAccessCommand::run($this->options(pdf: false, follow: true), $sdk);
+        self::assertSame('fail', $result['result']);
+        self::assertSame('configuration', $result['phase']);
+        self::assertSame([], $sdk->requests);
         self::sanitized($result);
     }
 
@@ -560,6 +756,9 @@ final class InvoiceAccessObservationTest extends TestCase
         yield 'missing' => [[]];
         yield 'production' => [['--environment=production', '--read-one-pdf-prefix']];
         yield 'flag value' => [['--read-one-pdf-prefix=true']];
+        yield 'follow flag value' => [['--follow-one-pdf-redirect=false']];
+        yield 'duplicate follow' => [['--follow-one-pdf-redirect', '--follow-one-pdf-redirect']];
+        yield 'follow without PDF' => [['--environment=sandbox', '--follow-one-pdf-redirect']];
         yield 'duplicate' => [['--read-one-payer-invoice', '--read-one-payer-invoice']];
         yield 'root' => [['--sdk-root=/PRIVATE']];
         yield 'URL' => [['--url=https://PRIVATE.test']];

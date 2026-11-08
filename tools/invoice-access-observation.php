@@ -8,7 +8,7 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 $options = [];
 $valid = true;
-$flags = ['read-one-pdf-prefix', 'read-one-payer-invoice'];
+$flags = ['read-one-pdf-prefix', 'read-one-payer-invoice', 'follow-one-pdf-redirect'];
 foreach (array_slice($argv ?? [], 1) as $argument) {
     if (in_array($argument, array_map(static fn (string $name): string => '--' . $name, $flags), true)) {
         $name = substr($argument, 2);

@@ -29,7 +29,7 @@ final class InvoiceAccessCommand
             'mutation_sent' => false, 'redirect_followed' => false, 'third_party_followed' => false,
             'rendering_verified' => false, 'complete_pdf_verified' => false,
             'expiry_verified' => false, 'renewal_verified' => false];
-        $flags = ['read-one-pdf-prefix', 'read-one-payer-invoice'];
+        $flags = ['read-one-pdf-prefix', 'read-one-payer-invoice', 'follow-one-pdf-redirect'];
         foreach ($options as $name => $value) {
             if (
                 !in_array($name, ['environment', 'credentials-file', 'prior-ledger', 'state-dir', ...$flags], true)
@@ -40,11 +40,13 @@ final class InvoiceAccessCommand
         }
         $pdf = $options['read-one-pdf-prefix'] ?? false;
         $payer = $options['read-one-payer-invoice'] ?? false;
-        if (!is_bool($pdf) || !is_bool($payer)) {
+        $follow = $options['follow-one-pdf-redirect'] ?? false;
+        if (!is_bool($pdf) || !is_bool($payer) || !is_bool($follow) || ($follow && !$pdf)) {
             return $safe;
         }
         $safe['pdf_read_requested'] = $pdf;
         $safe['payer_read_requested'] = $payer;
+        $safe['pdf_redirect_requested'] = $follow;
         if (!$pdf && !$payer) {
             return array_replace($safe, ['result' => 'blocked', 'phase' => 'no_access_read_selected']);
         }
@@ -86,7 +88,7 @@ final class InvoiceAccessCommand
                 : $ledgers($fingerprint, $strings['state-dir']);
             $ledger->requestId('invoice_owner_reads', ['prior_ledger_sha256' => $prior['prior_ledger_sha256'],
                 'api_version' => '2026-08-21', 'tool_sha256' => $toolHash], $fingerprint);
-            $access = new InvoiceAccessObservation($pdf, $payer, $linkHttp);
+            $access = new InvoiceAccessObservation($pdf, $payer, $linkHttp, followPdfRedirect: $follow);
             $observed = $owner->inspect(
                 $session,
                 wait: static fn (): null => null,
