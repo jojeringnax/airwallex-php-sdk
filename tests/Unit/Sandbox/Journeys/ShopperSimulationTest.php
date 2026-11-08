@@ -68,12 +68,13 @@ final class ShopperSimulationTest extends TestCase
         yield 'organization context' => [
             'pay', 'https://api.sandbox.airwallex.com/pa/sandbox/sg/session', 'organization',
         ];
+        yield 'unverified legacy origin' => ['pay', 'https://api-demo.airwallex.com/pa/sandbox/sg/session', 'account'];
         yield 'production host' => ['pay', 'https://api.airwallex.com/pa/sandbox/sg/session', 'account'];
         yield 'arbitrary host' => ['pay', 'https://example.test/pa/sandbox/sg/session', 'account'];
         yield 'HTTP URL' => ['pay', 'http://api.sandbox.airwallex.com/pa/sandbox/sg/session', 'account'];
         yield 'user info' => ['pay', 'https://private@api.sandbox.airwallex.com/pa/sandbox/sg/session', 'account'];
         yield 'unexpected port' => ['pay', 'https://api.sandbox.airwallex.com:444/pa/sandbox/sg/session', 'account'];
-        yield 'non simulation path' => ['pay', 'https://api.sandbox.airwallex.com/api/v1/account', 'account'];
+        yield 'URL whitespace' => ['pay', 'https://api.sandbox.airwallex.com/private path', 'account'];
         yield 'unknown action' => ['capture', 'https://api.sandbox.airwallex.com/pa/sandbox/sg/session', 'account'];
     }
 
@@ -126,5 +127,31 @@ final class ShopperSimulationTest extends TestCase
         self::assertSame(2, $session->loginRequests());
         self::assertStringEndsWith('/verify', $recording->requests[1]->getUri()->getPath());
         self::assertStringEndsWith('/pay', $recording->requests[3]->getUri()->getPath());
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function documentedSandboxRedirects(): iterable
+    {
+        yield 'Sandbox checkout fragment' => [
+            'https://checkout.sandbox.airwallex.com/#/page/test/private?token=sentinel',
+        ];
+        yield 'opaque Sandbox API path' => ['https://api.sandbox.airwallex.com/future/path?private=sentinel#state'];
+    }
+
+    #[DataProvider('documentedSandboxRedirects')]
+    public function testReturnedSandboxUrlRemainsOpaqueBodyDataWhileHttpTargetStaysFixed(string $url): void
+    {
+        [$session, $recording] = $this->session([
+            new Response(201, [], '{"token":"synthetic-token","expires_at":"2100-01-01T00:00:00Z"}'),
+            new Response(200),
+        ]);
+        $session->simulateShopperAction('pay', $url);
+        self::assertCount(2, $recording->requests);
+        $request = $recording->requests[1];
+        self::assertSame('api.sandbox.airwallex.com', $request->getUri()->getHost());
+        self::assertSame('/api/v1/simulation/pa/shopper_actions/pay', $request->getUri()->getPath());
+        self::assertSame('', $request->getUri()->getQuery());
+        self::assertSame('', $request->getUri()->getFragment());
+        self::assertSame(['url' => $url], json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR));
     }
 }

@@ -77,10 +77,12 @@ final readonly class SandboxSession
         if (
             $this->simulationTokens === null || !in_array($action, ['pay', 'reject', 'verify'], true)
             || !is_array($parts) || ($parts['scheme'] ?? null) !== 'https'
-            || ($parts['host'] ?? null) !== 'api.sandbox.airwallex.com'
-            || isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])
+            || !in_array($parts['host'] ?? null, [
+                'api.sandbox.airwallex.com', 'checkout.sandbox.airwallex.com',
+            ], true)
+            || isset($parts['user']) || isset($parts['pass'])
             || (isset($parts['port']) && $parts['port'] !== 443)
-            || !str_starts_with($parts['path'] ?? '', '/pa/sandbox/')
+            || preg_match('/[\x00-\x20\x7f]/', $url) === 1
         ) {
             throw new ValidationException('Shopper simulation requires an account-owned sandbox redirect.');
         }
