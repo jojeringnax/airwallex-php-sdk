@@ -605,6 +605,28 @@ final readonly class HostedBrowser
         if (is_int($attempts) && in_array($attempts, [0, 1], true)) {
             $safe['native_card_action_attempts'] = $attempts;
         }
+        $radioState = isset($safe['native_card_radio_visible']) || isset($safe['native_card_radio_enabled'])
+            || isset($safe['native_card_radio_checked']);
+        if ($radioState && ($safe['native_card_radio_count'] ?? null) !== 'one') {
+            throw new RuntimeException('Native radio state has no unique observed node.');
+        }
+        if (isset($safe['native_card_radio_count']) || ($safe['native_card_action_invoked'] ?? false) === true) {
+            foreach (
+                ['checkout_token_matches', 'payer_get_attempted', 'payer_response_observed',
+                'payer_payload_delivered', 'payer_mode_matches', 'payer_currency_matches',
+                'render_frame_binding_available'] as $field
+            ) {
+                if (($data[$field] ?? null) !== true) {
+                    throw new RuntimeException('Native radio evidence has no owning document proof.');
+                }
+            }
+            if (
+                ($data['candidate_origin'] ?? null) !== 'sandbox' || ($data['payer_http_status'] ?? null) !== 200
+                || ($data['bound_render_frames'] ?? null) !== 1
+            ) {
+                throw new RuntimeException('Native radio evidence has no owning document proof.');
+            }
+        }
         if (($safe['native_card_action_invoked'] ?? false) === true) {
             foreach (
                 ['payer_payload_delivered', 'payer_mode_matches', 'payer_currency_matches',

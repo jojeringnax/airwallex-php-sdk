@@ -92,15 +92,18 @@ class NativeCardChoice {
       const visible = await step(() => element.isVisible());
       const enabled = await step(() => element.isEnabled());
       const checked = await step(() => element.isChecked());
-      const matches = await step(() => element.evaluate(node => node.matches(
-        '#payment-method-card input#radio-card[type=radio][name=method][value=card]')));
-      if (matches !== true) throw new Error('Native radio identity changed.');
       if ([visible, enabled, checked].some(value => typeof value !== 'boolean')) throw new Error('Unavailable radio state.');
       Object.assign(this.#facts, { native_card_radio_visible: visible, native_card_radio_enabled: enabled,
         native_card_radio_checked: checked });
       if (!visible || !enabled || checked) {
         this.#facts.native_card_selection = checked ? 'already_selected' : !visible ? 'hidden' : 'disabled'; return;
       }
+      const matches = await step(() => element.evaluate(node => node.isConnected && !node.checked
+        && node.matches(':enabled') && node.matches(
+          '#payment-method-card input#radio-card[type=radio][name=method][value=card]')
+        && node.ownerDocument.querySelectorAll(
+          '#payment-method-card input#radio-card[type=radio][name=method][value=card]').length === 1));
+      if (matches !== true) throw new Error('Native radio identity changed.');
       if (!active()) throw new Error('Card-choice scope ended.');
       this.#facts.native_card_action_attempts = 1;
       this.#facts.native_card_action_invoked = true;

@@ -11,7 +11,10 @@ function fixture(options = {}) {
   let valid = true;
   const element = { isVisible: async () => options.visible ?? true,
     isEnabled: async () => options.enabled ?? true, isChecked: async () => options.checked ?? false,
-    evaluate: async () => options.identity ?? true,
+    evaluate: async predicate => predicate({ isConnected: options.connected ?? true,
+      checked: options.finalChecked ?? false,
+      matches: value => value === ':enabled' ? options.finalEnabled ?? true : options.identity ?? true,
+      ownerDocument: { querySelectorAll: () => Array(options.finalCount ?? 1) } }),
     click: async input => { calls++; assert.equal(input.force, false); assert.equal(input.scroll, 'none');
       assert.equal(input.button, 'left'); assert.equal(input.clickCount, 1); assert.equal(input.signal.aborted, false);
       assert.ok(input.timeout > 0 && input.timeout <= 100); if (options.click) await options.click(input); } };
@@ -48,6 +51,8 @@ for (const [name, options, outcome] of [
   ['zero', { count: 0 }, 'missing'], ['multiple', { count: 2 }, 'ambiguous'],
   ['hidden', { visible: false }, 'hidden'], ['disabled', { enabled: false }, 'disabled'],
   ['selected', { checked: true }, 'already_selected'], ['changed node', { identity: false }, 'unavailable'],
+  ['late duplicate', { finalCount: 2 }, 'unavailable'], ['late detached', { connected: false }, 'unavailable'],
+  ['late checked', { finalChecked: true }, 'unavailable'], ['late disabled', { finalEnabled: false }, 'unavailable'],
   ['invalid count', { count: '1' }, 'unavailable'], ['invalid state', { checked: 'PRIVATE' }, 'unavailable'],
 ]) test('one retained native-node opportunity: ' + name, async () => {
   const f = fixture(options); await f.run(); await f.run(); assert.equal(f.calls(), 0);

@@ -122,6 +122,7 @@ final class HostedBrowserTest extends TestCase
             'normal_checkout_status_delivered' => 1, 'normal_checkout_status_observation' => 'matched',
             'normal_checkout_status_http_status' => 200, 'normal_checkout_status_state' => 'REQUESTED',
             'native_card_selection_requested' => true, 'native_card_selection' => 'completed',
+            'render_frame_binding_available' => true,
             'native_card_radio_count' => 'one', 'native_card_radio_visible' => true,
             'native_card_radio_enabled' => true, 'native_card_radio_checked' => false,
             'native_card_action_attempts' => 1, 'native_card_action_invoked' => true,
@@ -199,6 +200,24 @@ final class HostedBrowserTest extends TestCase
         self::assertArrayNotHasKey('native_card_action_attempts', $safe);
         $this->expectException(RuntimeException::class);
         HostedBrowser::sanitize(self::nativeCardEvidence(), true, true, true);
+    }
+
+    public function testRadioFactsCannotBorrowAnUnboundFrameEvenWhenNoActionWasInvoked(): void
+    {
+        $data = array_replace(self::nativeCardEvidence(), ['normal_read_inspection_completed' => false,
+            'bound_render_frames' => 0, 'native_card_selection' => 'already_selected',
+            'native_card_action_invoked' => false, 'native_card_action_attempts' => 0]);
+        unset($data['native_card_action_completed'], $data['native_card_action_completed_before_capture']);
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true, false, false, false, true);
+    }
+
+    public function testRadioStateCannotInventItsUniqueCount(): void
+    {
+        $data = self::nativeCardEvidence();
+        unset($data['native_card_radio_count']);
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true, false, false, false, true);
     }
 
     public function testPartialRiskEvidenceIsExplicitClosedAndDoesNotCreateCountsAfterAnOpaqueFailure(): void
