@@ -21,8 +21,8 @@ final class SandboxCommand
     public static function run(array $options, ?Closure $sessions = null): array
     {
         $scenario = $options['scenario'] ?? null;
-        $scenarios = ['authentication', 'billing-catalogue', 'billing-lifecycle'];
-        $label = in_array($scenario, $scenarios, true) ? $scenario : 'configuration';
+        $allowed = ['authentication', 'billing-catalogue', 'billing-checkouts', 'billing-lifecycle'];
+        $label = in_array($scenario, $allowed, true) ? $scenario : 'configuration';
         $result = ['scenario' => $label, 'api_version' => '2026-08-21', 'result' => 'fail'];
         $session = null;
         try {
@@ -32,7 +32,7 @@ final class SandboxCommand
             $directory = $options['state-dir'] ?? null;
             if (
                 !is_string($environment) || !is_string($path) || $path === ''
-                || !in_array($scenario, $scenarios, true)
+                || !in_array($scenario, $allowed, true)
                 || !is_string($context) || !in_array($context, ['organization', 'account'], true)
                 || ($directory !== null && !is_string($directory))
             ) {
@@ -57,9 +57,17 @@ final class SandboxCommand
                 $result['reason'] = 'legal_entity_configuration_absent';
             } else {
                 $ledger = RunLedger::create($session->contextFingerprint(), $directory);
-                $result = array_replace($result, $scenario === 'billing-catalogue'
-                    ? BillingCatalogue::execute($session, $ledger, $legalEntity)
-                    : BillingLifecycle::execute($session, $ledger, $legalEntity));
+                $journey = match ($scenario) {
+                    'billing-catalogue' => BillingCatalogue::execute($session, $ledger, $legalEntity),
+                    'billing-lifecycle' => BillingLifecycle::execute($session, $ledger, $legalEntity),
+                    'billing-checkouts' => BillingCheckoutMatrix::execute(
+                        $session,
+                        $ledger,
+                        $legalEntity,
+                        $configuration->accountId(),
+                    ),
+                };
+                $result = array_replace($result, $journey);
             }
         } catch (\Throwable $error) {
             // Preserve available safe evidence; provider bodies, IDs, messages and traces never enter it.
@@ -68,7 +76,10 @@ final class SandboxCommand
                 $result['http_status'] = $error->httpStatus();
             }
         }
-        if ($session !== null && in_array($scenario, ['billing-catalogue', 'billing-lifecycle'], true)) {
+        if (
+            $session !== null
+            && in_array($scenario, ['billing-catalogue', 'billing-checkouts', 'billing-lifecycle'], true)
+        ) {
             $result['login_requests'] = $session->loginRequests();
         }
         return $result;
