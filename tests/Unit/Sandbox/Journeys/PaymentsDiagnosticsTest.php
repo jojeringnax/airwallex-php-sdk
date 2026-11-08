@@ -44,6 +44,7 @@ final class PaymentsDiagnosticsTest extends TestCase
             'entries' => [[
                 'operation' => 'intent_confirm', 'http_status' => 400, 'public_code' => 'configuration_error',
                 'validation_fields' => ['currency', 'payment_method.card.cvc'],
+                'public_condition_terms' => [],
             ]], 'entries_dropped' => 0,
         ], $diagnostic->report());
         $report = json_encode($diagnostic->report(), JSON_THROW_ON_ERROR);
@@ -144,5 +145,67 @@ final class PaymentsDiagnosticsTest extends TestCase
         self::assertStringNotContainsString('PRIVATE', json_encode($diagnostic->report(), JSON_THROW_ON_ERROR));
         $this->expectException(RuntimeException::class);
         serialize($diagnostic);
+    }
+
+    public function testSimulationRecognizesOnlyItsUrlFieldWithoutReturningTheUrlOrOtherOperationsFields(): void
+    {
+        $diagnostic = $this->diagnostic(new Response(400, [], json_encode([
+            'code' => 'validation_error',
+            'message' => 'Invalid URL: PRIVATE_URL; authorization_type PRIVATE_TYPE',
+        ], JSON_THROW_ON_ERROR)));
+        $diagnostic->sendRequest(new Request(
+            'POST',
+            'https://api.sandbox.airwallex.com/api/v1/simulation/pa/shopper_actions/pay',
+        ));
+        self::assertSame(['url'], $diagnostic->report()['entries'][0]['validation_fields']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($diagnostic->report(), JSON_THROW_ON_ERROR));
+    }
+
+    public function testAuthorizationFieldComponentsArePublicTermsWithoutTheirValues(): void
+    {
+        $diagnostic = $this->diagnostic(new Response(400, [], json_encode([
+            'code' => 'validation_error', 'source' => 'payment_method_options.card.authorization_type',
+            'message' => 'authorization_type PRIVATE_AUTH and auto_capture PRIVATE_CAPTURE',
+        ], JSON_THROW_ON_ERROR)));
+        $diagnostic->sendRequest(new Request(
+            'POST',
+            'https://api.sandbox.airwallex.com/api/v1/pa/payment_intents/PRIVATE_ID/confirm',
+        ));
+        self::assertSame([
+            'authorization_type', 'auto_capture', 'payment_method_options.card.authorization_type',
+        ], $diagnostic->report()['entries'][0]['validation_fields']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($diagnostic->report(), JSON_THROW_ON_ERROR));
+    }
+
+    /** @return iterable<string,array{string,list<string>}> */
+    public static function publicConditionMentions(): iterable
+    {
+        yield 'documented phrase variants' => [
+            'Native API PCI-DSS not enabled; card data not allowed. PRIVATE_ACCOUNT PRIVATE_REASON',
+            ['pci', 'native_api', 'not_enabled', 'not_allowed'],
+        ];
+        yield 'positive statements remain mentions' => ['PCI DSS and Native API are enabled.', ['pci', 'native_api']];
+        yield 'private compound identifiers ignored' => ['PRIVATE_PCI_VALUE secret.Native_API.suffix', []];
+        yield 'oversized messages are ignored' => [str_repeat('PRIVATE ', 1200) . 'PCI Native API', []];
+    }
+
+    /** @param list<string> $expected */
+    #[DataProvider('publicConditionMentions')]
+    public function testConditionTermsRemainLiteralMentionsAndNeverBecomeEnablementFacts(
+        string $message,
+        array $expected,
+    ): void {
+        $diagnostic = $this->diagnostic(new Response(400, [], json_encode([
+            'code' => 'validation_error', 'message' => $message,
+        ], JSON_THROW_ON_ERROR)));
+        $diagnostic->sendRequest(new Request(
+            'POST',
+            'https://api.sandbox.airwallex.com/api/v1/pa/payment_intents/PRIVATE_ID/confirm',
+        ));
+        $entry = $diagnostic->report()['entries'][0];
+        self::assertSame($expected, $entry['public_condition_terms']);
+        self::assertArrayNotHasKey('pci_enabled', $entry);
+        self::assertArrayNotHasKey('native_api_enabled', $entry);
+        self::assertStringNotContainsString('PRIVATE', json_encode($entry, JSON_THROW_ON_ERROR));
     }
 }

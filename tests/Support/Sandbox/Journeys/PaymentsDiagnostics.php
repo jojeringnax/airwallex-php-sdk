@@ -33,6 +33,14 @@ final class PaymentsDiagnostics implements ClientInterface
         'payment_method.card.number', 'payment_method.card.cvc', 'payment_method.card.expiry_month',
         'payment_method.card.expiry_year', 'payment_method.alipayhk.flow', 'payment_method.alipayhk.os_type',
         'payment_method_options.card.auto_capture', 'verification_options', 'device_data',
+        'payment_method_options.card.authorization_type', 'authorization_type', 'auto_capture',
+    ];
+    /** Documented public terminology only; a mention is not evidence that a condition is true. */
+    private const array CONDITIONS = [
+        'pci' => '/(?<![a-zA-Z0-9_.])PCI(?:[\s_-]*DSS)?(?![a-zA-Z0-9_]|\.[a-zA-Z0-9_])/i',
+        'native_api' => '/(?<![a-zA-Z0-9_.])native[\s_-]+API(?![a-zA-Z0-9_]|\.[a-zA-Z0-9_])/i',
+        'not_enabled' => '/(?<![a-zA-Z0-9_.])not[\s_-]+(?:auto[\s_-]+)?enabled(?![a-zA-Z0-9_]|\.[a-zA-Z0-9_])/i',
+        'not_allowed' => '/(?<![a-zA-Z0-9_.])not[\s_-]+allowed(?![a-zA-Z0-9_]|\.[a-zA-Z0-9_])/i',
     ];
     /** @var list<array<string,mixed>> */
     private array $entries = [];
@@ -61,7 +69,8 @@ final class PaymentsDiagnostics implements ClientInterface
             } elseif ($status >= 400) {
                 $code = $object['code'] ?? null;
                 $entry['public_code'] = is_string($code) && in_array($code, self::CODES, true) ? $code : 'unlisted';
-                $entry['validation_fields'] = self::fields($object);
+                $entry['validation_fields'] = self::fields($object, $operation);
+                $entry['public_condition_terms'] = self::conditions($object);
             } else {
                 $next = $object['next_action'] ?? null;
                 if (is_array($next)) {
@@ -161,22 +170,42 @@ final class PaymentsDiagnostics implements ClientInterface
      * @param array<array-key,mixed> $object
      * @return list<string>
      */
-    private static function fields(#[SensitiveParameter] array $object): array
+    private static function fields(#[SensitiveParameter] array $object, string $operation): array
     {
         $result = [];
+        $fields = $operation === 'shopper_simulation' ? ['url'] : self::FIELDS;
         foreach (['source', 'message'] as $name) {
             $text = $object[$name] ?? null;
             if (!is_string($text) || strlen($text) > 8192) {
                 continue;
             }
-            foreach (self::FIELDS as $field) {
-                if (preg_match('/(?<![a-zA-Z0-9_.])' . preg_quote($field, '/') . '(?![a-zA-Z0-9_.])/', $text) === 1) {
+            foreach ($fields as $field) {
+                if (preg_match('/(?<![a-zA-Z0-9_.])' . preg_quote($field, '/') . '(?![a-zA-Z0-9_.])/i', $text) === 1) {
                     $result[$field] = true;
                 }
             }
         }
         ksort($result);
         return array_keys($result);
+    }
+
+    /**
+     * @param array<array-key,mixed> $object
+     * @return list<string>
+     */
+    private static function conditions(#[SensitiveParameter] array $object): array
+    {
+        $message = $object['message'] ?? null;
+        if (!is_string($message) || strlen($message) > 8192) {
+            return [];
+        }
+        $result = [];
+        foreach (self::CONDITIONS as $term => $pattern) {
+            if (preg_match($pattern, $message) === 1) {
+                $result[] = $term;
+            }
+        }
+        return $result;
     }
 
     /** @return array<string,string|bool> */
