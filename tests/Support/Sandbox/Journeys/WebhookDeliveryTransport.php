@@ -37,6 +37,7 @@ final class WebhookDeliveryTransport implements ClientInterface
         ?ClientInterface $http = null,
         ?Closure $clock = null,
         ?float $overallDeadline = null,
+        private readonly bool $managementOnly = false,
     ) {
         $this->http = $http ?? new Client([
             'handler' => new StreamHandler(), 'stream' => true, 'read_timeout' => 5,
@@ -67,6 +68,9 @@ final class WebhookDeliveryTransport implements ClientInterface
 
     public function allowIntent(#[SensitiveParameter] string $id): void
     {
+        if ($this->managementOnly) {
+            throw new ProtocolException('The Billing experiment grants no Payments producer authority.');
+        }
         $this->intentPath = $this->target($this->intentPath, '/api/v1/pa/payment_intents/', $id);
     }
 
@@ -100,7 +104,9 @@ final class WebhookDeliveryTransport implements ClientInterface
         $delete = $method === 'POST' && $this->webhookPath !== null && $path === $this->webhookPath . '/delete';
         $cancel = $method === 'POST' && $this->intentPath !== null && $path === $this->intentPath . '/cancel';
         if (
-            (!$login && !$create && !$read && !$delete && !$cancel) || $uri->getScheme() !== 'https'
+            ($this->managementOnly && (($create && $path !== '/api/v1/webhooks/create')
+                || ($read && $path !== $this->webhookPath) || $cancel))
+            || (!$login && !$create && !$read && !$delete && !$cancel) || $uri->getScheme() !== 'https'
             || $uri->getHost() !== 'api.sandbox.airwallex.com' || $uri->getPort() !== null
             || $uri->getUserInfo() !== '' || $uri->getQuery() !== '' || $uri->getFragment() !== ''
             || $request->hasHeader('x-on-behalf-of') || $request->hasHeader('Cookie') || $request->hasHeader('Referer')
@@ -149,6 +155,23 @@ final class WebhookDeliveryTransport implements ClientInterface
                 }
                 if (strlen($body) > 65536) {
                     throw new ProtocolException('The private response exceeded its observation boundary.');
+                }
+                if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
+                    $native = WebhookDeliveryApi::assertUnambiguousObject($body);
+                    if ($login) {
+                        WebhookDeliveryApi::assertStringFields($native, ['token', 'expires_at']);
+                    } elseif (str_starts_with($path, '/api/v1/webhooks/')) {
+                        WebhookDeliveryApi::assertStringFields($native, $delete ? ['id']
+                            : ['id', 'url', 'secret', 'version', 'request_id']);
+                    } else {
+                        WebhookDeliveryApi::assertStringFields(
+                            $native,
+                            ['id', 'merchant_order_id', 'currency', 'status', 'account_id',
+                            'customer_id',
+                            'connected_account_id'],
+                            ['customer_id', 'connected_account_id']
+                        );
+                    }
                 }
                 $bounded = $response->withBody(Utils::streamFor($body));
             } finally {

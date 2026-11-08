@@ -68,7 +68,8 @@ final class WebhookDeliveryStore
     public function write(string $name, #[SensitiveParameter] string $bytes): string
     {
         if (
-            !in_array($name, ['cloudflared.yml', 'registration.json', 'destination.json', 'receiver-config.json'], true)
+            !in_array($name, ['cloudflared.yml', 'registration.json', 'destination.json', 'receiver-config.json',
+                'billing-active.json', 'billing-cancelled.json'], true)
             || strlen($bytes) > 65536
         ) {
             throw new RuntimeException('Private delivery retention is outside its bounded contract.');
@@ -109,7 +110,11 @@ final class WebhookDeliveryStore
     public function read(string $name, int $limit = 65536): string
     {
         if (
-            preg_match('/^(?:registration\.json|receiver-stats\.json|capture-\d{6}\.(?:body|json))$/D', $name) !== 1
+            preg_match(
+                '/^(?:registration\.json|billing-(?:active|cancelled)\.json|receiver-stats\.json'
+                    . '|capture-\d{6}\.(?:body|json))$/D',
+                $name
+            ) !== 1
             || $limit < 1 || $limit > 65536
         ) {
             throw new RuntimeException('Private delivery read is outside its bounded contract.');

@@ -11,6 +11,7 @@ use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Internal\Auth\TokenProvider;
 use Jojeringnax\Airwallex\Internal\Http\HttpExchange;
 use Jojeringnax\Airwallex\Internal\Http\ResponseDecoder;
+use Jojeringnax\Airwallex\Internal\Json\JsonCodec;
 use Jojeringnax\Airwallex\RetryPolicy;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use RuntimeException;
@@ -28,6 +29,7 @@ final class WebhookDeliveryApi
     public function __construct(
         #[SensitiveParameter] Configuration $configuration,
         private readonly WebhookDeliveryTransport $transport,
+        private readonly WebhookDeliveryEvents $events = WebhookDeliveryEvents::Payments,
     ) {
         $factory = new HttpFactory();
         $this->exchange = new HttpExchange(Environment::Sandbox, $transport, $factory, $factory);
@@ -64,13 +66,12 @@ final class WebhookDeliveryApi
         if (!self::destination($url)) {
             throw new ProtocolException('The delivery destination is outside its generated temporary contract.');
         }
-        return self::registration($this->management(
+        return $this->registration($this->management(
             'POST',
             '/api/v1/webhooks/create',
             201,
             ['url' => $url, 'version' => '2026-08-21',
-            'events' => ['payment_intent.created',
-            'payment_intent.cancelled'],
+            'events' => $this->events->names(),
             'request_id' => $requestId]
         ));
     }
@@ -78,7 +79,7 @@ final class WebhookDeliveryApi
     /** @return array{id:string,url:string,secret:string,version:string,events:list<string>,request_id:string} */
     public function retrieveWebhook(#[SensitiveParameter] string $id): array
     {
-        return self::registration($this->management('GET', self::path($id), 200));
+        return $this->registration($this->management('GET', self::path($id), 200));
     }
 
     public function deleteWebhook(#[SensitiveParameter] string $id): bool
@@ -120,11 +121,90 @@ final class WebhookDeliveryApi
             }
             throw new ProtocolException('Webhook management returned an unexpected response status.');
         }
-        $value = json_decode((string) $response->getBody(), depth: 64, flags: JSON_THROW_ON_ERROR);
-        if (!$value instanceof stdClass) {
-            throw new ProtocolException('Webhook management did not return its expected object.');
+        $raw = (string) $response->getBody();
+        return self::assertUnambiguousObject($raw);
+    }
+
+    /** Concrete private registration/delivery proof policy; no change to SDK JSON interpretation. */
+    public static function assertUnambiguousObject(#[SensitiveParameter] string $raw): stdClass
+    {
+        if (strlen($raw) > 65536) {
+            throw new ProtocolException('Private proof JSON exceeds its bounded observation.');
         }
-        return $value;
+        (new JsonCodec())->decodeObject($raw);
+        self::uniqueKeys($raw);
+        $view = json_decode($raw, depth: 64, flags: JSON_THROW_ON_ERROR);
+        if (!$view instanceof stdClass) {
+            throw new ProtocolException('Private proof JSON requires its bounded object view.');
+        }
+        return $view;
+    }
+
+    /**
+     * Literal types for fixed, contract-verified proof fields.
+     * Absent fields fail the caller's later semantic guards.
+     * @param list<string> $fields
+     * @param list<string> $nullable
+     */
+    public static function assertStringFields(
+        #[SensitiveParameter] stdClass $view,
+        array $fields,
+        array $nullable = [],
+    ): void {
+        foreach ($fields as $field) {
+            if (!property_exists($view, $field)) {
+                continue;
+            }
+            $value = $view->{$field};
+            if ($value === null && in_array($field, $nullable, true)) {
+                continue;
+            }
+            if (!is_string($value)) {
+                throw new ProtocolException('Private success proof requires literal JSON string fields.');
+            }
+        }
+    }
+
+    /** Syntax/root/depth were checked above; reject repeated decoded object keys at every bounded scope. */
+    private static function uniqueKeys(#[SensitiveParameter] string $raw): void
+    {
+        $scopes = [];
+        $length = strlen($raw);
+        for ($index = 0; $index < $length; ++$index) {
+            $character = $raw[$index];
+            if ($character === '{' || $character === '[') {
+                $scopes[] = $character === '{' ? [] : null;
+            } elseif ($character === '}' || $character === ']') {
+                array_pop($scopes);
+            } elseif ($character === '"') {
+                $start = $index;
+                for (++$index; $index < $length; ++$index) {
+                    if ($raw[$index] === '\\') {
+                        ++$index;
+                    } elseif ($raw[$index] === '"') {
+                        break;
+                    }
+                }
+                $next = $index + 1;
+                while ($next < $length && ctype_space($raw[$next])) {
+                    ++$next;
+                }
+                if ($next >= $length || $raw[$next] !== ':') {
+                    continue;
+                }
+                $key = json_decode(substr($raw, $start, $index - $start + 1), flags: JSON_THROW_ON_ERROR);
+                $scopeIndex = array_key_last($scopes);
+                if ($scopeIndex === null) {
+                    throw new ProtocolException('Private proof JSON lacks its object-key scope.');
+                }
+                $scope = $scopes[$scopeIndex];
+                if (!is_string($key) || !is_array($scope) || array_key_exists($key, $scope)) {
+                    throw new ProtocolException('Webhook management JSON has ambiguous object keys.');
+                }
+                $scope[$key] = true;
+                $scopes[$scopeIndex] = $scope;
+            }
+        }
     }
 
     /** @return array<string,string> */
@@ -135,7 +215,7 @@ final class WebhookDeliveryApi
     }
 
     /** @return array{id:string,url:string,secret:string,version:string,events:list<string>,request_id:string} */
-    private static function registration(#[SensitiveParameter] stdClass $value): array
+    private function registration(#[SensitiveParameter] stdClass $value): array
     {
         if (
             !is_array($value->events ?? null) || !array_is_list($value->events)
@@ -151,7 +231,9 @@ final class WebhookDeliveryApi
             $events[] = $event;
         }
         sort($events, SORT_STRING);
-        if ($events !== ['payment_intent.cancelled', 'payment_intent.created']) {
+        $expected = $this->events->names();
+        sort($expected, SORT_STRING);
+        if ($events !== $expected) {
             throw new ProtocolException('Webhook event selection differs from the isolated experiment.');
         }
         return ['id' => self::field($value, 'id', 1024), 'url' => self::field($value, 'url', 8192),
