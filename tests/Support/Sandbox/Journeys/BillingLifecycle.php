@@ -195,11 +195,20 @@ final class BillingLifecycle
         self::timestamp($active['current_period_ends_at'] ?? null);
         $item = $this->item('initial_item', $this->firstPrice, '1');
         $itemId = self::id($item);
+        $this->ledger->recordObservation('initial_subscription_item', [
+            'subscription_id' => $this->subscription, 'item_id' => $itemId, 'price_id' => $this->firstPrice,
+        ], $this->session->contextFingerprint());
         $this->update('quantity_change', [
             'items' => [['id' => $itemId, 'quantity' => 2]],
             'default_proration_mode' => 'PRORATED', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE',
         ]);
-        $this->item('quantity_observed', $this->firstPrice, '2', $itemId);
+        $updated = $this->item('quantity_observed', $this->firstPrice, '2');
+        $updatedId = self::id($updated);
+        $this->ledger->recordObservation('quantity_subscription_item', [
+            'subscription_id' => $this->subscription, 'item_id' => $updatedId, 'price_id' => $this->firstPrice,
+        ], $this->session->contextFingerprint());
+        $this->observations['quantity_item_identity_retained'] = $updatedId === $itemId;
+        $itemId = $updatedId;
         $this->keepAnchor('quantity_cycle_kept', $anchor);
         $this->update('plan_change', [
             'items' => [['id' => $itemId, 'deleted' => true], ['price_id' => $this->secondPrice, 'quantity' => 1]],
@@ -295,7 +304,8 @@ final class BillingLifecycle
             $step,
             fn (): array => $this->session->client->billing()->subscriptions()->retrieve($id),
             function (array $resource) use ($state, $extra, $id, $requireCycle): bool {
-                self::fields($resource, $this->subscriptionFields + ['id' => $id]);
+                self::fields($resource, $state === 'CANCELLED'
+                    ? $this->ownershipFields($id) : $this->subscriptionFields + ['id' => $id]);
                 if ($requireCycle) {
                     $cycleFields = ['billing_cycle_anchor_at', 'current_period_starts_at', 'current_period_ends_at'];
                     foreach ($cycleFields as $field) {
@@ -323,7 +333,6 @@ final class BillingLifecycle
         string $step,
         string $price,
         string $quantity,
-        ?string $expectedId = null,
         ?string $absentId = null,
     ): array {
         $found = [];
@@ -333,7 +342,7 @@ final class BillingLifecycle
                 $this->subscription,
                 ['page_size' => 20],
             ),
-            function (array $page) use ($price, $quantity, $expectedId, $absentId, &$found): bool {
+            function (array $page) use ($price, $quantity, $absentId, &$found): bool {
                 $found = [];
                 $items = self::items($page);
                 if (count($items) !== 1 || ($page['page_after'] ?? null) !== null) {
@@ -348,7 +357,6 @@ final class BillingLifecycle
                     if (
                         self::contains($resource, ['price' => ['id' => $price, 'currency' => 'EUR']])
                         && ExactDecimal::equalsLiteral($resource['quantity'] ?? null, $quantity)
-                        && ($expectedId === null || $id === $expectedId)
                     ) {
                         $found = $resource;
                     }
@@ -436,7 +444,8 @@ final class BillingLifecycle
             try {
                 $this->ledger->assertContext($this->session->contextFingerprint());
                 $resource = $this->session->client->billing()->subscriptions()->retrieve($id);
-                self::fields($resource, $this->subscriptionFields + ['id' => $id]);
+                self::fields($resource, ($resource['status'] ?? null) === 'CANCELLED'
+                    ? $this->ownershipFields($id) : $this->subscriptionFields + ['id' => $id]);
                 if (($resource['status'] ?? null) !== 'CANCELLED') {
                     if (!in_array($resource['status'] ?? null, ['PENDING', 'IN_TRIAL', 'ACTIVE', 'UNPAID'], true)) {
                         throw new ProtocolException('Cleanup cannot mutate an unfamiliar subscription state.');
@@ -476,6 +485,14 @@ final class BillingLifecycle
             }
         }
         return $result;
+    }
+
+    /** @return array<string,mixed> */
+    private function ownershipFields(string $id): array
+    {
+        return array_intersect_key($this->subscriptionFields, array_fill_keys([
+            'billing_customer_id', 'legal_entity_id', 'currency', 'collection_method', 'metadata',
+        ], true)) + ['id' => $id];
     }
 
     /** @param array<array-key,mixed> $resource */

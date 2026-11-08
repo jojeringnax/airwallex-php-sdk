@@ -232,6 +232,7 @@ final class BillingLifecycleTest extends TestCase
         self::assertFalse($result['ambiguous_mutation']);
         self::assertSame(0, $waits);
         self::assertSame([
+            'quantity_item_identity_retained' => true,
             'pdf_url_present' => true, 'pdf_url_nonempty' => false,
             'hosted_url_present' => true, 'hosted_url_nonempty' => true,
             'invoice_status' => 'DRAFT', 'invoice_payment_status' => 'UNPAID',
@@ -298,6 +299,105 @@ final class BillingLifecycleTest extends TestCase
         self::assertSame('GET', $http->requests[12]->getMethod());
         self::assertSame('GET', $http->requests[13]->getMethod());
         self::assertStringContainsString('"trial_ends_at":"NOW"', (string) $http->requests[14]->getBody());
+    }
+
+    public function testQuantityUpdateUsesTheFreshObservedItemIdentityForTheNextPlanChange(): void
+    {
+        $responses = [];
+        $updated = self::item('2');
+        $updated['id'] = 'owned-after-quantity-item';
+        foreach ($this->fixtures() as $index => $response) {
+            $responses[] = $index === 17
+                ? [200, self::json(['items' => [$updated], 'page_after' => null])] : $response;
+        }
+        [$result, $http, $ledger] = $this->runJourney($responses);
+        self::assertSame('pass', $result['result']);
+        self::assertIsArray($result['observations']);
+        self::assertFalse($result['observations']['quantity_item_identity_retained']);
+        self::assertStringContainsString(
+            '"id":"owned-after-quantity-item","deleted":true',
+            (string) $http->requests[19]->getBody()
+        );
+        self::assertStringNotContainsString('owned-first-item', (string) $http->requests[19]->getBody());
+        $private = json_decode((string) file_get_contents(
+            $this->directory . '/' . $ledger->runId() . '/ledger.json',
+        ), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($private);
+        self::assertIsArray($private['observations']);
+        self::assertIsArray($private['observations']['initial_subscription_item']);
+        self::assertIsArray($private['observations']['quantity_subscription_item']);
+        self::assertSame('owned-first-item', $private['observations']['initial_subscription_item']['item_id']);
+        self::assertSame(
+            'owned-after-quantity-item',
+            $private['observations']['quantity_subscription_item']['item_id'],
+        );
+        self::assertStringNotContainsString('owned-after-quantity-item', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    /** @return iterable<string,array{bool}> */
+    public static function cancelledDurations(): iterable
+    {
+        yield 'null duration' => [false];
+        yield 'omitted duration' => [true];
+    }
+
+    #[DataProvider('cancelledDurations')]
+    public function testCancellationReadbackCanClearTheMutableDurationWithoutLosingOwnership(bool $missing): void
+    {
+        $cancelled = self::subscription('CANCELLED');
+        $cancelled['duration'] = null;
+        if ($missing) {
+            unset($cancelled['duration']);
+        }
+        $responses = [];
+        foreach ($this->fixtures() as $index => $response) {
+            $responses[] = $index === 30 ? [200, self::json($cancelled)] : $response;
+        }
+        [$result, $http] = $this->runJourney($responses);
+        self::assertSame('pass', $result['result']);
+        self::assertIsArray($result['cleanup']);
+        self::assertSame('pass', $result['cleanup']['subscriptions_0']);
+        self::assertCount(34, $http->requests);
+    }
+
+    public function testAlreadyCancelledOwnedSubscriptionWithClearedDurationIsNotCancelledAgain(): void
+    {
+        $cancelled = self::subscription('CANCELLED');
+        unset($cancelled['duration']);
+        $responses = [
+            ...array_slice($this->fixtures(), 0, 28),
+            [200, self::json($cancelled)], ...array_slice($this->fixtures(), 31),
+        ];
+        [$result, $http] = $this->runJourney($responses);
+        self::assertSame('pass', $result['result']);
+        self::assertCount(32, $http->requests);
+        foreach ($http->requests as $request) {
+            self::assertStringNotContainsString('/cancel', $request->getUri()->getPath());
+        }
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function cancelledOwnershipMismatches(): iterable
+    {
+        yield 'wrong identity' => ['id', 'unrelated-subscription'];
+        yield 'wrong Customer' => ['billing_customer_id', 'unrelated-customer'];
+        yield 'wrong entity' => ['legal_entity_id', 'unrelated-entity'];
+        yield 'wrong currency' => ['currency', 'USD'];
+        yield 'wrong collection' => ['collection_method', 'AUTO_CHARGE'];
+        yield 'wrong run marker' => ['metadata', ['sdk_validation_run' => 'unrelated-run']];
+    }
+
+    #[DataProvider('cancelledOwnershipMismatches')]
+    public function testCancelledDurationExceptionDoesNotWeakenImmutableOwnership(string $field, mixed $value): void
+    {
+        $cancelled = self::subscription('CANCELLED');
+        unset($cancelled['duration']);
+        $cancelled[$field] = $value;
+        $responses = [...array_slice($this->fixtures(), 0, 28), [200, self::json($cancelled)]];
+        [$result, $http] = $this->runJourney($responses);
+        self::assertSame('fail', $result['result']);
+        self::assertSame(['subscriptions_0' => 'fail'], $result['cleanup']);
+        self::assertCount(29, $http->requests);
     }
 
     public function testSeparatelyLabeledNoTrialJourneyObservesActivationAndAllRemainingCheckpoints(): void
