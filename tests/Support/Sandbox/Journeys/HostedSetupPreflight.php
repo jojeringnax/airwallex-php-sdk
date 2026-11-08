@@ -19,7 +19,7 @@ final class HostedSetupPreflight
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,BrowserExpectation,bool,bool):array<string,mixed>)|null $browser
+     * @param (Closure(string,BrowserExpectation,bool,bool,bool):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -32,7 +32,8 @@ final class HostedSetupPreflight
         $phase = 'configuration';
         try {
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
-                'playwright-module', 'create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config'];
+                'playwright-module', 'create-one-hosted-setup', 'render-owned-data',
+                'observe-one-method-config', 'observe-normal-reads'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -55,6 +56,11 @@ final class HostedSetupPreflight
             if (!is_bool($observeConfig) || ($observeConfig && !$render)) {
                 throw new RuntimeException('Method observation requires explicit rendering.');
             }
+            $observeNormal = $options['observe-normal-reads'] ?? false;
+            if (!is_bool($observeNormal) || ($observeNormal && !$observeConfig)) {
+                throw new RuntimeException('Normal reads require explicit method observation.');
+            }
+            $safe['normal_reads_requested'] = $observeNormal;
             $safe['render_requested'] = $render;
             $safe['method_config_requested'] = $observeConfig;
             $bridge = new HostedBrowser($strings['node-bin'], $strings['playwright-module']);
@@ -117,11 +123,24 @@ final class HostedSetupPreflight
                     'browser_api_version' => '2024-06-14', 'scope' => 'verified_own_dropin_frame',
                 ], $fingerprint);
             }
+            if ($observeNormal) {
+                foreach (
+                    ['customer', 'consent_list', 'country', 'checkout_status_0',
+                    'checkout_status_1', 'checkout_status_2'] as $role
+                ) {
+                    // Future wire IDs/secrets/headers are unknown here: reserve generic finite slots only.
+                    $ledger->requestId('preflight_normal_' . $role, $browserExpected + [
+                        'method' => 'GET', 'role' => $role, 'scope' => 'fresh_payer_and_exact_original_frame',
+                        'target_data' => 'bound_in_private_browser_memory', 'observation_window_max_ms' => 8000,
+                    ], $fingerprint);
+                }
+            }
             $phase = 'browser_read_only';
             $safe['browser'] = HostedBrowser::sanitize(
-                $browser($url, $browserExpected, $render, $observeConfig),
+                $browser($url, $browserExpected, $render, $observeConfig, $observeNormal),
                 $render,
                 $observeConfig,
+                $observeNormal,
             );
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {

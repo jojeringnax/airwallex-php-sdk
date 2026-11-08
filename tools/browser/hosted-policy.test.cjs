@@ -937,3 +937,607 @@ for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
 }
+
+const normalOrigin = 'https://checkout.sandbox.airwallex.com';
+const normalTargets = { customer: normalOrigin + '/api/v1/pa/customers/PRIVATE_EXTERNAL_CUSTOMER',
+  consent_list: normalOrigin + '/api/v1/pa/payment_consents?customer_id=PRIVATE_EXTERNAL_CUSTOMER&status=VERIFIED&page_size=100',
+  country: 'https://www.sandbox.airwallex.com/country',
+  checkout_status: normalOrigin + '/billing/payer-web-api/checkout/status' };
+function normalPolicy(options = {}) {
+  let now = 0;
+  const origin = options.origin ?? normalOrigin;
+  const p = new HostedPolicy(origin + '/pay?s=' + sessionToken(), null, expectedCheckout, true, true,
+    options.normal ?? true, () => now);
+  p.claimPayerRequest(origin + '/billing/payer-web-api/checkout?ts=1794130000000', 'GET', 'fetch',
+    { authorization: 'Bearer ' + sessionToken() });
+  p.observePayer(Buffer.from(JSON.stringify(privatePayer)));
+  p.startNormalWindow();
+  if (p.mayDeliverPayer()) p.markPayerDelivered();
+  if (p.claimRenderFrame(privateFrame())) p.markRenderFrameDelivered();
+  return { p, advance: value => { now = value; } };
+}
+function normalClaim(p, role, change = {}) {
+  return p.claimNormalRead(change.url ?? normalTargets[role], change.method ?? 'GET', change.type ?? 'fetch',
+    change.headers ?? (role === 'checkout_status' ? { authorization: 'Bearer ' + sessionToken() }
+      : role === 'country' ? {} : methodHeaders), change.body ?? null,
+    change.main ?? role === 'checkout_status', change.bound ?? role !== 'checkout_status');
+}
+
+test('normal reads are explicit and scoped, each once except three serialized status slots', () => {
+  assert.throws(() => new HostedPolicy(initial, null, expectedCheckout, true, false, true));
+  for (const options of [{ normal: false }, { origin: 'https://checkout.airwallex.com' }]) {
+    const { p } = normalPolicy(options);
+    for (const role of Object.keys(normalTargets)) assert.equal(normalClaim(p, role), null);
+    assert.equal(p.allowsAuthority('www.sandbox.airwallex.com', 443), false);
+  }
+  const { p } = normalPolicy();
+  for (const role of ['customer', 'consent_list', 'country']) {
+    const claim = normalClaim(p, role);
+    assert.equal(claim.role, role); assert.equal(claim.headers.cookie, ''); assert.equal(claim.headers.referer, '');
+    assert.equal(claim.headers.authorization, undefined);
+    assert.equal(normalClaim(p, role), null);
+  }
+  for (let index = 0; index < 3; index++) {
+    assert.equal(normalClaim(p, 'checkout_status').role, 'checkout_status');
+    assert.equal(normalClaim(p, 'checkout_status'), null); // In flight is not another poll.
+    assert.deepEqual(p.observeNormalRead('checkout_status', Buffer.from('{"status":"REQUESTED"}')), { matched: true, state: 'REQUESTED' });
+    assert.equal(normalClaim(p, 'checkout_status'), null); // Parsing alone is not delivered.
+    p.markNormalReadDelivered('checkout_status');
+  }
+  assert.equal(normalClaim(p, 'checkout_status'), null);
+  assert.equal(p.normalEvidence().normal_checkout_status_attempts, 3);
+  assert.equal(p.allowsAuthority('www.sandbox.airwallex.com', 443), true);
+  assert.equal(p.decide('https://www.sandbox.airwallex.com/other', 'GET', 'fetch'), 'block');
+  p.closeNormalWindow(); assert.equal(p.allowsAuthority('www.sandbox.airwallex.com', 443), false);
+  assert.doesNotMatch(JSON.stringify(p.normalEvidence()), /PRIVATE/u);
+});
+
+for (const role of Object.keys(normalTargets)) {
+  test('normal read exact target, role, header and namespace boundary: ' + role, () => {
+    const { p } = normalPolicy();
+    for (const change of [{ method: 'POST' }, { type: 'document' }, { body: 'PRIVATE' },
+      { url: normalTargets[role] + '#' }, { url: normalTargets[role] + '&PRIVATE=value' },
+      { url: normalTargets[role].replace('sandbox.airwallex.com', 'airwallex.com') },
+      { main: false, bound: false }, { headers: { ...methodHeaders, authorization: 'PRIVATE' } },
+      { headers: { ...methodHeaders, 'x-on-behalf-of': 'PRIVATE' } },
+      { headers: { ...methodHeaders, baggage: 'PRIVATE' } }]) {
+      assert.equal(normalClaim(p, role, change), null);
+    }
+    if (role !== 'checkout_status') assert.equal(normalClaim(p, role, { main: true, bound: false }), null);
+    else assert.equal(normalClaim(p, role, { main: false, bound: true }), null);
+    assert.equal(p.normalEvidence()['normal_' + role + '_attempts'], 0);
+    assert.notEqual(normalClaim(p, role), null);
+  });
+}
+
+test('Customer and list bind exact Payments namespace, query literals and required source headers', () => {
+  for (const url of [normalTargets.customer.replace('PRIVATE_EXTERNAL_CUSTOMER', 'BILLING_CUSTOMER'),
+    normalTargets.customer + '/extra', normalTargets.customer.replace('PRIVATE_EXTERNAL_CUSTOMER', '%50RIVATE_EXTERNAL_CUSTOMER'),
+    normalTargets.consent_list + '&page_num=1', normalTargets.consent_list + '&status=VERIFIED',
+    normalTargets.consent_list.replace('status=VERIFIED', 'status=DISABLED'),
+    normalTargets.consent_list.replace('page_size=100', 'page_size=200'),
+    normalTargets.consent_list.replace('customer_id=', '%63ustomer_id='),
+    normalTargets.consent_list.replace('PRIVATE_EXTERNAL_CUSTOMER', 'OTHER'),
+    normalTargets.consent_list.replace('PRIVATE_EXTERNAL_CUSTOMER', '%50RIVATE_EXTERNAL_CUSTOMER')]) {
+    const { p } = normalPolicy();
+    assert.equal(normalClaim(p, url.includes('consents') ? 'consent_list' : 'customer', { url }), null);
+  }
+  for (const key of ['client-secret', 'x-api-version', 'content-type', 'x-client-ip-source', 'x-cloud-trace-context']) {
+    for (const value of [undefined, 'PRIVATE_OTHER']) {
+      const { p } = normalPolicy();
+      assert.equal(normalClaim(p, 'customer', { headers: { ...methodHeaders, [key]: value } }), null);
+    }
+  }
+});
+
+for (const [role, valid, invalid] of [
+  ['customer', { id: 'PRIVATE_EXTERNAL_CUSTOMER' }, [{ id: 'OTHER' }, { id: 123 }, {}]],
+  ['consent_list', { items: [] }, [{ items: [{ id: 'c', customer_id: 'OTHER', status: 'VERIFIED' }] },
+    { items: [{ id: 'c', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER', status: 'DISABLED' }] },
+    { items: [null] }, { items: Array(101).fill({}) }, { items: [], has_more: 'false' }]],
+  ['country', { countryCode: 'DE' }, [{ countryCode: 'PRIVATE' }, {}, { countryCode: 12 }]],
+  ['checkout_status', { status: 'REQUESTED' }, [{ status: 'CANCELLED' }, { status: true }, {}]],
+]) {
+  test('normal response ownership/shape and bounded unique UTF8 JSON: ' + role, () => {
+    const { p } = normalPolicy(); normalClaim(p, role);
+    assert.equal(p.observeNormalRead(role, Buffer.from(JSON.stringify(valid))).matched, true);
+    for (const value of invalid) assert.equal(p.observeNormalRead(role, Buffer.from(JSON.stringify(value))).matched, false);
+    for (const body of ['null', '[]', 'x'.repeat(65537), Buffer.from([0xff]),
+      '{"id":"PRIVATE_EXTERNAL_CUSTOMER","\\u0069d":"PRIVATE_EXTERNAL_CUSTOMER"}',
+      '{"nested":' + '['.repeat(33) + '0' + ']'.repeat(33) + '}']) {
+      assert.equal(p.observeNormalRead(role, Buffer.from(body)).matched, false);
+    }
+  });
+}
+
+for (const [body, state, matched] of [
+  ['{"status":"REQUESTED","PRIVATE":"PRIVATE_GATEWAY_VALUE"}', 'REQUESTED', true],
+  ['{"status":"PENDING"}', 'PENDING', false],
+  ['{"status":"COMPLETED"}', 'COMPLETED', false],
+  ['{"status":"EXPIRED"}', 'EXPIRED', false],
+  ['{"status":"ACTIVE"}', 'unlisted', false], // Public SDK state is not a browser-gateway state.
+  ['{"status":"OPEN"}', 'unlisted', false],
+  ['{"status":"PRIVATE_UNLISTED_STATE"}', 'unlisted', false],
+  ['{"data":{"status":"REQUESTED"}}', 'unavailable', false],
+  ['{"checkout":{"status":"REQUESTED"}}', 'unavailable', false],
+  ['{"status":true}', 'unavailable', false],
+  ['{"status":null}', 'unavailable', false],
+  ['{"status":"REQUESTED","\\u0073tatus":"REQUESTED"}', 'unavailable', false],
+  ['[]', 'unavailable', false],
+  [Buffer.from([0xff]), 'unavailable', false],
+]) {
+  test('browser gateway status has its own closed vocabulary: ' + String(body), () => {
+    const { p } = normalPolicy(); normalClaim(p, 'checkout_status');
+    const observed = p.observeNormalRead('checkout_status', Buffer.from(body));
+    assert.deepEqual(observed, { matched, state });
+    assert.doesNotMatch(JSON.stringify(observed), /PRIVATE|ACTIVE|OPEN/u);
+    p.markNormalReadDelivered('checkout_status');
+    assert.equal(p.normalEvidence().normal_checkout_status_poisoned, !matched);
+    assert.equal(normalClaim(p, 'checkout_status') !== null, matched);
+  });
+}
+
+test('Consent pagination uncertainty and unknown fields remain private, without discovery', () => {
+  for (const tail of [{}, { has_more: false }, { has_more: true }]) {
+    const { p } = normalPolicy(); normalClaim(p, 'consent_list');
+    const observed = p.observeNormalRead('consent_list', Buffer.from(JSON.stringify({
+      items: [{ id: 'PRIVATE_CONSENT', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER', status: 'VERIFIED',
+        payment_method: { PRIVATE: 'PRIVATE_CARD' } }], ...tail })));
+    assert.deepEqual(observed, { matched: true, items: 1, pagination_known: Object.hasOwn(tail, 'has_more'),
+      has_more: tail.has_more === true });
+    assert.doesNotMatch(JSON.stringify(observed), /PRIVATE/u);
+  }
+});
+
+test('failed/invalid status permanently poisons later slots; absolute window and closure forbid further sends', () => {
+  for (const kind of ['failed_send', 'invalid_response']) {
+    const { p } = normalPolicy(); normalClaim(p, 'checkout_status');
+    if (kind === 'failed_send') p.failNormalRead('checkout_status');
+    else p.observeNormalRead('checkout_status', Buffer.from('{"status":"CANCELLED"}'));
+    p.markNormalReadDelivered('checkout_status');
+    assert.equal(normalClaim(p, 'checkout_status'), null);
+    assert.equal(p.normalEvidence().normal_checkout_status_poisoned, true);
+  }
+  for (const millis of [8000, 8001, 99999]) {
+    const { p, advance } = normalPolicy(); advance(millis);
+    for (const role of Object.keys(normalTargets)) assert.equal(normalClaim(p, role), null);
+    assert.equal(p.allowsAuthority('www.sandbox.airwallex.com', 443), false);
+  }
+  const { p } = normalPolicy(); p.closeNormalWindow();
+  for (const role of Object.keys(normalTargets)) assert.equal(normalClaim(p, role), null);
+  for (const path of ['/#/elements/card-number', '/#/elements/expiry', '/#/elements/cvc', '/#/frame/popup']) {
+    assert.equal(p.claimRenderFrame(normalOrigin + path), false);
+  }
+});
+
+function normalFixtureModule(fault, role = 'checkout_status') {
+  const source = 'http://127.0.0.1:54321/render-frame#/elements/dropin?' + new URLSearchParams({
+    appVersion: 'v2.56.0', lang: 'en', options: JSON.stringify({ mode: 'recurring', currency: 'EUR',
+      client_secret: 'PRIVATE_CLIENT_SECRET', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER' }) });
+  let module = methodFixtureModule('success')
+    .replace('on(_event, callback) { opened = callback; }', "on(event, callback) { if (event === 'close') fixture.browserClosed = callback; else opened = callback; }")
+    .replace('async close() {} }; }, async close() {}', 'async close() { fixture.browserClosed(); } }; }, async close() {}')
+    .replace('const mainFrame = {};', 'const mainFrame = { url: () => fixture.mainUrl, isDetached: () => false };')
+    .replace('const frame = { parentFrame:', 'const frame = { url: () => fixture.frameUrl, parentFrame:')
+    .replace('const fault = "success";', `const fault = ${JSON.stringify('normal_' + fault)}; let constructions = 0;`)
+    .replace('[5000, 10000].includes(delay)', '[5000, 5500, 10000].includes(delay)')
+    .replace('module.exports = { fixture, request:', `fixture.now = 0; fixture.frameUrl = ${JSON.stringify(source)}; fixture.normalGets = 0; fixture.normalDisposed = false;
+      Object.defineProperty(performance, 'now', { value: () => fixture.now });
+      module.exports = { fixture, request:`)
+    .replace('async newContext(options) {', `async newContext(options) {
+      const normal = ++constructions > 1;
+      if (normal) {
+        fixture.normalCreated = true;
+        if (fault === 'normal_changed_before_get') fixture.mainUrl = 'about:blank';
+        if (fault === 'normal_context') fail();
+        if (fault === 'normal_delayed') await new Promise(resolve => setTimeout(resolve, 30));
+        if (fault === 'normal_window_edge') fixture.now = 9000;
+      }`)
+    .replace('fixture.gets++;', `fixture.gets++;
+        if (normal) {
+          fixture.normalGets++;
+          if (fault === 'normal_get' || options.headers.authorization !== 'Bearer ' + fixture.token
+              || options.headers['client-secret'] || options.headers.cookie !== '' || options.headers.referer !== ''
+              || options.maxRedirects !== 0 || options.maxRetries !== 0) fail();
+        }`)
+    .replace("if (fault === 'get' || fixture.gets !== 1", "if (!normal && (fault === 'get' || fixture.gets !== 1")
+    .replace('|| options.maxRedirects !== 0 || options.maxRetries !== 0) fail();\n        return',
+      '|| options.maxRedirects !== 0 || options.maxRetries !== 0)) fail();\n        return')
+    .replace("return { status: () => fault.startsWith('http_')", `return { headersArray() {
+          if (normal && fault === 'normal_headers') fail();
+          return [{ name: 'Content-Type', value: 'application/json' }, { name: 'Set-Cookie', value: 'PRIVATE_COOKIE' }];
+        }, status: () => normal && fault === 'normal_redirect' ? 302 : fault.startsWith('http_')`)
+    .replace("async body() { if (fault === 'body') fail();", `async body() { if (normal && fault === 'normal_changed_during_fetch') fixture.mainUrl += '#PRIVATE_WRONG_FRAGMENT';
+          if (fault === 'body' || (normal && fault === 'normal_body')) fail();`)
+    .replace("JSON.stringify({ items: [{ name: 'card' }] })", "JSON.stringify(normal ? { status: fault === 'normal_invalid' ? 'CANCELLED' : 'REQUESTED' } : { items: [{ name: 'card' }] })")
+    .replace("async dispose() { if (fault === 'response_dispose')", "async dispose() { if (fault === 'response_dispose' || (normal && fault === 'normal_response_dispose'))")
+    .replace("fixture.disposed = true; if (fault === 'context_dispose')", "fixture.disposed = true; if (normal) fixture.normalDisposed = true; if (fault === 'context_dispose' || (normal && fault === 'normal_context_dispose'))")
+    .replace(": kind === 'frame' ? '/render-frame' : '/api/v1/pa/config", ": kind === 'frame' ? '/render-frame' : kind === 'normal' ? '/billing/payer-web-api/checkout/status' : '/api/v1/pa/config")
+    .replace("headers: () => kind === 'payer' ?", "headers: () => ['payer', 'normal'].includes(kind) ?")
+    .replace("async fulfill(options) { if (kind === 'method'", `async fulfill(options) {
+          if (kind === 'normal' && (fault === 'normal_fulfill' || options.headers['Set-Cookie'])) fail();
+          if (kind === 'method'`)
+    .replace("token = new URL(url).searchParams.get('s');", "token = new URL(url).searchParams.get('s'); fixture.token = token; fixture.mainUrl = url;")
+    .replace("          await pending;\n          await routed('method', frame);", `          await pending;
+          const normalPending = routed('normal', mainFrame);
+          if (fault === 'normal_delayed') { await Promise.resolve(); fail(); }
+          await normalPending;
+          if (!['normal_success', 'normal_context_dispose'].includes(fault)) await routed('normal', mainFrame);
+          await routed('method', frame);`);
+  module = module
+    .replace("async dispose() { if (fault === 'response_dispose'", `async dispose() {
+      if (normal && ['normal_dispose_pending_resolve', 'normal_dispose_pending_reject'].includes(fault)) {
+        fixture.disposeEntered = true;
+        await new Promise((resolve, reject) => { fixture.releaseDispose = () => fault.endsWith('reject')
+          ? reject(new Error('PRIVATE_DISPOSE_FAILURE')) : resolve(); });
+      }
+      if (fault === 'response_dispose'`)
+    .replace('          await normalPending;', `          if (['normal_dispose_pending_resolve', 'normal_dispose_pending_reject'].includes(fault)) {
+            while (!fixture.disposeEntered) await new Promise(resolve => setImmediate(resolve));
+            await routed('normal', mainFrame);
+            fixture.beforeReleaseGets = fixture.normalGets;
+            fixture.releaseDispose();
+          }
+          await normalPending;`)
+    .replace("['normal_success', 'normal_context_dispose'].includes(fault)",
+      "['normal_success', 'normal_context_dispose', 'normal_dispose_pending_resolve'].includes(fault)");
+  if (role === 'customer') module = module
+    .replace("fixture.mainUrl = 'about:blank'", "fixture.frameUrl = 'about:blank'")
+    .replace("fixture.mainUrl += '#PRIVATE_WRONG_FRAGMENT'", "fixture.frameUrl += '#PRIVATE_WRONG_FRAGMENT'")
+    .replace("options.headers.authorization !== 'Bearer ' + fixture.token", "options.headers['client-secret'] !== 'PRIVATE_CLIENT_SECRET'")
+    .replace("|| options.headers['client-secret'] || options.headers.cookie !== ''", "|| options.headers.authorization || options.headers.cookie !== ''")
+    .replace("kind === 'normal' ? '/billing/payer-web-api/checkout/status'", "kind === 'normal' ? '/api/v1/pa/customers/PRIVATE_EXTERNAL_CUSTOMER'")
+    .replace("['payer', 'normal'].includes(kind)", "kind === 'payer'")
+    .replace("routed('normal', mainFrame)", "routed('normal', frame)")
+    .replace("if (!['normal_success', 'normal_context_dispose'].includes(fault)) await routed('normal', mainFrame)",
+      "if (!['normal_success', 'normal_context_dispose'].includes(fault)) await routed('normal', frame)")
+    .replace("normal ? { status: fault === 'normal_invalid' ? 'CANCELLED' : 'REQUESTED' }", "normal ? { id: 'PRIVATE_EXTERNAL_CUSTOMER' }");
+  return module;
+}
+
+for (const fault of ['success', 'redirect', 'invalid', 'context', 'get', 'headers', 'body', 'fulfill',
+  'response_dispose', 'context_dispose', 'delayed', 'window_edge', 'changed_before_get', 'changed_during_fetch']) {
+  test('normal read worker isolates contexts, poisons failures and disposes across window/shutdown races: ' + fault, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-module-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, normalFixtureModule(fault));
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = result => process.stdout.write(JSON.stringify({ ...result,
+          normal_context_disposed: fixture.fixture.normalDisposed, normal_fixture_gets: fixture.fixture.normalGets }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish)
+          .catch(error => { finish(error.evidence()); process.exitCode = 1; });`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /PRIVATE_CLIENT|PRIVATE_EXTERNAL|PRIVATE_COOKIE|PRIVATE_METHOD/u);
+      const output = JSON.parse(child.stdout);
+      assert.equal(output.normal_checkout_status_attempts, 1);
+      assert.equal(output.normal_fixture_gets, ['context', 'delayed', 'window_edge', 'changed_before_get'].includes(fault) ? 0 : 1);
+      if (fault !== 'context') assert.equal(output.normal_context_disposed, true);
+      assert.equal(output.normal_read_window_closed, true);
+      if (['success', 'redirect', 'invalid', 'changed_during_fetch'].includes(fault)) {
+        assert.equal(child.status, 0);
+        assert.equal(output.normal_checkout_status_delivered, fault === 'success' ? 1 : 0);
+        assert.equal(output.normal_checkout_status_poisoned, fault !== 'success');
+        assert.equal(output.normal_read_inspection_completed, true);
+      } else {
+        assert.equal(child.status, 1);
+        if (fault !== 'context_dispose') assert.equal(output.normal_checkout_status_poisoned, true);
+        if (fault === 'window_edge') {
+          assert.equal(output.card_readiness_observed, false);
+          assert.equal(Object.hasOwn(output, 'cardnumber_unique'), false);
+        }
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+
+for (const [statusBody, state, matched] of [
+  [{ status: 'REQUESTED' }, 'REQUESTED', true], [{ status: 'PENDING' }, 'PENDING', false],
+  [{ status: 'COMPLETED' }, 'COMPLETED', false], [{ status: 'EXPIRED' }, 'EXPIRED', false],
+  [{ status: 'ACTIVE' }, 'unlisted', false], [{ status: 'OPEN' }, 'unlisted', false],
+  [{ status: 'PRIVATE_UNLISTED_STATE' }, 'unlisted', false], [{ data: { status: 'REQUESTED' } }, 'unavailable', false],
+]) {
+  test('status worker and PHP bridge retain only the web classification: ' + state + '/' + JSON.stringify(statusBody), () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-web-status-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, normalFixtureModule('success').replace(
+        "normal ? { status: fault === 'normal_invalid' ? 'CANCELLED' : 'REQUESTED' }",
+        'normal ? ' + JSON.stringify(statusBody)));
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(result => process.stdout.write(JSON.stringify(result)));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.status, 0); assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /PRIVATE|https?:|ACTIVE|OPEN/u);
+      const output = JSON.parse(child.stdout);
+      assert.equal(output.normal_checkout_status_state, state);
+      assert.equal(output.normal_checkout_status_delivered, matched ? 1 : 0);
+      assert.equal(output.normal_checkout_status_observation, matched ? 'matched' : 'invalid_response');
+      assert.equal(output.normal_checkout_status_poisoned, !matched);
+      assert.equal(output.normal_checkout_status_sends, 1);
+      const php = String.raw`require getcwd().'/vendor/autoload.php';
+        $data=json_decode(stream_get_contents(STDIN),true,flags:JSON_THROW_ON_ERROR);
+        echo json_encode(\Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedBrowser::sanitize($data,true,true,true),JSON_THROW_ON_ERROR);`;
+      const bridge = spawnSync('php', ['-r', php], { encoding: 'utf8', cwd: path.join(__dirname, '../..'),
+        input: JSON.stringify({ ...output, candidate_origin: 'sandbox', result: 'blocked',
+          reason: 'financial_sandbox_boundary_unverified' }) });
+      assert.equal(bridge.status, 0, bridge.stderr); assert.equal(bridge.stderr, '');
+      const safe = JSON.parse(bridge.stdout);
+      assert.equal(safe.normal_checkout_status_state, state);
+      assert.equal(safe.normal_checkout_status_delivered, matched ? 1 : 0);
+      assert.doesNotMatch(bridge.stdout, /PRIVATE|https?:|ACTIVE|OPEN/u);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test('an unparsed later status response cannot inherit a prior parsed gateway classification', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-web-status-polls-fixture-'));
+  try {
+    const modulePath = path.join(directory, 'index.js');
+    fs.writeFileSync(modulePath, normalFixtureModule('success')
+      .replace("normal && fault === 'normal_redirect'", 'normal && fixture.normalGets > 1')
+      .replace("if (!['normal_success', 'normal_context_dispose', 'normal_dispose_pending_resolve'].includes(fault))", 'if (true)'));
+    const program = `const fixture = require(${JSON.stringify(modulePath)});
+      const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+      inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+        ${JSON.stringify(expectedCheckout)}, true, true, true).then(result => process.stdout.write(JSON.stringify(result)));`;
+    const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+    assert.equal(child.status, 0); assert.equal(child.stderr, '');
+    const output = JSON.parse(child.stdout);
+    assert.equal(output.normal_checkout_status_sends, 2);
+    assert.equal(output.normal_checkout_status_delivered, 1);
+    assert.equal(output.normal_checkout_status_observation, 'redirect_rejected');
+    assert.equal(output.normal_checkout_status_poisoned, true);
+    assert.equal(Object.hasOwn(output, 'normal_checkout_status_state'), false);
+    assert.doesNotMatch(child.stdout, /PRIVATE|https?:/u);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('new read scope binds the exact original private fragment and permanent poison after awaits', () => {
+  const { p } = normalPolicy();
+  assert.equal(p.normalSourceMatches(privateFrame()), true);
+  for (const url of ['about:blank', privateFrame() + '&PRIVATE=OTHER', privateFrame({ customer_id: 'OTHER' }),
+    privateFrame().replace('/elements/dropin', '/elements/cvc')]) assert.equal(p.normalSourceMatches(url), false);
+  normalClaim(p, 'checkout_status');
+  assert.equal(p.normalSendAllowed('checkout_status'), true);
+  p.failNormalRead('checkout_status');
+  assert.equal(p.normalSendAllowed('checkout_status'), false);
+});
+
+
+for (const fault of ['changed_before_get', 'changed_during_fetch']) {
+  test('same bound Drop-in Frame changing document cannot inherit a Customer read: ' + fault, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-document-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, normalFixtureModule(fault, 'customer'));
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = data => process.stdout.write(JSON.stringify({ ...data,
+          fixture_gets: fixture.fixture.normalGets, context_disposed: fixture.fixture.normalDisposed }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish)
+          .catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /PRIVATE_CLIENT|PRIVATE_EXTERNAL|PRIVATE_COOKIE|PRIVATE_WRONG/u);
+      const output = JSON.parse(child.stdout);
+      assert.equal(output.normal_customer_attempts, 1);
+      assert.equal(output.normal_customer_delivered, 0);
+      assert.equal(output.fixture_gets, fault === 'changed_before_get' ? 0 : 1);
+      assert.equal(output.context_disposed, true);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+
+for (const outcome of ['resolve', 'reject']) {
+  test('status slot stays busy across response disposal and poisons rejection before later polls: ' + outcome, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-disposal-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, normalFixtureModule('dispose_pending_' + outcome));
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = result => process.stdout.write(JSON.stringify({ ...result,
+          gets_before_disposal: fixture.fixture.beforeReleaseGets, gets_after_disposal: fixture.fixture.normalGets }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish)
+          .catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /PRIVATE_DISPOSE|PRIVATE_CLIENT|PRIVATE_EXTERNAL/u);
+      const output = JSON.parse(child.stdout);
+      assert.equal(output.gets_before_disposal, 1);
+      assert.equal(output.gets_after_disposal, 1);
+      assert.equal(output.normal_checkout_status_attempts, 1);
+      assert.equal(output.normal_checkout_status_poisoned, outcome === 'reject');
+      assert.equal(output.normal_checkout_status_delivered, 1); // Fulfilled before disposal, without another send.
+      if (outcome === 'reject') assert.equal(output.browser_failure_phase, 'normal_response_dispose');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+for (const mode of ['request_failure', 'deadline', 'context_closed', 'shutdown', 'scope', 'body', 'body_cleanup', 'status', 'status_cleanup']) {
+  test('normal failure records only owned timing and lifecycle facts: ' + mode, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-timing-fixture-'));
+    try {
+      let source = normalFixtureModule(mode === 'scope' ? 'window_edge' : mode.startsWith('body') ? 'body'
+        : mode === 'status' ? 'success' : mode === 'status_cleanup' ? 'response_dispose' : 'get');
+      if (mode.startsWith('status')) source = source.replace("normal && fault === 'normal_redirect' ? 302",
+        "normal ? 99");
+      if (mode === 'body_cleanup') source = source.replace('async dispose() {\n      if (normal',
+        'async dispose() {\n      if (normal) { fixture.now = 9000; fixture.browserClosed(); }\n      if (normal');
+      if (mode === 'deadline') source = source
+        .replace('timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args)',
+          "delay === 8000 ? (fixture.deadline = callback, timeout(() => {}, 0)) : timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args)")
+        .replace("if (fault === 'normal_get' ||", "fixture.now = 8000; fixture.deadline(); if (fault === 'normal_get' ||");
+      if (mode === 'request_failure') source = source
+        .replace("if (fault === 'normal_get' ||", "fixture.now = 35; if (fault === 'normal_get' ||")
+        .replace('[5000, 5500, 10000].includes(delay)', '(delay >= 5000 && delay <= 10000 && delay !== 8000)');
+      if (mode === 'context_closed') source = source
+        .replace("if (fault === 'normal_get' ||", "fixture.browserClosed(); if (fault === 'normal_get' ||");
+      if (mode === 'shutdown') source = source
+        .replace('timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args)',
+          "timeout(() => { if (delay === 8000) fixture.now = 8000; callback(...args); }, delay === 8000 ? 10 : [5000, 5500, 10000].includes(delay) ? 1 : delay)")
+        .replace("if (fault === 'normal_get' ||", "await new Promise((_, reject) => { fixture.rejectGet = () => reject(new Error('PRIVATE_PENDING_URL')); }); if (fault === 'normal_get' ||")
+        .replace('          await normalPending;', '          while (!fixture.normalGets) await new Promise(resolve => setImmediate(resolve)); fail();')
+        .replace('fixture.disposed = true;', 'if (normal && fixture.rejectGet) fixture.rejectGet(); fixture.disposed = true;');
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, source);
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = result => process.stdout.write(JSON.stringify({ ...result, fixture_gets: fixture.fixture.normalGets }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.status, 0); assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /PRIVATE|https?:|Error:/u);
+      const output = JSON.parse(child.stdout), failure = output.normal_read_failure;
+      assert.equal(output.fixture_gets, mode === 'scope' ? 0 : 1);
+      assert.equal(output.normal_checkout_status_poisoned, true);
+      assert.equal(failure.role, 'checkout_status');
+      assert.equal(failure.phase, mode === 'scope' ? 'normal_scope' : mode.startsWith('body') ? 'normal_body'
+        : mode.startsWith('status') ? 'normal_status' : 'normal_get');
+      assert.equal(failure.deadline_fired, ['deadline', 'shutdown'].includes(mode));
+      assert.equal(failure.shutdown_started, ['deadline', 'shutdown'].includes(mode));
+      assert.equal(failure.browser_context_closed, ['deadline', 'shutdown', 'context_closed'].includes(mode));
+      assert.equal(failure.browser_context_close_started, ['deadline', 'shutdown'].includes(mode));
+      assert.equal(failure.request_context_dispose_started, mode === 'shutdown');
+      if (mode === 'scope') assert.equal(Object.hasOwn(failure, 'request_timeout_ms'), false);
+      else assert.equal(failure.request_timeout_ms, 8000);
+      if (mode === 'request_failure') {
+        assert.equal(failure.elapsed_ms, 35); assert.equal(failure.request_elapsed_ms, 35);
+        assert.equal(failure.window_remaining_ms, 7965);
+      }
+      if (mode === 'body_cleanup') {
+        assert.equal(failure.window_remaining_ms, 8000); assert.equal(failure.elapsed_ms, 0);
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test('a delivered Customer response remains a matched fact when later disposal fails', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-delivered-fixture-'));
+  try {
+    const modulePath = path.join(directory, 'index.js');
+    fs.writeFileSync(modulePath, normalFixtureModule('response_dispose', 'customer'));
+    const program = `const fixture = require(${JSON.stringify(modulePath)});
+      const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+      const finish = result => process.stdout.write(JSON.stringify(result));
+      inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+        ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish).catch(error => finish(error.evidence()));`;
+    const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+    assert.equal(child.status, 0); assert.equal(child.stderr, '');
+    assert.doesNotMatch(child.stdout, /PRIVATE|https?:|Error:/u);
+    const output = JSON.parse(child.stdout);
+    assert.equal(output.result, 'fail');
+    assert.equal(output.normal_customer_sends, 1); assert.equal(output.normal_customer_delivered, 1);
+    assert.equal(output.normal_customer_http_status, 200);
+    assert.equal(output.normal_customer_observation, 'matched');
+    assert.equal(output.normal_read_failure.role, 'customer');
+    assert.equal(output.normal_read_failure.phase, 'normal_response_dispose');
+    const php = String.raw`require getcwd().'/vendor/autoload.php';
+      $data=json_decode(stream_get_contents(STDIN),true,flags:JSON_THROW_ON_ERROR);
+      echo json_encode(\Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedBrowser::sanitize($data,true,true,true),JSON_THROW_ON_ERROR);`;
+    // The local fixture has no provider origin; supply only that fixed authority proof to the PHP bridge.
+    const sanitized = spawnSync('php', ['-r', php], { encoding: 'utf8', cwd: path.join(__dirname, '../..'),
+      input: JSON.stringify({ ...output, candidate_origin: 'sandbox' }) });
+    assert.equal(sanitized.status, 0); assert.equal(sanitized.stderr, '');
+    const safe = JSON.parse(sanitized.stdout);
+    assert.equal(safe.result, 'fail'); assert.equal(safe.normal_customer_delivered, 1);
+    assert.equal(safe.normal_customer_observation, 'matched');
+    assert.equal(safe.normal_read_failure.phase, 'normal_response_dispose');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+function normalDrainFixture(mode) {
+  return normalFixtureModule('success')
+    .replace('globalThis.setTimeout = (callback, delay, ...args) => timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args);',
+      `globalThis.setTimeout = (callback, delay, ...args) => {
+        if (delay === 8000) fixture.deadline = callback;
+        return timeout(callback, delay >= 500 ? delay / 100 : delay, ...args);
+      };`)
+    .replace('fixture.normalCreated = true;', `fixture.normalCreated = true; fixture.now = 5000;
+      if (${JSON.stringify(mode)} === 'context') await new Promise(resolve => timeout(resolve, 15));`)
+    .replace('fixture.normalGets++;', `fixture.normalGets++;
+      await new Promise((resolve, reject) => {
+        fixture.rejectNormal = () => reject(new Error('PRIVATE_PENDING_READ'));
+        timeout(() => {
+          fixture.now = ${mode === 'deadline' ? 8000 : 6000};
+          if (${JSON.stringify(mode)} === 'deadline') fixture.deadline();
+          if (${JSON.stringify(mode)} === 'transport') reject(new Error('PRIVATE_TRANSPORT'));
+          else if (${JSON.stringify(mode)} !== 'deadline') resolve();
+        }, 15);
+      });`)
+    .replace('          await normalPending;', `          fixture.normalPending = normalPending;
+          while (!fixture.${mode === 'context' ? 'normalCreated' : 'normalGets'}) await new Promise(resolve => setImmediate(resolve));`)
+    .replace("if (fault === 'readiness_count') fail(); return 1;", "if (fault === 'readiness_count') fail(); return fixture.statusDelivered ? 1 : 0;")
+    .replace("kind === 'normal' ? '/billing/payer-web-api/checkout/status'", "kind === 'normal' ? '/billing/payer-web-api/checkout/status' : kind === 'late_customer' ? '/api/v1/pa/customers/PRIVATE_EXTERNAL_CUSTOMER'")
+    .replace("if (kind === 'normal' && (fault", `if (kind === 'normal') {
+      fixture.statusDelivered = true;
+      if (${JSON.stringify(mode)} === 'late_admission') await routed('late_customer', frame);
+    } if (kind === 'normal' && (fault`)
+    .replace('async dispose() {\n      if (normal', `async dispose() {
+      if (normal && ${JSON.stringify(mode)} === 'dispose') {
+        await new Promise(resolve => timeout(resolve, 10)); fixture.now = 7000;
+      }
+      if (normal && ${JSON.stringify(mode)} === 'dispose_failure') fail();
+      if (normal`)
+    .replace("async body() { if (normal && fault", `async body() {
+      if (normal && ${JSON.stringify(mode)} === 'stalled_body') await new Promise((_, reject) => {
+        fixture.rejectBody = reject;
+        timeout(() => { fixture.now = 8000; fixture.deadline(); }, 10);
+      });
+      if (normal && ${JSON.stringify(mode)} === 'changed_source') fixture.mainUrl += '#PRIVATE_CHANGED';
+      if (normal && fault`)
+    .replace('fixture.disposed = true;', `if (normal && fixture.rejectNormal) fixture.rejectNormal();
+      if (normal && fixture.rejectBody) fixture.rejectBody(new Error('PRIVATE_BODY')); fixture.disposed = true;`);
+}
+
+for (const mode of ['complete', 'transport', 'deadline', 'context', 'dispose', 'dispose_failure', 'stalled_body', 'changed_source', 'late_admission']) {
+  test('already sent five-second status drains within its original bound: ' + mode, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-drain-fixture-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, normalDrainFixture(mode));
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = data => process.stdout.write(JSON.stringify({ ...data, fixture_gets: fixture.fixture.normalGets,
+          late_delivered: fixture.fixture.statusDelivered === true }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.status, 0); assert.equal(child.stderr, '');
+      const output = JSON.parse(child.stdout);
+      const delivered = ['complete', 'dispose', 'dispose_failure', 'late_admission'].includes(mode);
+      assert.equal(output.result, ['complete', 'dispose', 'changed_source', 'late_admission'].includes(mode) ? 'pass' : 'fail', JSON.stringify(output.normal_read_failure));
+      assert.equal(output.fixture_gets, mode === 'context' ? 0 : 1);
+      assert.equal(output.normal_checkout_status_sends, mode === 'context' ? 0 : 1);
+      assert.equal(output.normal_checkout_status_delivered, delivered ? 1 : 0);
+      assert.equal(output.normal_checkout_status_poisoned, !['complete', 'dispose', 'late_admission'].includes(mode));
+      assert.equal(output.late_delivered, delivered);
+      if (mode === 'late_admission') assert.equal(output.normal_customer_attempts, 0);
+      for (const field of ['cardnumber', 'expiry', 'cvc']) assert.equal(output[field + '_unique'], false);
+      if (['complete', 'dispose', 'changed_source', 'late_admission'].includes(mode)) {
+        assert.equal(Object.hasOwn(output, 'normal_read_failure'), false);
+      } else {
+        const failure = output.normal_read_failure;
+        assert.equal(failure.phase, mode === 'context' ? 'normal_scope' : mode === 'dispose_failure'
+          ? 'normal_response_dispose' : mode === 'stalled_body' ? 'normal_body' : 'normal_get');
+        if (mode === 'transport') {
+          assert.equal(failure.shutdown_started, false); assert.equal(failure.browser_context_closed, false);
+          assert.equal(failure.window_remaining_ms, 2000);
+        }
+        if (['deadline', 'stalled_body'].includes(mode)) assert.equal(failure.deadline_fired, true);
+      }
+      assert.doesNotMatch(child.stdout, /PRIVATE|https?:|Error:/u);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
