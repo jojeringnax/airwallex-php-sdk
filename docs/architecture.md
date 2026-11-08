@@ -49,6 +49,4 @@ Public interface examples are tracked in [issue #6](https://github.com/jojeringn
 
 ## Compatibility policy
 
-The SDK uses semantic versioning. During `0.x`, breaking changes must be documented with migration guidance; consumers should pin an appropriate minor release line. From `1.0`, breaking public interface changes require a major release. Supported runtime changes and breaking changes must be documented in release notes.
-
-Detailed release gates and the definition of the supported public surface are tracked in [issue #9](https://github.com/jojeringnax/airwallex-php-sdk/issues/9).
+The [compatibility and release policy](release-policy.md) defines the supported public surface, semantic versioning, maintenance, deprecations, PHP/dependency and provider-version upgrades, and observable release gates. Consult it before changing compatibility or preparing a release.
