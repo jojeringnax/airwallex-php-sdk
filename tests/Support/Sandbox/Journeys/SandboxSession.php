@@ -28,6 +28,7 @@ final readonly class SandboxSession
     private HttpFactory $factory;
     private Closure $clock;
     private ?TokenProvider $simulationTokens;
+    private GuardedTransport $simulationTransport;
 
     public function __construct(
         #[SensitiveParameter] private Configuration $configuration,
@@ -54,8 +55,9 @@ final readonly class SandboxSession
             retryPolicy: new RetryPolicy(maxAttempts: 1),
             clock: $this->clock,
         );
+        $this->simulationTransport = new GuardedTransport(new SimulationTransport($httpClient));
         $this->simulationTokens = $context === 'account' ? new TokenProvider(
-            new HttpExchange(Environment::Sandbox, $this->transport, $this->factory, $this->factory),
+            new HttpExchange(Environment::Sandbox, $this->simulationTransport, $this->factory, $this->factory),
             new ResponseDecoder(),
             $configuration->credentials(),
             Environment::Sandbox,
@@ -86,11 +88,19 @@ final readonly class SandboxSession
         ) {
             throw new ValidationException('Shopper simulation requires an account-owned sandbox redirect.');
         }
-        $exchange = new HttpExchange(Environment::Sandbox, $this->transport, $this->factory, $this->factory);
-        $response = $exchange->send('POST', '/api/v1/simulation/pa/shopper_actions/' . $action, [
+        // Keep bounded response-protocol failures distinguishable from transport failures for existing callers.
+        $request = $this->factory->createRequest('POST', Environment::Sandbox->baseUrl()
+            . '/api/v1/simulation/pa/shopper_actions/' . $action);
+        foreach (
+            [
             'Authorization' => 'Bearer ' . $this->simulationTokens->token(),
             'x-api-version' => '2026-08-21', 'Content-Type' => 'application/json',
-        ], json_encode(['url' => $url], JSON_THROW_ON_ERROR));
+            ] as $name => $value
+        ) {
+            $request = $request->withHeader($name, $value);
+        }
+        $request = $request->withBody($this->factory->createStream(json_encode(['url' => $url], JSON_THROW_ON_ERROR)));
+        $response = $this->simulationTransport->sendRequest($request);
         if ($response->getStatusCode() === 200) {
             try {
                 $body = (string) $response->getBody();
@@ -162,7 +172,7 @@ final readonly class SandboxSession
 
     public function loginRequests(): int
     {
-        return $this->transport->loginRequests;
+        return $this->transport->loginRequests + $this->simulationTransport->loginRequests;
     }
 
     /** @return array<string,string> */

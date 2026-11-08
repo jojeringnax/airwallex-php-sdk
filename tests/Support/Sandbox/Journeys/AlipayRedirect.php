@@ -100,24 +100,39 @@ final class AlipayRedirect
 
     /**
      * @param (Closure(string):void)|null $beforeMockRead Explicit opt-in and durable private reservation.
+     * @param (Closure(string):void)|null $withVerifiedMock Private target-data callback; never navigates its target.
      * @return array<string,int|bool|string|array<string,int|bool|string>>
      */
-    public function inspect(#[SensitiveParameter] string $url, ?Closure $beforeMockRead = null): array
-    {
-        if ($this->sent || !self::eligible($url)) {
+    public function inspect(
+        #[SensitiveParameter] string $url,
+        ?Closure $beforeMockRead = null,
+        ?Closure $withVerifiedMock = null,
+    ): array {
+        if ($this->sent || !self::eligible($url) || ($beforeMockRead !== null && $withVerifiedMock !== null)) {
             throw new RuntimeException('The customer redirect is unavailable or outside the verified Sandbox path.');
         }
         $this->sent = true;
         try {
             $first = $this->observe($url);
             $safe = $first['safe'] + ['mock_read_requested' => $beforeMockRead !== null,
-                'mock_read_attempted' => false, 'mock_read_reservation_failed' => false, 'mock_read_failed' => false];
+                'mock_read_attempted' => false, 'mock_read_reservation_failed' => false, 'mock_read_failed' => false,
+                'mock_action_requested' => $withVerifiedMock !== null,
+                'mock_action_invoked' => false, 'mock_action_callback_failed' => false];
             $location = $first['location'];
             if (
-                $beforeMockRead === null || $safe['http_status'] !== 302
+                ($beforeMockRead === null && $withVerifiedMock === null) || $safe['http_status'] !== 302
                 || $location === null || !self::mockReadable($location)
             ) {
                 return $safe;
+            }
+            if ($withVerifiedMock !== null) {
+                $safe['mock_action_invoked'] = true;
+                try {
+                    $withVerifiedMock($location);
+                } catch (\Throwable) {
+                    $safe['mock_action_callback_failed'] = true;
+                }
+                return $safe; // Data callback cannot fall through into a second customer GET.
             }
             try {
                 $beforeMockRead($location);
