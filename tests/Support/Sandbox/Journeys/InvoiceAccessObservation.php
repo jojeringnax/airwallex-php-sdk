@@ -26,6 +26,7 @@ final class InvoiceAccessObservation
         private readonly ?ClientInterface $http = null,
         private readonly ?Closure $clock = null,
         private readonly bool $followPdfRedirect = false,
+        private readonly bool $followAirwallexPdfRedirect = false,
     ) {
     }
 
@@ -43,20 +44,27 @@ final class InvoiceAccessObservation
             'pdf_read_requested' => $this->readPdf, 'payer_read_requested' => $this->readPayer,
             'pdf_outcome' => 'not_requested', 'payer_outcome' => 'not_requested',
             'pdf_send_started' => false, 'payer_send_started' => false,
-            'pdf_redirect_requested' => $this->followPdfRedirect, 'pdf_redirect_send_started' => false,
+            'pdf_redirect_requested' => $this->followPdfRedirect || $this->followAirwallexPdfRedirect,
+            'pdf_redirect_send_started' => false,
             'pdf_redirect_policy' => 'not_requested', 'pdf_redirect_outcome' => 'not_requested',
             'pdf_prefix_matched' => false, 'payer_invoice_matched' => false,
             'payer_customer_direct_match_verified' => false, 'payer_customer_indirect_anchor_matched' => false,
             'complete_pdf_verified' => false, 'rendering_verified' => false,
             'expiry_verified' => false, 'renewal_verified' => false, 'signature_verified' => false,
             'mutation_sent' => false, 'redirect_followed' => false, 'third_party_followed' => false];
+        if ($this->followAirwallexPdfRedirect) {
+            $safe['pdf_redirect_scope'] = 'airwallex_domain';
+        }
         if ($this->used) {
             return array_replace($safe, ['result' => 'fail', 'phase' => 'observation_already_used']);
         }
         $this->used = true;
         try {
             $ledger->assertContext($fingerprint);
-            if ($this->followPdfRedirect && !$this->readPdf) {
+            if (
+                (($this->followPdfRedirect || $this->followAirwallexPdfRedirect) && !$this->readPdf)
+                || ($this->followPdfRedirect && $this->followAirwallexPdfRedirect)
+            ) {
                 throw new ProtocolException('A PDF redirect requires the explicit original PDF read.');
             }
             if (
@@ -78,7 +86,14 @@ final class InvoiceAccessObservation
             if (!in_array($invoice['status'] ?? null, ['DRAFT', 'FINALIZED', 'VOIDED'], true)) {
                 $token = null;
             }
-            $http = new InvoiceAccessTransport($pdf, $token, $this->http, $this->clock, $this->followPdfRedirect);
+            $http = new InvoiceAccessTransport(
+                $pdf,
+                $token,
+                $this->http,
+                $this->clock,
+                $this->followPdfRedirect,
+                $this->followAirwallexPdfRedirect
+            );
             if ($this->readPdf) {
                 $safe['pdf_policy'] = InvoiceAccessPolicy::pdfPolicy($invoice['pdf_url'] ?? null);
                 $safe['pdf_outcome'] = 'withheld';
@@ -96,9 +111,9 @@ final class InvoiceAccessObservation
                         $safe['pdf_outcome'] = $safe['pdf_observed_outcome'];
                         $safe['pdf_prefix_matched'] = $safe['pdf_outcome'] === 'bounded_prefix_observed';
                         unset($safe['pdf_observed_outcome']);
-                        if ($this->followPdfRedirect) {
+                        if ($this->followPdfRedirect || $this->followAirwallexPdfRedirect) {
                             $safe['pdf_initial_outcome'] = $safe['pdf_outcome'];
-                            $decision = InvoicePdfRedirect::inspect($pdf, $response);
+                            $decision = InvoicePdfRedirect::inspect($pdf, $response, $this->followAirwallexPdfRedirect);
                             $safe['pdf_redirect_policy'] = $decision['policy'];
                             $safe['pdf_redirect_target_scheme'] = $decision['target_scheme'];
                             $safe['pdf_redirect_target_origin_family'] = $decision['target_origin_family'];
@@ -110,7 +125,9 @@ final class InvoiceAccessObservation
                                 try {
                                     $references = ['original_status' => (string) $response->getStatusCode(),
                                         'original_url_sha256' => hash('sha256', $pdf),
-                                        'location_sha256' => $locationHash, 'target_sha256' => hash('sha256', $target)];
+                                        'location_sha256' => $locationHash, 'target_sha256' => hash('sha256', $target),
+                                        ...($this->followAirwallexPdfRedirect
+                                            ? ['pdf_redirect_scope' => 'airwallex_domain'] : [])];
                                     $ledger->recordObservation(
                                         'invoice_pdf_redirect_response',
                                         $references,

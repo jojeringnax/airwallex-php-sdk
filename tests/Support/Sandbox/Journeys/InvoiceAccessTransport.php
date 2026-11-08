@@ -38,9 +38,11 @@ final class InvoiceAccessTransport implements ClientInterface
         ?ClientInterface $http = null,
         ?Closure $clock = null,
         private readonly bool $allowPdfRedirect = false,
+        private readonly bool $allowAirwallexPdfRedirect = false,
     ) {
         if (
-            ($pdf !== null && InvoiceAccessPolicy::pdf($pdf) !== $pdf)
+            ($allowPdfRedirect && $allowAirwallexPdfRedirect)
+            || ($pdf !== null && InvoiceAccessPolicy::pdf($pdf) !== $pdf)
             || ($payerToken !== null && preg_match('/^[A-Za-z0-9._~+\/=-]{1,8192}$/D', $payerToken) !== 1)
         ) {
             throw new ProtocolException('Invoice access requires a bound first-party capability.');
@@ -75,7 +77,9 @@ final class InvoiceAccessTransport implements ClientInterface
         $pdfHeaders = self::headers($headers, ['accept' => 'application/pdf', 'accept-encoding' => 'identity',
             'host' => 'invoice.sandbox.airwallex.com', 'range' => 'bytes=0-1023']);
         $initial = $this->pdf !== null && $uri === $this->pdf && $pdfHeaders;
-        $redirect = $this->redirectTarget !== null && $uri === $this->redirectTarget && $pdfHeaders;
+        $redirect = $this->redirectTarget !== null && $uri === $this->redirectTarget
+            && self::headers($headers, ['accept' => 'application/pdf', 'accept-encoding' => 'identity',
+                'host' => $request->getUri()->getHost(), 'range' => 'bytes=0-1023']);
         $payer = $this->payerToken !== null && $uri === InvoiceAccessPolicy::PAYER
             && self::headers($headers, ['accept' => 'application/json', 'accept-encoding' => 'identity',
                 'host' => 'invoice.sandbox.airwallex.com', 'authorization' => 'Bearer ' . $this->payerToken]);
@@ -98,6 +102,9 @@ final class InvoiceAccessTransport implements ClientInterface
         try {
             $stream = $response->getBody();
             try {
+                if ($pdf && $this->allowAirwallexPdfRedirect) {
+                    self::boundHeaders($response);
+                }
                 $started = ($this->clock)();
                 $body = '';
                 $success = $pdf ? in_array($response->getStatusCode(), [200, 206], true)
@@ -126,7 +133,7 @@ final class InvoiceAccessTransport implements ClientInterface
                 $stream->close();
             }
             $this->deadline($started);
-            if ($initial && $this->allowPdfRedirect) {
+            if ($initial && ($this->allowPdfRedirect || $this->allowAirwallexPdfRedirect)) {
                 $this->rememberPdfRedirect($bounded);
             }
             return $bounded;
@@ -135,19 +142,36 @@ final class InvoiceAccessTransport implements ClientInterface
         }
     }
 
+    /** HTTP stream headers are already buffered; this cap bounds acceptance before body observation. */
+    private static function boundHeaders(#[SensitiveParameter] ResponseInterface $response): void
+    {
+        $bytes = 0;
+        $fields = 0;
+        foreach ($response->getHeaders() as $name => $values) {
+            foreach ($values as $value) {
+                $bytes += strlen($name) + strlen($value) + 4;
+                if (++$fields > 64 || $bytes > 65536) {
+                    throw new ProtocolException('The private PDF headers exceeded their observation bound.');
+                }
+            }
+        }
+    }
+
     private function rememberPdfRedirect(#[SensitiveParameter] ResponseInterface $response): void
     {
         if ($this->pdf === null) {
             throw new ProtocolException('An original PDF capability is required for redirect binding.');
         }
-        $this->redirectCandidate = InvoicePdfRedirect::inspect($this->pdf, $response)['target'];
+        $decision = InvoicePdfRedirect::inspect($this->pdf, $response, $this->allowAirwallexPdfRedirect);
+        $this->redirectCandidate = $decision['target'];
     }
 
     /** @throws ProtocolException */
     public function bindPdfRedirect(#[SensitiveParameter] string $target): void
     {
         if (
-            !$this->allowPdfRedirect || !$this->pdfSent || $this->redirectCandidate === null
+            (!$this->allowPdfRedirect && !$this->allowAirwallexPdfRedirect) || !$this->pdfSent
+            || $this->redirectCandidate === null
             || $target !== $this->redirectCandidate || $this->redirectTarget !== null || $this->redirectSent
         ) {
             throw new ProtocolException('Only the original response can select the one PDF redirect target.');

@@ -188,4 +188,75 @@ final class InvoicePdfRedirectTest extends TestCase
         self::assertSame($admitted ? 'admitted' : 'not_redirect', $decision['policy']);
         self::assertSame($admitted ? InvoiceAccessPolicy::ORIGIN . '/next.pdf' : null, $decision['target']);
     }
+    /** @return iterable<string,array{string,string}> */
+    public static function airwallexTargets(): iterable
+    {
+        yield 'root' => ['https://airwallex.com/PRIVATE.pdf?x=PRIVATE%2f+&x=2', 'admitted'];
+        yield 'shared invoice' => ['https://invoice.airwallex.com/PRIVATE.pdf?x=PRIVATE%3D', 'admitted'];
+        yield 'other first party' => ['https://documents.eu.airwallex.com/PRIVATE.pdf', 'admitted'];
+        yield 'same sandbox' => ['/PRIVATE.pdf', 'admitted'];
+        yield 'api production' => ['https://api.airwallex.com/PRIVATE', 'api_origin'];
+        yield 'api Sandbox' => ['https://api.sandbox.airwallex.com/PRIVATE', 'api_origin'];
+        yield 'api descendant' => ['https://download.api.sandbox.airwallex.com/PRIVATE', 'api_origin'];
+        yield 'api label other depth' => ['https://eu.api.airwallex.com/PRIVATE', 'api_origin'];
+        yield 'api dash' => ['https://api-demo.airwallex.com/PRIVATE', 'api_origin'];
+        yield 'api dash descendant' => ['https://download.api-demo.airwallex.com/PRIVATE', 'api_origin'];
+        yield 'api route' => ['https://documents.airwallex.com/api/v1/pa/payment_intents/PRIVATE', 'api_path'];
+        yield 'escaped api route' => ['https://documents.airwallex.com/%61pi%2fv1/PRIVATE', 'api_path'];
+        yield 'literal repeated API separator' => ['https://documents.airwallex.com//api/v1/PRIVATE', 'uri'];
+        yield 'encoded repeated API separator' => ['https://documents.airwallex.com/%2fapi/v1/PRIVATE', 'uri'];
+        yield 'literal repeated PA separator' => ['https://documents.airwallex.com//pa/PRIVATE', 'uri'];
+        yield 'encoded repeated PA separator' => ['https://documents.airwallex.com/%2Fpa/PRIVATE', 'uri'];
+        yield 'literal repeated payer' => ['https://documents.airwallex.com//billing/payer-web-api/x', 'uri'];
+        yield 'encoded repeated payer' => ['https://documents.airwallex.com/%2fbilling/payer-web-api/x', 'uri'];
+        yield 'internal repeated payer' => ['https://documents.airwallex.com/billing//payer-web-api/x', 'uri'];
+        yield 'encoded internal payer' => ['https://documents.airwallex.com/billing/%2fpayer-web-api/x', 'uri'];
+        yield 'nested api escape' => ['https://documents.airwallex.com/%2561pi/v1/PRIVATE', 'uri'];
+        yield 'pa route' => ['https://documents.airwallex.com/pa/redirect/PRIVATE', 'api_path'];
+        yield 'payer route' => ['https://invoice.sandbox.airwallex.com/billing/payer-web-api/invoice', 'api_path'];
+        yield 'prefix lookalike' => ['https://evilairwallex.com/PRIVATE', 'origin'];
+        yield 'suffix lookalike' => ['https://airwallex.com.evil.test/PRIVATE', 'origin'];
+        yield 'malformed label' => ['https://bad..airwallex.com/PRIVATE', 'origin'];
+        yield 'trailing dot' => ['https://invoice.airwallex.com./PRIVATE', 'origin'];
+        yield 'userinfo' => ['https://PRIVATE@invoice.airwallex.com/PRIVATE', 'origin'];
+        yield 'alt port' => ['https://invoice.airwallex.com:444/PRIVATE', 'origin'];
+        yield 'explicit default port' => ['https://invoice.airwallex.com:443/PRIVATE', 'uri'];
+        yield 'downgrade' => ['http://invoice.airwallex.com/PRIVATE', 'origin'];
+        yield 'host normalization' => ['https://INVOICE.airwallex.com/PRIVATE', 'uri'];
+        yield 'fragment' => ['https://invoice.airwallex.com/PRIVATE#PRIVATE', 'lexical'];
+        yield 'dot' => ['https://invoice.airwallex.com/a/../PRIVATE', 'dot_segments'];
+        yield 'escaped dot' => ['https://invoice.airwallex.com/a/%2e%2e/PRIVATE', 'dot_segments'];
+    }
+
+    #[DataProvider('airwallexTargets')]
+    public function testSeparateCompanyScopeHasExactHostAndApiExclusions(string $location, string $policy): void
+    {
+        $decision = InvoicePdfRedirect::inspect(self::BASE, new Response(301, ['Location' => $location]), true);
+        self::assertSame($policy, $decision['policy']);
+        self::assertSame($policy === 'admitted', $decision['target'] !== null);
+        if ($policy === 'admitted') {
+            self::assertSame(
+                str_starts_with($location, '/') ? InvoiceAccessPolicy::ORIGIN . $location : $location,
+                $decision['target']
+            );
+            self::assertSame(hash('sha256', $location), $decision['location_sha256']);
+        } else {
+            self::assertNull($decision['location_sha256']);
+        }
+        $safe = $decision;
+        unset($safe['target'], $safe['location_sha256']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    /** @param array<string,string|list<string>> $headers */
+    #[DataProvider('withheld')]
+    public function testCompanyScopePreservesEveryNonOriginRestriction(array $headers, string $policy): void
+    {
+        if (($headers['Location'] ?? null) === 'https://invoice.airwallex.com/next') {
+            $policy = 'admitted';
+        }
+        $decision = InvoicePdfRedirect::inspect(self::BASE, new Response(301, $headers), true);
+        self::assertSame($policy, $decision['policy']);
+        self::assertSame($policy === 'admitted', $decision['target'] !== null);
+    }
 }

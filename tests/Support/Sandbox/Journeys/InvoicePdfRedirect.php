@@ -17,6 +17,7 @@ final class InvoicePdfRedirect
     public static function inspect(
         #[SensitiveParameter] string $base,
         #[SensitiveParameter] ResponseInterface $response,
+        bool $allowAirwallex = false,
     ): array {
         $decision = self::withheld('not_redirect');
         if (!in_array($response->getStatusCode(), [301, 302, 303, 307, 308], true)) {
@@ -63,7 +64,8 @@ final class InvoicePdfRedirect
                 $parts === false || isset($parts['port']) || isset($parts['user']) || isset($parts['pass'])
                 || isset($parts['fragment'])
                 || ($relative->getScheme() !== '' && $relative->getScheme() !== 'https')
-                || ($relative->getHost() !== '' && $relative->getHost() !== 'invoice.sandbox.airwallex.com')
+                || (!$allowAirwallex && $relative->getHost() !== ''
+                    && $relative->getHost() !== 'invoice.sandbox.airwallex.com')
             ) {
                 return self::withheld('origin', $diagnostic);
             }
@@ -71,7 +73,8 @@ final class InvoicePdfRedirect
                 return self::withheld('dot_segments', $diagnostic);
             }
             $resolved = (string) UriResolver::resolve($baseUri, $relative);
-            $resolvedPolicy = InvoiceAccessPolicy::pdfPolicy($resolved);
+            $resolvedPolicy = $allowAirwallex ? self::airwallexPolicy($resolved)
+                : InvoiceAccessPolicy::pdfPolicy($resolved);
             if ($resolvedPolicy !== 'admitted') {
                 return self::withheld($resolvedPolicy, $diagnostic);
             }
@@ -134,6 +137,45 @@ final class InvoicePdfRedirect
         } catch (Throwable) {
             return $unavailable;
         }
+    }
+
+    /** Local decision #95: a company-domain target is not proof of Sandbox or provider ownership. */
+    private static function airwallexPolicy(#[SensitiveParameter] string $value): string
+    {
+        // Reuse every lexical/byte constraint; only the origin decision can be reconsidered.
+        $policy = InvoiceAccessPolicy::pdfPolicy($value);
+        if (!in_array($policy, ['admitted', 'origin'], true)) {
+            return $policy;
+        }
+        $parts = parse_url($value);
+        $uri = new Uri($value);
+        $host = $uri->getHost();
+        if (
+            !is_array($parts) || ($parts['scheme'] ?? null) !== 'https'
+            || isset($parts['port']) || isset($parts['user']) || isset($parts['pass']) || isset($parts['fragment'])
+            || (string) $uri !== $value || strlen($host) > 253
+            || preg_match('/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*airwallex\.com$/D', $host) !== 1
+        ) {
+            return 'origin';
+        }
+        // Official API roots use api.airwallex.com / api.sandbox.airwallex.com.
+        // Excluding api and api-* at any label is a deliberately wider local safeguard.
+        foreach (explode('.', $host) as $label) {
+            if ($label === 'api' || str_starts_with($label, 'api-')) {
+                return 'api_origin';
+            }
+        }
+        // Nested escaping could make a second decoder reveal an API route; do not repair it.
+        if (
+            preg_match('/%25/i', $uri->getPath()) === 1
+            || str_contains(rawurldecode($uri->getPath()), '//')
+        ) {
+            return 'uri';
+        }
+        if (preg_match('~^/(?:api|pa)(?:/|$)|^/billing/payer-web-api(?:/|$)~i', rawurldecode($uri->getPath())) === 1) {
+            return 'api_path';
+        }
+        return 'admitted';
     }
 
     private static function dotSegments(#[SensitiveParameter] string $path): bool

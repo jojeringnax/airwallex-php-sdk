@@ -29,7 +29,8 @@ final class InvoiceAccessCommand
             'mutation_sent' => false, 'redirect_followed' => false, 'third_party_followed' => false,
             'rendering_verified' => false, 'complete_pdf_verified' => false,
             'expiry_verified' => false, 'renewal_verified' => false];
-        $flags = ['read-one-pdf-prefix', 'read-one-payer-invoice', 'follow-one-pdf-redirect'];
+        $flags = ['read-one-pdf-prefix', 'read-one-payer-invoice', 'follow-one-pdf-redirect',
+            'follow-one-airwallex-pdf-redirect'];
         foreach ($options as $name => $value) {
             if (
                 !in_array($name, ['environment', 'credentials-file', 'prior-ledger', 'state-dir', ...$flags], true)
@@ -41,12 +42,19 @@ final class InvoiceAccessCommand
         $pdf = $options['read-one-pdf-prefix'] ?? false;
         $payer = $options['read-one-payer-invoice'] ?? false;
         $follow = $options['follow-one-pdf-redirect'] ?? false;
-        if (!is_bool($pdf) || !is_bool($payer) || !is_bool($follow) || ($follow && !$pdf)) {
+        $airwallex = $options['follow-one-airwallex-pdf-redirect'] ?? false;
+        if (
+            !is_bool($pdf) || !is_bool($payer) || !is_bool($follow) || !is_bool($airwallex)
+            || (($follow || $airwallex) && !$pdf) || ($follow && $airwallex)
+        ) {
             return $safe;
         }
         $safe['pdf_read_requested'] = $pdf;
         $safe['payer_read_requested'] = $payer;
-        $safe['pdf_redirect_requested'] = $follow;
+        $safe['pdf_redirect_requested'] = $follow || $airwallex;
+        if ($airwallex) {
+            $safe['pdf_redirect_scope'] = 'airwallex_domain';
+        }
         if (!$pdf && !$payer) {
             return array_replace($safe, ['result' => 'blocked', 'phase' => 'no_access_read_selected']);
         }
@@ -86,9 +94,20 @@ final class InvoiceAccessCommand
             $safe['phase'] = 'read_provenance';
             $ledger = $ledgers === null ? RunLedger::create($fingerprint, $strings['state-dir'])
                 : $ledgers($fingerprint, $strings['state-dir']);
+            if ($airwallex) {
+                $ledger->recordObservation('invoice_pdf_redirect_scope', ['scope' => 'airwallex_domain',
+                    'decision' => '95', 'prior_ledger_sha256' => $prior['prior_ledger_sha256']], $fingerprint);
+            }
             $ledger->requestId('invoice_owner_reads', ['prior_ledger_sha256' => $prior['prior_ledger_sha256'],
-                'api_version' => '2026-08-21', 'tool_sha256' => $toolHash], $fingerprint);
-            $access = new InvoiceAccessObservation($pdf, $payer, $linkHttp, followPdfRedirect: $follow);
+                'api_version' => '2026-08-21', 'tool_sha256' => $toolHash,
+                ...($airwallex ? ['pdf_redirect_scope' => 'airwallex_domain'] : [])], $fingerprint);
+            $access = new InvoiceAccessObservation(
+                $pdf,
+                $payer,
+                $linkHttp,
+                followPdfRedirect: $follow,
+                followAirwallexPdfRedirect: $airwallex
+            );
             $observed = $owner->inspect(
                 $session,
                 wait: static fn (): null => null,
