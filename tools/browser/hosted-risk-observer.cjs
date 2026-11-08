@@ -84,15 +84,16 @@ class HostedRiskObserver {
     } catch { return false; }
   }
 
-  handle(route, context, main, bound, closing) {
-    const task = this.#handle(route, context, main, bound, closing);
+  handle(route, context, main, bound, closing, admissionClosed = () => false) {
+    const task = this.#handle(route, context, main, bound, closing, admissionClosed);
     this.#handlers.add(task);
     void task.then(() => this.#handlers.delete(task), () => this.#handlers.delete(task));
     return task;
   }
 
-  async #handle(route, context, main, bound, closing) {
+  async #handle(route, context, main, bound, closing, admissionClosed) {
     if (this.#journal === null) return false;
+    if (admissionClosed()) return false;
     const request = route.request();
     let frame;
     try { frame = request.frame(); } catch { return false; }
@@ -117,11 +118,12 @@ class HostedRiskObserver {
         const claim = this.#policy.claimLoader(request.url(), request.method(), request.resourceType(),
           proof === null ? null : { ...proof, document, role,
             session: query.get('sessionId'), merchant: query.get('merchantId') });
-        if (!claim || this.#closed || closing() || !this.#original(frame, main, bound)) return true;
+        if (!claim || this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)) return true;
         this.#beforeCookies = await this.#value(context.cookies());
         if (this.#beforeCookies.some(cookie => riskCookieNames.has(cookie.name))) {
           this.#policy.note('cookie_unbound'); return true;
         }
+        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)) return true;
         // Retain construction before await; shutdown disposes every created public context.
         this.#rememberDeadline();
         this.#publicClient ??= this.#playwright.request.newContext({ ignoreHTTPSErrors: false,
@@ -131,7 +133,7 @@ class HostedRiskObserver {
           return client;
         });
         const client = await this.#value(this.#publicClient);
-        if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) return true;
+        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) return true;
         const response = await this.#value(client.get(request.url(), {
           headers: { accept: '*/*', cookie: '', referer: '' }, maxRedirects: 0, maxRetries: 0,
           timeout: Math.max(1, this.#parent.normalWindowRemaining()),
@@ -180,12 +182,12 @@ class HostedRiskObserver {
       this.#waiting++;
       queued = true;
       const task = this.#chain.then(async () => {
-        if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
           this.#policy.poison('document_changed'); throw new Error('Risk scope is unavailable.');
         }
         const deadline = Math.min(this.#deadline, performance.now() + this.#parent.normalWindowRemaining());
         const forward = async selected => this.#journal.run(selected, async () => {
-          if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+          if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
             throw new Error('Risk scope is unavailable.');
           }
           this.#policy.invoke(selected.role);

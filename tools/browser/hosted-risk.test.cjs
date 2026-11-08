@@ -531,3 +531,64 @@ for (const fault of ['body', 'response_dispose', 'abort']) {
     assert.equal(observer.evidence().risk_telemetry_poisoned, true);
   });
 }
+
+test('fixed field snapshot closes loader GET admission even when context construction started earlier', async () => {
+  const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+  const fixture = policyFixture();
+  let release, constructing = false, admissionClosed = false, gets = 0, disposed = 0, aborted = 0;
+  const observer = new HostedRiskObserver(fixture.parent,
+    { evidence: () => ({}), close: async () => {} }, { request: { newContext: () => {
+      constructing = true; return new Promise(resolve => { release = () => resolve({
+        get: async () => { gets++; }, dispose: async () => { disposed++; },
+      }); });
+    } } }, { origin: 'http://127.0.0.1:1234', bwsOrigin: 'https://127.0.0.1:1235', loaderHash: digest(fixture.body), ca: Buffer.from('fixture') });
+  observer.start('http://127.0.0.1:1236');
+  const frame = { isDetached: () => false, url: () => sourceDocument, evaluate: async () => ({
+    id: 'airwallex-fraud-api', orderSession: privateSession, tenant: null, project: null, disableTracking: null }) };
+  const request = { frame: () => frame, url: () => 'http://127.0.0.1:1234/fingerprint.js?sessionId=' + privateSession + '&hasScriptId=false&disable3rdTracking=false',
+    method: () => 'GET', resourceType: () => 'script' };
+  const task = observer.handle({ request: () => request, abort: async () => { aborted++; } },
+    { cookies: async () => [] }, null, frame, () => false, () => admissionClosed);
+  while (!constructing) await new Promise(resolve => setImmediate(resolve));
+  admissionClosed = true; release();
+  assert.equal(await task, true); assert.equal(gets, 0); assert.equal(aborted, 1);
+  assert.equal(await observer.close(), true); assert.equal(disposed, 1);
+});
+
+for (const alreadyInvoked of [false, true]) {
+  test('fixed snapshot distinguishes queued risk work from an already invoked response: ' + alreadyInvoked, async () => {
+    const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+    const upstream = await tlsFixture();
+    const fixture = policyFixture();
+    let admissionClosed = false, fulfilled = 0, aborted = 0;
+    const journal = { evidence: () => ({}), close: async () => {}, run: async (claim, invoke, validate) => {
+      if (!alreadyInvoked) admissionClosed = true; // The durability wait crossed the fixed snapshot.
+      const response = await invoke();
+      admissionClosed = true; // Already sent: retain the original response-handling window.
+      assert.equal(validate(response), true);
+      return response;
+    } };
+    const observer = new HostedRiskObserver(fixture.parent, journal, { request: { newContext: async () => ({
+      get: async () => ({ status: () => 200, body: async () => fixture.body, headers: () => ({}), dispose: async () => {} }),
+      dispose: async () => {},
+    }) } }, { origin: 'http://127.0.0.1:1234', bwsOrigin: upstream.origin, loaderHash: digest(fixture.body), ca: upstream.cert });
+    observer.start(upstream.proxy);
+    const frame = { isDetached: () => false, url: () => sourceDocument, evaluate: async () => ({
+      id: 'airwallex-fraud-api', orderSession: privateSession, tenant: null, project: null, disableTracking: null }) };
+    const loader = { frame: () => frame, url: () => 'http://127.0.0.1:1234/fingerprint.js?sessionId=' + privateSession + '&hasScriptId=false&disable3rdTracking=false',
+      method: () => 'GET', resourceType: () => 'script' };
+    try {
+      await observer.handle({ request: () => loader, fulfill: async () => {}, abort: async () => assert.fail('Loader rejected') },
+        { cookies: async () => [] }, null, frame, () => false, () => admissionClosed);
+      const request = { frame: () => frame, url: () => upstream.origin + '/bws/v1/' + privateSession,
+        method: () => 'POST', resourceType: () => 'ping', allHeaders: async () => eventHeaders, postDataBuffer: eventBody };
+      await observer.handle({ request: () => request, fulfill: async () => { fulfilled++; }, abort: async () => { aborted++; } },
+        { cookies: async () => [] }, null, frame, () => false, () => admissionClosed);
+      assert.equal(upstream.requests.length, alreadyInvoked ? 1 : 0);
+      assert.equal(fulfilled, alreadyInvoked ? 1 : 0); assert.equal(aborted, alreadyInvoked ? 0 : 1);
+      assert.equal(observer.evidence().risk_event_client_invocations, alreadyInvoked ? 1 : 0);
+      assert.equal(await observer.handle({ request: () => request }, { cookies: async () => [] }, null, frame,
+        () => false, () => admissionClosed), false); // No replacement admission.
+    } finally { await observer.close(); await upstream.close(); }
+  });
+}

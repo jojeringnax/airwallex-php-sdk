@@ -172,6 +172,52 @@ final class HostedBrowserTest extends TestCase
         HostedBrowser::sanitize($data, true, true);
     }
 
+    /** @return iterable<string,array{string,bool}> */
+    public static function gatewayStates(): iterable
+    {
+        foreach (['REQUESTED', 'PENDING', 'COMPLETED', 'EXPIRED', 'unlisted', 'unavailable'] as $state) {
+            yield $state => [$state, $state === 'REQUESTED'];
+        }
+    }
+
+    #[DataProvider('gatewayStates')]
+    public function testWebStateAllowsPriorDeliveredPolls(string $state, bool $matched): void
+    {
+        $data = self::normalEvidence() + [
+            'normal_checkout_status_attempts' => 2, 'normal_checkout_status_sends' => 2,
+            'normal_checkout_status_delivered' => 1, 'normal_checkout_status_http_status' => 200,
+            'normal_checkout_status_observation' => $matched ? 'matched' : 'invalid_response',
+            'normal_checkout_status_state' => $state,
+        ];
+        $safe = HostedBrowser::sanitize($data, true, true, true);
+        self::assertSame($state, $safe['normal_checkout_status_state']);
+        self::assertSame(1, $safe['normal_checkout_status_delivered']);
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function unsafeGatewayStates(): iterable
+    {
+        foreach (['ACTIVE', 'OPEN', 'PRIVATE_STATE', true, null, []] as $index => $state) {
+            yield 'foreign or raw state ' . $index => ['normal_checkout_status_state', $state];
+        }
+        yield 'unproved HTTP response' => ['normal_checkout_status_http_status', 302];
+        yield 'unproved send' => ['normal_checkout_status_sends', 0];
+        yield 'unmatched state claimed matched' => ['normal_checkout_status_state', 'PENDING'];
+    }
+
+    #[DataProvider('unsafeGatewayStates')]
+    public function testGatewayClassificationCannotExposeForeignStatesOrInventItsProof(string $key, mixed $value): void
+    {
+        $data = self::normalEvidence() + [
+            'normal_checkout_status_attempts' => 1, 'normal_checkout_status_sends' => 1,
+            'normal_checkout_status_delivered' => 0, 'normal_checkout_status_http_status' => 200,
+            'normal_checkout_status_observation' => 'matched', 'normal_checkout_status_state' => 'REQUESTED',
+        ];
+        $data[$key] = $value;
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true);
+    }
+
     /** @return iterable<string,array{string,mixed}> */
     public static function unsafeNormalFacts(): iterable
     {
@@ -195,6 +241,76 @@ final class HostedBrowserTest extends TestCase
         $data[$key] = $value;
         $this->expectException(RuntimeException::class);
         HostedBrowser::sanitize($data, true, true, true);
+    }
+
+    /** @return array<string,mixed> */
+    private static function normalFailure(): array
+    {
+        return ['role' => 'customer', 'phase' => 'normal_get', 'window_remaining_ms' => 7965,
+            'elapsed_ms' => 35, 'request_timeout_ms' => 8000, 'request_elapsed_ms' => 35,
+            'deadline_fired' => false, 'shutdown_started' => false, 'browser_context_close_started' => false,
+            'browser_context_closed' => false, 'request_context_dispose_started' => false,
+            'request_context_disposed' => false, 'window_closed' => false];
+    }
+
+    public function testNormalFailureKeepsOnlyClosedOwnedFactsAndNeverDefaultsMissingTiming(): void
+    {
+        $failure = self::normalFailure();
+        $failure['message'] = 'PRIVATE_URL_SECRET';
+        $failure['headers'] = ['PRIVATE' => 'PRIVATE'];
+        unset($failure['request_elapsed_ms']);
+        $data = self::normalEvidence();
+        $data['normal_read_failure'] = $failure;
+        $safe = HostedBrowser::sanitize($data, true, true, true);
+        self::assertIsArray($safe['normal_read_failure']);
+        self::assertSame('customer', $safe['normal_read_failure']['role']);
+        self::assertSame(7965, $safe['normal_read_failure']['window_remaining_ms']);
+        self::assertFalse($safe['normal_read_failure']['shutdown_started']);
+        self::assertArrayNotHasKey('request_elapsed_ms', $safe['normal_read_failure']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        $minimal = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'normal_read_failure' => $failure];
+        self::assertArrayNotHasKey('normal_read_failure', HostedBrowser::sanitize($minimal));
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function unsafeNormalFailures(): iterable
+    {
+        foreach (
+            ['role' => 'PRIVATE', 'phase' => 'PRIVATE_URL', 'window_remaining_ms' => 8001,
+            'elapsed_ms' => -1, 'request_timeout_ms' => 0, 'request_elapsed_ms' => 60001,
+            'deadline_fired' => 'false', 'shutdown_started' => null,
+            'browser_context_closed' => 1, 'request_context_disposed' => true] as $key => $value
+        ) {
+            yield $key => [$key, $value];
+        }
+        yield 'float time' => ['elapsed_ms', 1.5];
+        yield 'nonfinite time' => ['elapsed_ms', NAN];
+    }
+
+    #[DataProvider('unsafeNormalFailures')]
+    public function testNormalFailureRejectsUnboundedOrInventedLifecycleFacts(string $key, mixed $value): void
+    {
+        $data = self::normalEvidence();
+        $data['normal_read_failure'] = array_replace(self::normalFailure(), [$key => $value]);
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true);
+    }
+
+    public function testNormalFailureNeedsAnAdmittedRoleAndSentTimeoutProof(): void
+    {
+        foreach (['normal_customer_attempts', 'normal_customer_sends'] as $key) {
+            $data = self::normalEvidence();
+            $data['normal_read_failure'] = self::normalFailure();
+            $data[$key] = 0;
+            $data['normal_customer_delivered'] = 0;
+            try {
+                HostedBrowser::sanitize($data, true, true, true);
+                self::fail('Failure evidence invented an unadmitted or unsent operation.');
+            } catch (RuntimeException $error) {
+                self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+            }
+        }
     }
 
     public function testMethodEvidenceSanitizerRequiresExplicitScopeAndKeepsOnlyFixedObservations(): void

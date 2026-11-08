@@ -12,6 +12,8 @@ async function smoke(playwright) {
   let redirectController = false;
   let methodReply = 'matched';
   let normalStatus = 200;
+  let normalStatusDelay = 0;
+  let lateFields = false;
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
       case '/page':
@@ -48,6 +50,7 @@ async function smoke(playwright) {
                 window.pollsStarted++;
                 try { const status = await fetch('/billing/payer-web-api/checkout/status', { headers });
                   if (!status.ok) throw new Error(); await status.json();
+                  if (${lateFields}) document.querySelector('iframe')?.contentWindow.postMessage('synthetic_status_ready', location.origin);
                 } catch { location.reload(); }
               }, 5000);
             }
@@ -123,11 +126,15 @@ async function smoke(playwright) {
                 page_size: 200, active: true, transaction_currency: options.currency, __verification_methods: true });
               fetch(target, { headers }).then(r => r.json()).then(data => {
                 if (!Array.isArray(data.items)) return;
-                for (const name of ['cardnumber', 'expiry', 'cvc']) {
+                const addInputs = () => { for (const name of ['cardnumber', 'expiry', 'cvc']) {
                   const input = document.createElement('input'); input.name = name;
                   if (name === 'cvc') input.disabled = true;
                   document.body.append(input);
-                }
+                } };
+                if (${lateFields}) addEventListener('message', event => {
+                  if (event.source === parent && event.origin === location.origin && event.data === 'synthetic_status_ready') addInputs();
+                }, { once: true });
+                else addInputs();
                 if (options.detachFixture) setTimeout(() => {
                   const old = window.frameElement; old.replaceWith(old.cloneNode(false));
                 }, 1000);
@@ -182,14 +189,18 @@ async function smoke(playwright) {
             || (consent ? url.search !== '?customer_id=PRIVATE_EXTERNAL_CUSTOMER&status=VERIFIED&page_size=100'
               : url.search !== '')) {
           hits.forbidden++; response.writeHead(500).end();
+        } else if (status && normalStatus === -1) {
+          response.destroy(); // Local-only rejected read, with no HTTP status or diagnostic error text.
         } else if (status && normalStatus !== 200) {
           response.writeHead(normalStatus, { Location: '/forbidden?PRIVATE_NORMAL' }).end('PRIVATE_ERROR');
         } else {
-          response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*',
+          const send = () => { response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*',
             'Set-Cookie': 'synthetic_normal_' + (status ? 'status' : country ? 'country' : consent ? 'consent' : 'customer')
               + '=PRIVATE_COOKIE; Path=/' });
-          response.end(JSON.stringify(status ? { status: 'ACTIVE' } : country ? { countryCode: 'DE' }
-            : consent ? { items: [] } : { id: 'PRIVATE_EXTERNAL_CUSTOMER' }));
+          response.end(JSON.stringify(status ? { status: 'REQUESTED' } : country ? { countryCode: 'DE' }
+            : consent ? { items: [] } : { id: 'PRIVATE_EXTERNAL_CUSTOMER' })); };
+          if (status && normalStatusDelay > 0) setTimeout(send, normalStatusDelay);
+          else send();
         }
         break;
       }
@@ -407,7 +418,8 @@ async function smoke(playwright) {
     if (!ordinary.normal_read_inspection_completed || !ordinary.cardnumber_visible || !ordinary.expiry_enabled
         || ordinary.cvc_enabled || !ordinary.normal_read_window_closed || ordinary.normal_checkout_status_poisoned
         || ordinary.normal_checkout_status_attempts !== 1 || ordinary.normal_checkout_status_sends !== 1
-        || ordinary.normal_checkout_status_delivered !== 1 || ordinary.normal_consent_list_items !== 0
+        || ordinary.normal_checkout_status_delivered !== 1 || ordinary.normal_checkout_status_state !== 'REQUESTED'
+        || ordinary.normal_consent_list_items !== 0
         || ordinary.normal_consent_list_pagination_known || ordinary.normal_consent_list_has_more
         || hits.reloadPages !== normalBefore.reloadPages + 1 || hits.status !== normalBefore.status + 1
         || hits.customer !== normalBefore.customer + 1 || hits.consent !== normalBefore.consent + 1
@@ -431,6 +443,45 @@ async function smoke(playwright) {
       throw new Error('Local normal status redirect/retry poison boundary failed.');
     }
     normalStatus = 200;
+    const failedReadBefore = hits.status;
+    normalStatus = -1;
+    let failedRead;
+    try { await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&poll=1',
+      playwright, origin, null, expected, true, true, true); }
+    catch (error) { failedRead = error.evidence(); }
+    const failure = failedRead?.normal_read_failure;
+    if (!failure || failure.role !== 'checkout_status' || failure.phase !== 'normal_get'
+        || failure.deadline_fired || failure.shutdown_started || failure.browser_context_closed
+        || failure.request_context_dispose_started || failure.request_timeout_ms < 1
+        || failure.request_timeout_ms > 8000 || failure.window_remaining_ms < 0
+        || failure.window_remaining_ms > 8000 || !Number.isInteger(failure.request_elapsed_ms)
+        || failedRead.normal_checkout_status_sends !== 1 || !failedRead.normal_checkout_status_poisoned
+        || Object.hasOwn(failedRead, 'normal_checkout_status_http_status')
+        || hits.status !== failedReadBefore + 1 || hits.forbidden !== 0) {
+      throw new Error('Local rejected read did not retain bounded failure observations.');
+    }
+    normalStatus = 200;
+    normalStatusDelay = 1000; lateFields = true;
+    const delayedBefore = hits.status;
+    let lateFieldsPresent = false;
+    const delayedNormal = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&poll=1',
+      playwright, origin, async (page) => {
+        const frame = page.frames().find(candidate => candidate !== page.mainFrame());
+        if (!frame) throw new Error('Local delayed fixture lost its original frame.');
+        await frame.waitForFunction(() => document.querySelectorAll('input').length === 3, null, { timeout: 1000 });
+        lateFieldsPresent = true;
+        if (await page.evaluate(() => performance.now() - window.firstPayerDelivery >= 8000)) {
+          throw new Error('Local delayed status exceeded its original window.');
+        }
+      }, expected, true, true, true);
+    normalStatusDelay = 0; lateFields = false;
+    if (!lateFieldsPresent || delayedNormal.normal_checkout_status_sends !== 1
+        || delayedNormal.normal_checkout_status_delivered !== 1 || delayedNormal.normal_checkout_status_poisoned
+        || Object.hasOwn(delayedNormal, 'normal_read_failure') || hits.status !== delayedBefore + 1
+        || !delayedNormal.normal_read_inspection_completed || hits.forbidden !== 0
+        || ['cardnumber', 'expiry', 'cvc'].some(name => delayedNormal[name + '_unique'] !== false)) {
+      throw new Error('Local drain changed the field snapshot or cancelled an admitted bounded read.');
+    }
     // Both failure probes keep the payer mismatched, so no private body or frame can be delivered.
     payerReply = 'wrong_mode'; tamperController = true;
     let controllerRejected = false;
@@ -450,7 +501,8 @@ async function smoke(playwright) {
       public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
       altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
       method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
-      normal_poll_window_verified: true, normal_status_poison_verified: true, ...await riskSmoke(playwright) };
+      normal_poll_window_verified: true, normal_status_poison_verified: true, normal_failure_diagnostics_verified: true,
+      normal_inflight_drain_verified: true, ...await riskSmoke(playwright) };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 
