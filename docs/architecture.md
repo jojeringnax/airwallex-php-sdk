@@ -45,7 +45,7 @@ API family authentication and connected-account ownership are tracked in [issue 
 
 An application installs the SDK, supplies a PSR-18 client and PSR-17 factories, and configures an explicit environment and credential/account context. It uses in-memory token reuse or supplies a PSR-16 cache. It stores remote resource identifiers in its own persistence and applies its own access rules. Requests for distinct connected accounts retain isolated authentication contexts.
 
-Public interface examples are tracked in [issue #6](https://github.com/jojeringnax/airwallex-php-sdk/issues/6).
+For initialization, resource methods, request/response representation and consumer workflows, see [consumer interfaces](consumer-interfaces.md).
 
 ## Compatibility policy
 

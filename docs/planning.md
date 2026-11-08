@@ -6,6 +6,8 @@
 - Distribute the SDK through Composer.
 - Keep the SDK framework-independent, following the [package architecture](architecture.md).
 
+For public signatures, payload representation and representative workflows, consult [consumer interfaces](consumer-interfaces.md).
+
 For authentication, endpoint, retry or webhook work, consult the [API contract and permission inventory](api-contracts.md) for verified sources, the selected version policy and evidence gaps.
 
 The initial scope is limited to the Billing and Payments capabilities below. Other Airwallex product families and connected-account onboarding operations require separate scope decisions.

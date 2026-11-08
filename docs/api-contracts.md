@@ -8,7 +8,7 @@ The SDK targets API date-version **`2026-08-21`**, with explicit `x-api-version`
 
 The [versioning reference](https://www.airwallex.com/docs/api/versioning) lists `2026-08-21` as latest. Without an override, calls use the account's configured version. The header overrides that default per call; Airwallex recommends it for exceptional cases such as migration and on-behalf-of calls. The `/v1` URL segment is separate from the date-version. The SDK uses an explicit pin to keep its contract stable across account defaults; consumers configure webhook subscriptions to match.
 
-Account upgrades do not implicitly upgrade the SDK contract. Review changelog/schema differences before changing the pin. Proposed response compatibility behavior, to be reviewed with the public interface examples: tolerate additional fields and preserve unknown provider values. Regulatory or payment-method requirements can still change across versions. SDK release compatibility remains governed by [architecture](architecture.md#compatibility-policy).
+Account upgrades do not implicitly upgrade the SDK contract. Review changelog/schema differences before changing the pin. The accepted [consumer interfaces](consumer-interfaces.md#interface-conventions) tolerate additional response fields and preserve unknown provider values. Regulatory or payment-method requirements can still change across versions. SDK release compatibility remains governed by [architecture](architecture.md#compatibility-policy).
 
 ## Selected-version evidence
 
@@ -70,7 +70,7 @@ There is a documentation mismatch: the [payment-source product guide](https://ww
 
 ## Precision, pagination and errors
 
-The [data-type reference](https://www.airwallex.com/docs/api/data_types) uses major currency units, ISO4217 currency codes and timezone-bearing ISO8601 timestamps. Representative monetary fields include Price `unit_amount`/`flat_amount`, Invoice `amount_due`, and Intent/Refund `amount`. Preserve exact decimal values during JSON parsing and serialization; a JSON `number` declaration does not justify PHP float arithmetic. Public decimal representation belongs to [issue #6](https://github.com/jojeringnax/airwallex-php-sdk/issues/6).
+The [data-type reference](https://www.airwallex.com/docs/api/data_types) uses major currency units, ISO4217 currency codes and timezone-bearing ISO8601 timestamps. Representative monetary fields include Price `unit_amount`/`flat_amount`, Invoice `amount_due`, and Intent/Refund `amount`. Preserve exact decimal values during JSON parsing and serialization; a JSON `number` declaration does not justify PHP float arithmetic. The accepted [decimal representation](consumer-interfaces.md#interface-conventions) uses strings with lossless endpoint-aware JSON handling.
 
 | List contract | Inputs and output | Evidence |
 | --- | --- | --- |
@@ -79,7 +79,7 @@ The [data-type reference](https://www.airwallex.com/docs/api/data_types) uses ma
 
 Keep filters and authorization context across pages. Other lists need their own bounds/envelopes verified; the representative formats do not establish one universal paginator.
 
-The [error reference](https://www.airwallex.com/docs/api/errors) describes `code`, `source`, `message` and conditional `details`. Preserve HTTP status and provider codes; exception interfaces remain pending. Endpoint error tables add resource-specific behavior: a missing Billing resource can be 404 even though the general table describes 404 as a missing endpoint. Error-message text is unsuitable for stable matching. Sanitize diagnostics rather than logging full bodies.
+The [error reference](https://www.airwallex.com/docs/api/errors) describes `code`, `source`, `message` and conditional `details`. Preserve HTTP status and provider codes; exception conventions are defined in [consumer interfaces](consumer-interfaces.md#pagination-and-failures). Endpoint error tables add resource-specific behavior: a missing Billing resource can be 404 even though the general table describes 404 as a missing endpoint. Error-message text is unsuitable for stable matching. Sanitize diagnostics rather than logging full bodies.
 
 ## Request identity and retries
 
@@ -116,7 +116,7 @@ The durable SDK constraint is to expose observed provider state and account-conf
 | Endpoint fixtures | Derive complete request/response and failure-path fixtures from the verified `2026-08-21` documentation for each implemented operation | Resource implementation issues |
 | Platform access | [Context and ownership evidence](connected-account-contracts.md) is recorded; both Billing models and API-key authentication are selected; confirm merchant organization authorization and linked-account eligibility | [#4](https://github.com/jojeringnax/airwallex-php-sdk/issues/4) |
 | Lifecycle and documents | [Capability review](billing-capabilities.md) records document, self-service, checkout, trial and lifecycle boundaries; validate link refresh, schedule reversal and account-configured recovery in the owning follow-ups | [#21](https://github.com/jojeringnax/airwallex-php-sdk/issues/21), [#23](https://github.com/jojeringnax/airwallex-php-sdk/issues/23), [#26](https://github.com/jojeringnax/airwallex-php-sdk/issues/26), [#27](https://github.com/jojeringnax/airwallex-php-sdk/issues/27), [#28](https://github.com/jojeringnax/airwallex-php-sdk/issues/28) |
-| Public representation | Approve decimals, pagination, optional/null fields, errors and unknown-value behavior in consumer examples | [#6](https://github.com/jojeringnax/airwallex-php-sdk/issues/6) |
+| Public representation implementation | Implement the accepted [consumer interfaces](consumer-interfaces.md), including decimal encoding, pagination and errors | [#12](https://github.com/jojeringnax/airwallex-php-sdk/issues/12), [#14](https://github.com/jojeringnax/airwallex-php-sdk/issues/14), [#16](https://github.com/jojeringnax/airwallex-php-sdk/issues/16) |
 | Retry guarantees | Verify deduplication windows, conflict/replay behavior, mutation identifiers and ambiguous-outcome recovery per endpoint | [#15](https://github.com/jojeringnax/airwallex-php-sdk/issues/15) |
 | Runtime evidence | Capture sanitized versioned payloads and validate permissions/account isolation using explicit sandbox configuration | [#17](https://github.com/jojeringnax/airwallex-php-sdk/issues/17), [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) |
 
