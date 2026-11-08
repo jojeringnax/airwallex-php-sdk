@@ -112,6 +112,17 @@ const renderAssets = Object.freeze({
 const renderLanguages = new Set(['en', 'zh', 'ja', 'ko', 'ar', 'fr', 'es', 'nl', 'nl-NL', 'de', 'it',
   'zh-HK', 'pl', 'fi', 'ru', 'da', 'id', 'ms', 'sv', 'pt', 'ro']);
 
+// Fixed local guard outcomes only. Never use URL, option keys or values as diagnostic labels.
+const renderCheckNames = Object.freeze([
+  'document_candidates', 'method_mismatch', 'frame_unavailable', 'parent_mismatch',
+  'request_origin_mismatch', 'request_path_or_query_mismatch', 'source_unavailable',
+  'scope_unverified', 'payer_not_delivered', 'reference_unavailable', 'limit_reached',
+  'invalid_source_url', 'source_origin_mismatch', 'source_path_or_query_mismatch',
+  'fragment_route_mismatch', 'fragment_keys_mismatch', 'build_mismatch', 'language_mismatch',
+  'invalid_options', 'mode_mismatch', 'currency_mismatch', 'secret_mismatch',
+  'customer_mismatch', 'intent_mismatch', 'qualified', 'document_redirect',
+  'document_http_or_build_mismatch', 'fulfilled',
+]);
 const returnUrl = 'https://example.com/';
 
 function assetMatches(bytes, expected) {
@@ -140,6 +151,7 @@ class HostedPolicy {
   #payerDelivered = false;
   #frameClaimed = false;
   #frameReference = null;
+  #renderChecks = Object.fromEntries(renderCheckNames.map(name => [name, 0]));
   constructor(initial, fixtureOrigin = null, expected = null, render = false) {
     if (typeof render !== 'boolean' || (render && expected === null)) {
       throw new Error('Invalid read-only render configuration.');
@@ -255,27 +267,62 @@ class HostedPolicy {
     this.#payerDelivered = true;
   }
 
-  claimRenderFrame(value) {
+  noteRenderCheck(name) {
+    if (this.#render && Object.hasOwn(this.#renderChecks, name)) {
+      this.#renderChecks[name] = Math.min(1000000, this.#renderChecks[name] + 1);
+    }
+    return false;
+  }
+
+  renderEvidence() {
+    return this.#render ? { render_frame_checks: { ...this.#renderChecks } } : {};
+  }
+
+  renderRequestTarget(value) {
     const url = parse(value);
-    if (!this.renderEnabled() || !this.#payerDelivered || !this.#frameReference || this.#frameClaimed || !url
-        || url.origin !== new URL(this.#initial).origin || url.search
-        || url.pathname !== (this.#fixture === null ? '/' : '/render-frame')
-        || !url.hash.startsWith('#/elements/dropin?')) return false;
+    if (!url || url.origin !== new URL(this.#initial).origin) {
+      return this.noteRenderCheck('request_origin_mismatch');
+    }
+    if (value !== new URL(this.#fixture === null ? '/' : '/render-frame', this.#initial).href) {
+      return this.noteRenderCheck('request_path_or_query_mismatch');
+    }
+    return true;
+  }
+
+  claimRenderFrame(value) {
+    if (!this.renderEnabled()) return this.noteRenderCheck('scope_unverified');
+    if (!this.#payerDelivered) return this.noteRenderCheck('payer_not_delivered');
+    if (!this.#frameReference) return this.noteRenderCheck('reference_unavailable');
+    if (this.#frameClaimed) return this.noteRenderCheck('limit_reached');
+    const url = parse(value);
+    if (!url) return this.noteRenderCheck('invalid_source_url');
+    if (url.origin !== new URL(this.#initial).origin) return this.noteRenderCheck('source_origin_mismatch');
+    if (url.search || url.pathname !== (this.#fixture === null ? '/' : '/render-frame')) {
+      return this.noteRenderCheck('source_path_or_query_mismatch');
+    }
+    if (!url.hash.startsWith('#/elements/dropin?')) return this.noteRenderCheck('fragment_route_mismatch');
     try {
       const query = new URLSearchParams(url.hash.slice('#/elements/dropin?'.length));
-      if ([...query.keys()].sort().join(',') !== 'appVersion,lang,options'
-          || query.get('appVersion') !== 'v2.56.0' || !renderLanguages.has(query.get('lang'))) return false;
+      if ([...query.keys()].sort().join(',') !== 'appVersion,lang,options') {
+        return this.noteRenderCheck('fragment_keys_mismatch');
+      }
+      if (query.get('appVersion') !== 'v2.56.0') return this.noteRenderCheck('build_mismatch');
+      if (!renderLanguages.has(query.get('lang'))) return this.noteRenderCheck('language_mismatch');
       const raw = query.get('options');
-      if (!raw || raw.length > 16384) return false;
+      if (!raw || raw.length > 16384) return this.noteRenderCheck('invalid_options');
       const options = JSON.parse(raw);
-      if (!options || typeof options !== 'object' || Array.isArray(options)
-          || options.mode !== 'recurring' || options.currency !== this.#expected.currency
-          || options.client_secret !== this.#frameReference.secret
-          || options.customer_id !== this.#frameReference.customer
-          || (options.intent_id ?? null) !== this.#frameReference.intent) return false;
+      if (!options || typeof options !== 'object' || Array.isArray(options)) {
+        return this.noteRenderCheck('invalid_options');
+      }
+      if (options.mode !== 'recurring') return this.noteRenderCheck('mode_mismatch');
+      if (options.currency !== this.#expected.currency) return this.noteRenderCheck('currency_mismatch');
+      if (options.client_secret !== this.#frameReference.secret) return this.noteRenderCheck('secret_mismatch');
+      if (options.customer_id !== this.#frameReference.customer) return this.noteRenderCheck('customer_mismatch');
+      if ((options.intent_id ?? null) !== this.#frameReference.intent) return this.noteRenderCheck('intent_mismatch');
       this.#frameClaimed = true;
+      this.noteRenderCheck('qualified');
       return true;
-    } catch { return false; }
+    } catch { return this.noteRenderCheck('invalid_options'); }
   }
 
   decide(value, method, type) {
@@ -406,4 +453,4 @@ async function egressProxy(policy) {
   };
 }
 
-module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, assetMatches };
+module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, renderCheckNames, assetMatches };
