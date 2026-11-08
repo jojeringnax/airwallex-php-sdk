@@ -592,3 +592,88 @@ for (const alreadyInvoked of [false, true]) {
     } finally { await observer.close(); await upstream.close(); }
   });
 }
+
+test('expired whole-case deadline refuses a loader before constructing a context', async () => {
+  const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+  const fixture = policyFixture();
+  fixture.parent.normalWindowRemaining = () => 5000;
+  let constructions = 0;
+  const observer = new HostedRiskObserver(fixture.parent,
+    { evidence: () => ({}), close: async () => {} },
+    { request: { newContext: async () => { constructions++; assert.fail('Expired case constructed context'); } } },
+    null, performance.now() - 1);
+  const frame = { isDetached: () => false, url: () => sourceDocument };
+  const request = { frame: () => frame };
+  assert.equal(await observer.handle({ request: () => request }, {}, null, frame, () => false), false);
+  assert.equal(constructions, 0);
+  await observer.close();
+});
+
+test('whole-case bound cuts off stalled construction while the normal window still has time', async () => {
+  const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+  const fixture = policyFixture();
+  fixture.parent.normalWindowRemaining = () => 5000;
+  let constructing = false, release, gets = 0, disposed = 0;
+  const observer = new HostedRiskObserver(fixture.parent,
+    { evidence: () => ({}), close: async () => {} }, { request: { newContext: () => {
+      constructing = true;
+      return new Promise(resolve => { release = () => resolve({
+        get: async () => { gets++; }, dispose: async () => { disposed++; },
+      }); });
+    } } }, { origin: 'http://127.0.0.1:1234', bwsOrigin: 'https://127.0.0.1:1235',
+      loaderHash: digest(fixture.body), ca: Buffer.from('fixture') }, performance.now() + 100);
+  observer.start('http://127.0.0.1:1236');
+  const frame = { isDetached: () => false, url: () => sourceDocument, evaluate: async () => ({
+    id: 'airwallex-fraud-api', orderSession: privateSession, tenant: null, project: null, disableTracking: null }) };
+  const request = { frame: () => frame,
+    url: () => 'http://127.0.0.1:1234/fingerprint.js?sessionId=' + privateSession + '&hasScriptId=false&disable3rdTracking=false',
+    method: () => 'GET', resourceType: () => 'script' };
+  const began = performance.now();
+  const task = observer.handle({ request: () => request, abort: async () => {} },
+    { cookies: async () => [] }, null, frame, () => false);
+  assert.equal(await task, true);
+  assert.equal(constructing, true); assert.equal(gets, 0);
+  assert.ok(performance.now() - began < 1000);
+  assert.equal(await observer.close(), false);
+  release();
+  for (let index = 0; index < 5; index++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(gets, 0); assert.equal(disposed, 1);
+});
+
+for (const delayedAck of [false, true]) {
+  test('whole-case deadline bounds telemetry even with a later normal deadline: delayed ACK ' + delayedAck, async () => {
+    const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+    const upstream = await tlsFixture('trickle');
+    const fixture = policyFixture();
+    fixture.parent.normalWindowRemaining = () => 5000;
+    let fulfilled = 0, aborted = 0;
+    const journal = { evidence: () => ({}), close: async () => {}, run: async (_claim, invoke) => {
+      if (delayedAck) await new Promise(resolve => setTimeout(resolve, 250));
+      return invoke();
+    } };
+    const observer = new HostedRiskObserver(fixture.parent, journal, { request: { newContext: async () => ({
+      get: async () => ({ status: () => 200, body: async () => fixture.body, headers: () => ({}), dispose: async () => {} }),
+      dispose: async () => {},
+    }) } }, { origin: 'http://127.0.0.1:1234', bwsOrigin: upstream.origin,
+      loaderHash: digest(fixture.body), ca: upstream.cert }, performance.now() + 200);
+    observer.start(upstream.proxy);
+    const frame = { isDetached: () => false, url: () => sourceDocument, evaluate: async () => ({
+      id: 'airwallex-fraud-api', orderSession: privateSession, tenant: null, project: null, disableTracking: null }) };
+    const loader = { frame: () => frame,
+      url: () => 'http://127.0.0.1:1234/fingerprint.js?sessionId=' + privateSession + '&hasScriptId=false&disable3rdTracking=false',
+      method: () => 'GET', resourceType: () => 'script' };
+    try {
+      await observer.handle({ request: () => loader, fulfill: async () => {}, abort: async () => assert.fail('Loader failed') },
+        { cookies: async () => [] }, null, frame, () => false);
+      const request = { frame: () => frame, url: () => upstream.origin + '/bws/v1/' + privateSession,
+        method: () => 'POST', resourceType: () => 'ping', allHeaders: async () => eventHeaders, postDataBuffer: eventBody };
+      const began = performance.now();
+      await observer.handle({ request: () => request, fulfill: async () => { fulfilled++; }, abort: async () => { aborted++; } },
+        { cookies: async () => [] }, null, frame, () => false);
+      assert.ok(performance.now() - began < 1000);
+      assert.equal(observer.evidence().risk_event_client_invocations, delayedAck ? 0 : 1);
+      assert.equal(upstream.requests.length, delayedAck ? 0 : 1);
+      assert.equal(fulfilled, 0); assert.equal(aborted, 1);
+    } finally { await observer.close(); await upstream.close(); }
+  });
+}

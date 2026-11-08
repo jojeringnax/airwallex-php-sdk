@@ -20,7 +20,6 @@ let startupPhase = 'configuration';
 async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null) {
   const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal);
   if (riskJournal !== null && !observeNormal) throw new Error('Risk observation requires explicit normal reads.');
-  const risk = new HostedRiskObserver(policy, riskJournal, playwright, riskFixture);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
   await fs.chmod(directory, 0o700);
   let proxy;
@@ -93,12 +92,14 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       })]);
     } finally { clearTimeout(timer); }
   };
+  const caseDeadline = performance.now() + (render ? 40000 : 20000);
+  const risk = new HostedRiskObserver(policy, riskJournal, playwright, riskFixture, caseDeadline);
   const watchdog = setTimeout(() => {
     markFailure('watchdog');
     shuttingDown = true;
     if (context) { browserContextCloseStarted = true; void track(() => context.close()); }
     if (browser) void track(() => browser.close());
-  }, render ? 40000 : 20000);
+  }, Math.max(1, caseDeadline - performance.now()));
   watchdog.unref();
   const counts = { blocked_requests: 0, blocked_websockets: 0, returns_intercepted: 0,
     verified_static_assets: 0, integrity_rejections: 0, verified_render_assets: 0, bound_render_frames: 0,
