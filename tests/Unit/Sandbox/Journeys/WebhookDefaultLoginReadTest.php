@@ -318,6 +318,30 @@ final class WebhookDefaultLoginReadTest extends TestCase
         self::safe($safe);
     }
 
+    /** @return iterable<string,array{int,string}> */
+    public static function unexpectedLoginSuccesses(): iterable
+    {
+        yield 'unexpected well-shaped 200' => [200,
+            '{"token":"SYNTHETIC_PRIVATE_TOKEN","expires_at":"2100-01-01T00:00:00Z"}'];
+        yield '200 numeric token bypass' => [200, '{"token":123,"expires_at":"2100-01-01T00:00:00Z"}'];
+        yield '202 escaped duplicate bypass' => [202,
+            '{"token":"A","tok\\u0065n":"B","expires_at":"2100-01-01T00:00:00Z"}'];
+        yield 'unexpected empty 204' => [204, ''];
+    }
+
+    #[DataProvider('unexpectedLoginSuccesses')]
+    public function testOnlyDocumented201CanAuthorizeTheNewDefaultRead(int $status, string $body): void
+    {
+        $http = new WebhookConfigFixtureClient([new Response($status, [], $body),
+            new Response(200, [], '{"items":[]}')]);
+        $safe = WebhookConfigCommand::run($this->options(), $http, profile: WebhookConfigProfile::DefaultLogin);
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('authentication', $safe['phase']);
+        self::assertCount(1, $http->requests);
+        self::assertFalse($safe['configuration_read_succeeded']);
+        self::safe($safe);
+    }
+
     /** @return iterable<string,array{int}> */
     public static function authFailures(): iterable
     {
@@ -374,7 +398,9 @@ final class WebhookDefaultLoginReadTest extends TestCase
     /** @return iterable<string,array{string}> */
     public static function forbiddenHeaders(): iterable
     {
-        foreach (['x-login-as', 'x-org-id', 'x-organization-id', 'x-on-behalf-of', 'Cookie', 'Referer'] as $name) {
+        foreach (
+            ['x-login-as', 'x-org-id', 'x-organization-id', 'x-on-behalf-of', 'Cookie', 'Referer', 'Host'] as $name
+        ) {
             yield $name => [$name];
         }
     }

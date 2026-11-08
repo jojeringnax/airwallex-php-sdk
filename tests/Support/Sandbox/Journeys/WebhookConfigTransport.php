@@ -112,7 +112,13 @@ final class WebhookConfigTransport implements ClientInterface
                 $stream->close();
             }
             $this->deadline($started);
-            if ($this->profile === WebhookConfigProfile::DefaultLogin && $login && $response->getStatusCode() === 201) {
+            if (
+                $this->profile === WebhookConfigProfile::DefaultLogin && $login
+                && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300
+            ) {
+                if ($response->getStatusCode() !== 201) {
+                    throw new ProtocolException('The default login returned an unexpected success status.');
+                }
                 $proof = WebhookConfigObservation::nativeObject($body);
                 if (!is_string($proof->token ?? null) || !is_string($proof->expires_at ?? null)) {
                     throw new ProtocolException('The default login did not return its native string contract.');
@@ -134,7 +140,8 @@ final class WebhookConfigTransport implements ClientInterface
             }
         }
         if (
-            $request->getHeaderLine('Accept') !== 'application/json'
+            $request->getHeaderLine('Host') !== 'api.sandbox.airwallex.com'
+            || $request->getHeaderLine('Accept') !== 'application/json'
             || $request->getHeaderLine('x-api-version') !== '2026-08-21'
             || ($login && ($request->getHeaderLine('x-client-id') === ''
                 || $request->getHeaderLine('x-api-key') === ''))
