@@ -109,6 +109,12 @@ const renderAssets = Object.freeze({
   '/static/js/vendor.61207a66.js':
     '13b59305407194e27f35cdeaf9ba2ecbbb049cf074012238d75461410cc7ea1f',
 });
+// Required public Components bootstrap, separate from the 43-file Elements graph.
+const controllerAsset = Object.freeze({
+  origin: 'https://static.sandbox.airwallex.com',
+  pathname: '/widgets/sdk-controller/sdk/v1/index.js',
+  sha256: 'ec137c7ecd9e5592792ec8f7e5780825d64012d8b722a4c8bb7188ea140dffc3',
+});
 const renderLanguages = new Set(['en', 'zh', 'ja', 'ko', 'ar', 'fr', 'es', 'nl', 'nl-NL', 'de', 'it',
   'zh-HK', 'pl', 'fi', 'ru', 'da', 'id', 'ms', 'sv', 'pt', 'ro']);
 
@@ -151,6 +157,7 @@ class HostedPolicy {
   #payerDelivered = false;
   #frameClaimed = false;
   #frameReference = null;
+  #controllerAttempted = false;
   #renderChecks = Object.fromEntries(renderCheckNames.map(name => [name, 0]));
   constructor(initial, fixtureOrigin = null, expected = null, render = false) {
     if (typeof render !== 'boolean' || (render && expected === null)) {
@@ -340,7 +347,30 @@ class HostedPolicy {
     return 'block';
   }
 
+  isControllerTarget(value, method, type) {
+    if (method !== 'GET' || type !== 'script') return false;
+    const url = parse(value);
+    const origin = this.#fixture ?? controllerAsset.origin;
+    const pathname = this.#fixture === null ? controllerAsset.pathname : '/controller-sdk.js';
+    return url !== null && url.origin === origin && url.pathname === pathname
+      && /^\?ts=[0-9]{13}$/u.test(url.search) && value === url.origin + url.pathname + url.search;
+  }
+
+  controllerHash(value, method, type) {
+    if (!this.renderEnabled() || !this.isControllerTarget(value, method, type)) return null;
+    return this.#fixture === null ? controllerAsset.sha256
+      : '99856801c4bc5565a929fc02ab1ef5337ed6109963c37acb93a75dd3d4107d20';
+  }
+
+  claimControllerRequest(value, method, type) {
+    if (this.#controllerAttempted || this.controllerHash(value, method, type) === null) return false;
+    this.#controllerAttempted = true; // Never repeat this public GET after an ambiguous response or script error.
+    return true;
+  }
+
   assetHash(value, method, type) {
+    const controller = this.controllerHash(value, method, type);
+    if (controller !== null) return controller;
     const url = parse(value);
     if (!url || method !== 'GET' || type !== 'script') return null;
     if (this.renderEnabled() && url.origin === new URL(this.#initial).origin) {
@@ -374,7 +404,8 @@ class HostedPolicy {
     }
     const url = parse(`https://${host}:${port}/`);
     if (!url || String(port) !== '443') return false;
-    return url.origin === new URL(this.#initial).origin;
+    return url.origin === new URL(this.#initial).origin
+      || (this.renderEnabled() && url.origin === controllerAsset.origin);
   }
 
   allowsHttp(value) {
@@ -453,4 +484,4 @@ async function egressProxy(policy) {
   };
 }
 
-module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, renderCheckNames, assetMatches };
+module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, controllerAsset, renderCheckNames, assetMatches };
