@@ -121,7 +121,8 @@ final class HostedSetupPreflightTest extends TestCase
             $options ?? $this->options(),
             static fn (Configuration $config, string $context): SandboxSession
                 => new SandboxSession($config, $context, $transport),
-            function (string $url, array $expected) use ($fault): array {
+            function (string $url, array $expected, bool $render) use ($fault, $options): array {
+                self::assertSame(($options['render-owned-data'] ?? false) === true, $render);
                 self::assertSame([
                     'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
                 ], $expected);
@@ -188,6 +189,18 @@ final class HostedSetupPreflightTest extends TestCase
         }
         self::assertIsArray($result['browser_tool_hashes']);
         self::assertCount(5, $result['browser_tool_hashes']);
+    }
+
+    public function testExplicitRenderingStillCreatesAndCancelsOnlyOneOwnedSetup(): void
+    {
+        $options = $this->options();
+        $options['render-owned-data'] = true;
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['render_requested']);
+        self::assertSame('blocked', $result['result']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(1, $this->cancels);
+        self::assertSame(['customers' => 1, 'checkouts' => 1], $result['created_counts']);
     }
 
     /** @return iterable<string,array{string}> */
@@ -273,6 +286,7 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'old ledger injection' => ['ledger', '/private/fixture-ledger'];
         yield 'SDK root injection' => ['sdk-root', '/private/fixture-root'];
         yield 'node absent' => ['node-bin', '/nonexistent-fixture-node'];
+        yield 'invalid render mode' => ['render-owned-data', 'PRIVATE_MODE'];
     }
 
     #[DataProvider('invalidOptions')]
