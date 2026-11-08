@@ -182,6 +182,8 @@ async function smoke(playwright) {
             || (consent ? url.search !== '?customer_id=PRIVATE_EXTERNAL_CUSTOMER&status=VERIFIED&page_size=100'
               : url.search !== '')) {
           hits.forbidden++; response.writeHead(500).end();
+        } else if (status && normalStatus === -1) {
+          response.destroy(); // Local-only rejected read, with no HTTP status or diagnostic error text.
         } else if (status && normalStatus !== 200) {
           response.writeHead(normalStatus, { Location: '/forbidden?PRIVATE_NORMAL' }).end('PRIVATE_ERROR');
         } else {
@@ -431,6 +433,24 @@ async function smoke(playwright) {
       throw new Error('Local normal status redirect/retry poison boundary failed.');
     }
     normalStatus = 200;
+    const failedReadBefore = hits.status;
+    normalStatus = -1;
+    let failedRead;
+    try { await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&poll=1',
+      playwright, origin, null, expected, true, true, true); }
+    catch (error) { failedRead = error.evidence(); }
+    const failure = failedRead?.normal_read_failure;
+    if (!failure || failure.role !== 'checkout_status' || failure.phase !== 'normal_get'
+        || failure.deadline_fired || failure.shutdown_started || failure.browser_context_closed
+        || failure.request_context_dispose_started || failure.request_timeout_ms < 1
+        || failure.request_timeout_ms > 8000 || failure.window_remaining_ms < 0
+        || failure.window_remaining_ms > 8000 || !Number.isInteger(failure.request_elapsed_ms)
+        || failedRead.normal_checkout_status_sends !== 1 || !failedRead.normal_checkout_status_poisoned
+        || Object.hasOwn(failedRead, 'normal_checkout_status_http_status')
+        || hits.status !== failedReadBefore + 1 || hits.forbidden !== 0) {
+      throw new Error('Local rejected read did not retain bounded failure observations.');
+    }
+    normalStatus = 200;
     // Both failure probes keep the payer mismatched, so no private body or frame can be delivered.
     payerReply = 'wrong_mode'; tamperController = true;
     let controllerRejected = false;
@@ -450,7 +470,7 @@ async function smoke(playwright) {
       public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
       altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
       method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
-      normal_poll_window_verified: true, normal_status_poison_verified: true };
+      normal_poll_window_verified: true, normal_status_poison_verified: true, normal_failure_diagnostics_verified: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

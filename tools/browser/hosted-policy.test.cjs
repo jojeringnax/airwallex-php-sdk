@@ -1088,6 +1088,8 @@ function normalFixtureModule(fault, role = 'checkout_status') {
     appVersion: 'v2.56.0', lang: 'en', options: JSON.stringify({ mode: 'recurring', currency: 'EUR',
       client_secret: 'PRIVATE_CLIENT_SECRET', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER' }) });
   let module = methodFixtureModule('success')
+    .replace('on(_event, callback) { opened = callback; }', "on(event, callback) { if (event === 'close') fixture.browserClosed = callback; else opened = callback; }")
+    .replace('async close() {} }; }, async close() {}', 'async close() { fixture.browserClosed(); } }; }, async close() {}')
     .replace('const mainFrame = {};', 'const mainFrame = { url: () => fixture.mainUrl, isDetached: () => false };')
     .replace('const frame = { parentFrame:', 'const frame = { url: () => fixture.frameUrl, parentFrame:')
     .replace('const fault = "success";', `const fault = ${JSON.stringify('normal_' + fault)}; let constructions = 0;`)
@@ -1270,3 +1272,94 @@ for (const outcome of ['resolve', 'reject']) {
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
 }
+
+for (const mode of ['request_failure', 'deadline', 'context_closed', 'shutdown', 'scope', 'body', 'body_cleanup', 'status', 'status_cleanup']) {
+  test('normal failure records only owned timing and lifecycle facts: ' + mode, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-timing-fixture-'));
+    try {
+      let source = normalFixtureModule(mode === 'scope' ? 'window_edge' : mode.startsWith('body') ? 'body'
+        : mode === 'status' ? 'success' : mode === 'status_cleanup' ? 'response_dispose' : 'get');
+      if (mode.startsWith('status')) source = source.replace("normal && fault === 'normal_redirect' ? 302",
+        "normal ? 99");
+      if (mode === 'body_cleanup') source = source.replace('async dispose() {\n      if (normal',
+        'async dispose() {\n      if (normal) { fixture.now = 9000; fixture.browserClosed(); }\n      if (normal');
+      if (mode === 'deadline') source = source
+        .replace('timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args)',
+          "delay === 8000 ? (fixture.deadline = callback, timeout(() => {}, 0)) : timeout(callback, [5000, 5500, 10000].includes(delay) ? 1 : delay, ...args)")
+        .replace("if (fault === 'normal_get' ||", "fixture.now = 8000; fixture.deadline(); if (fault === 'normal_get' ||");
+      if (mode === 'request_failure') source = source
+        .replace("if (fault === 'normal_get' ||", "fixture.now = 35; if (fault === 'normal_get' ||")
+        .replace('[5000, 5500, 10000].includes(delay)', '(delay >= 5000 && delay <= 10000 && delay !== 8000)');
+      if (mode === 'context_closed') source = source
+        .replace("if (fault === 'normal_get' ||", "fixture.browserClosed(); if (fault === 'normal_get' ||");
+      if (mode === 'shutdown') source = source
+        .replace("if (fault === 'normal_get' ||", "await new Promise((_, reject) => { fixture.rejectGet = () => reject(new Error('PRIVATE_PENDING_URL')); }); if (fault === 'normal_get' ||")
+        .replace('          await normalPending;', '          while (!fixture.normalGets) await new Promise(resolve => setImmediate(resolve)); fail();')
+        .replace('fixture.disposed = true;', 'if (normal && fixture.rejectGet) fixture.rejectGet(); fixture.disposed = true;');
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, source);
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = result => process.stdout.write(JSON.stringify({ ...result, fixture_gets: fixture.fixture.normalGets }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.status, 0); assert.equal(child.stderr, '');
+      assert.doesNotMatch(child.stdout, /PRIVATE|https?:|Error:/u);
+      const output = JSON.parse(child.stdout), failure = output.normal_read_failure;
+      assert.equal(output.fixture_gets, mode === 'scope' ? 0 : 1);
+      assert.equal(output.normal_checkout_status_poisoned, true);
+      assert.equal(failure.role, 'checkout_status');
+      assert.equal(failure.phase, mode === 'scope' ? 'normal_scope' : mode.startsWith('body') ? 'normal_body'
+        : mode.startsWith('status') ? 'normal_status' : 'normal_get');
+      assert.equal(failure.deadline_fired, mode === 'deadline');
+      assert.equal(failure.shutdown_started, ['deadline', 'shutdown'].includes(mode));
+      assert.equal(failure.browser_context_closed, ['deadline', 'shutdown', 'context_closed'].includes(mode));
+      assert.equal(failure.browser_context_close_started, ['deadline', 'shutdown'].includes(mode));
+      assert.equal(failure.request_context_dispose_started, mode === 'shutdown');
+      if (mode === 'scope') assert.equal(Object.hasOwn(failure, 'request_timeout_ms'), false);
+      else assert.equal(failure.request_timeout_ms, 8000);
+      if (mode === 'request_failure') {
+        assert.equal(failure.elapsed_ms, 35); assert.equal(failure.request_elapsed_ms, 35);
+        assert.equal(failure.window_remaining_ms, 7965);
+      }
+      if (mode === 'body_cleanup') {
+        assert.equal(failure.window_remaining_ms, 8000); assert.equal(failure.elapsed_ms, 0);
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test('a delivered Customer response remains a matched fact when later disposal fails', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-normal-delivered-fixture-'));
+  try {
+    const modulePath = path.join(directory, 'index.js');
+    fs.writeFileSync(modulePath, normalFixtureModule('response_dispose', 'customer'));
+    const program = `const fixture = require(${JSON.stringify(modulePath)});
+      const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+      const finish = result => process.stdout.write(JSON.stringify(result));
+      inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+        ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish).catch(error => finish(error.evidence()));`;
+    const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 4000 });
+    assert.equal(child.status, 0); assert.equal(child.stderr, '');
+    assert.doesNotMatch(child.stdout, /PRIVATE|https?:|Error:/u);
+    const output = JSON.parse(child.stdout);
+    assert.equal(output.result, 'fail');
+    assert.equal(output.normal_customer_sends, 1); assert.equal(output.normal_customer_delivered, 1);
+    assert.equal(output.normal_customer_http_status, 200);
+    assert.equal(output.normal_customer_observation, 'matched');
+    assert.equal(output.normal_read_failure.role, 'customer');
+    assert.equal(output.normal_read_failure.phase, 'normal_response_dispose');
+    const php = String.raw`require getcwd().'/vendor/autoload.php';
+      $data=json_decode(stream_get_contents(STDIN),true,flags:JSON_THROW_ON_ERROR);
+      echo json_encode(\Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedBrowser::sanitize($data,true,true,true),JSON_THROW_ON_ERROR);`;
+    // The local fixture has no provider origin; supply only that fixed authority proof to the PHP bridge.
+    const sanitized = spawnSync('php', ['-r', php], { encoding: 'utf8', cwd: path.join(__dirname, '../..'),
+      input: JSON.stringify({ ...output, candidate_origin: 'sandbox' }) });
+    assert.equal(sanitized.status, 0); assert.equal(sanitized.stderr, '');
+    const safe = JSON.parse(sanitized.stdout);
+    assert.equal(safe.result, 'fail'); assert.equal(safe.normal_customer_delivered, 1);
+    assert.equal(safe.normal_customer_observation, 'matched');
+    assert.equal(safe.normal_read_failure.phase, 'normal_response_dispose');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
