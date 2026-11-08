@@ -128,6 +128,28 @@ Duplicate event identities require identical raw-body hashes; conflicting identi
 
 A fresh committed experiment, source `0c091e05e21a6b1ef46dac6dd9b95f39e0cb9eac`, attempted the selected account-managed registration once and received HTTP 400 `invalid_argument` without a usable returned ID. No Customer or Checkout was created. The tool conservatively retained an unknown registration outcome and reconciliation requirement; it made no replay, list sweep, guessed deletion or replacement registration. Receiver/tunnel/log cleanup passed, stderr was empty, and original credentials and earlier ledgers were unchanged. This establishes no rejection cause, activation/permission requirement, global registration absence or Billing delivery support. A separate local audit of the two retained earlier Payments bodies passed the added unique-key/native-string/legacy-owner predicates after MAC and original receipt freshness; it made no requests, changed no original file and supplied no new delivery/current-freshness or full-pipeline rerun claim. The SDK codec itself is unchanged. The [combined receipt](https://github.com/jojeringnax/airwallex-php-sdk/issues/42#issuecomment-6728000552) is tracked under #42.
 
+### Fresh DEFAULT management experiment
+
+The fixed entry point below runs a separate fresh Billing pair with management profile `DEFAULT`. It omits `x-login-as` only for registration management. The original command above keeps profile `ACCOUNT`. The configured collector prerequisite still uses explicit account login, and the Billing producer keeps its separate SDK organization context and token provider. An optional organization reference supplies event comparisons; it never selects authentication or proves manager authority.
+
+```sh
+php tools/billing-webhook-default-login-probe.php \
+  --environment=sandbox \
+  --credentials-file=/absolute/private/path/.env \
+  --state-dir=/absolute/private/run-state-directory \
+  --node-bin=/absolute/path/to/node \
+  --cloudflared-bin=/absolute/private/runtime/cloudflared \
+  --create-one-billing-webhook-and-checkout
+```
+
+The [authentication guide](https://www.airwallex.com/docs/developer-tools/api/manage-api-keys) documents omitted-login semantics; a [fresh DEFAULT read](https://github.com/jojeringnax/airwallex-php-sdk/issues/42#issuecomment-6728531097) accepted the Webhook list GET. These facts do not establish registration creation, organization-only permissions, organization-wide management or Billing routing. Selected `2026-08-21` Webhook metadata still describes account/API-key authentication and no OBO. This experiment changes one management input under [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42); its fresh creation and delivery outcomes remain unverified. It neither resumes nor resolves the earlier no-ID HTTP 400 registration.
+
+Before authentication, a fresh durable composite binds `DEFAULT`, the distinct management/producer contexts, collector, optional comparison reference, pair/version and source/tool/runtime hashes. The DEFAULT transport requires selected login HTTP 201 with unique-key/native-string proof, exact Sandbox Host and fixed header roles; it rejects account/OBO/organization selectors and Payments producer capability. The original ACCOUNT profile retains its existing behavior. Registration request bytes and target hashes are durable before the once-only create. Its returned native ID, exact configuration and secret must be durably retained and freshly verified before producer writes.
+
+The existing raw receiver, signed-event owner/version/freshness gates, once-only Checkout cancellation and independent registration deletion remain unchanged. DEFAULT event labels use `configured_reference`, without interpreting that reference as the management token's owner. Missing owner/version agreement remains pending even when the resource pair and MAC match. Unknown registration identity or failed persistence prevents producer writes and guessed deletion; ambiguous mutations retain reconciliation. There is no old-ledger/ID/URL input, list lookup, adoption, callback action or replay.
+
+Provisional [decision #91](https://github.com/jojeringnax/airwallex-php-sdk/issues/91) covers possible unrelated concurrent organization or account Sandbox events of these two names before local filtering. Resource client secrets and signing headers may therefore transit Cloudflare; retention and region remain uncontrolled. This delegated provisional choice is not human approval or a provider-scope assertion. The experiment makes no browser, instrument, payment or financial-completion request. Deterministic DEFAULT cases join the existing Billing/transport/CLI fixtures; actual execution remains a separate fresh validation.
+
 ## Billing catalogue writes
 
 Run the explicit organization-only catalogue scenario after read/authentication checks:

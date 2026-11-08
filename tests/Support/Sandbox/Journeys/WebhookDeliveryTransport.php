@@ -16,7 +16,7 @@ use Psr\Http\Message\ResponseInterface;
 use SensitiveParameter;
 use Throwable;
 
-/** A genuinely streaming default, allowing only this run's account Webhook and unconfirmed Intent operations. */
+/** Fixed isolated management and existing account Intent operations, with a genuinely streaming default. */
 final class WebhookDeliveryTransport implements ClientInterface
 {
     private readonly ClientInterface $http;
@@ -38,7 +38,11 @@ final class WebhookDeliveryTransport implements ClientInterface
         ?Closure $clock = null,
         ?float $overallDeadline = null,
         private readonly bool $managementOnly = false,
+        private readonly WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
     ) {
+        if ($managementProfile === WebhookManagementProfile::DefaultLogin && !$managementOnly) {
+            throw new ProtocolException('Default management cannot grant producer authority.');
+        }
         $this->http = $http ?? new Client([
             'handler' => new StreamHandler(), 'stream' => true, 'read_timeout' => 5,
             'timeout' => 30, 'connect_timeout' => 10, 'verify' => true,
@@ -48,6 +52,13 @@ final class WebhookDeliveryTransport implements ClientInterface
         $this->overallDeadline = $overallDeadline ?? ($this->clock)() + 300;
         if (!is_finite($this->overallDeadline)) {
             throw new ProtocolException('The delivery probe requires a finite elapsed deadline.');
+        }
+    }
+
+    public function assertManagementProfile(WebhookManagementProfile $profile): void
+    {
+        if ($profile !== $this->managementProfile) {
+            throw new ProtocolException('Webhook management profile does not match its isolated transport.');
         }
     }
 
@@ -111,12 +122,16 @@ final class WebhookDeliveryTransport implements ClientInterface
             || $uri->getUserInfo() !== '' || $uri->getQuery() !== '' || $uri->getFragment() !== ''
             || $request->hasHeader('x-on-behalf-of') || $request->hasHeader('Cookie') || $request->hasHeader('Referer')
             || $request->getHeaderLine('x-api-version') !== '2026-08-21'
-            || ($login && $request->getHeaderLine('x-login-as') !== $this->accountId)
+            || ($login && ($this->managementProfile === WebhookManagementProfile::Account
+                ? $request->getHeaderLine('x-login-as') !== $this->accountId : $request->hasHeader('x-login-as')))
             || (!$login && ($request->hasHeader('x-login-as') || $request->hasHeader('x-api-key')
                 || $request->hasHeader('x-client-id')))
             || (($read || $delete || $login) && $request->getBody()->getSize() !== 0)
         ) {
             throw new ProtocolException('Webhook delivery requires its fixed account-owned Sandbox operations.');
+        }
+        if ($this->managementProfile === WebhookManagementProfile::DefaultLogin) {
+            $this->defaultRequest($request, $login, $create);
         }
         $key = $method . ' ' . $path;
         $limit = $login ? 2 : ($read ? ($path === $this->webhookPath ? 3 : 12) : 1);
@@ -157,6 +172,12 @@ final class WebhookDeliveryTransport implements ClientInterface
                     throw new ProtocolException('The private response exceeded its observation boundary.');
                 }
                 if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
+                    if (
+                        $login && $this->managementProfile === WebhookManagementProfile::DefaultLogin
+                        && $response->getStatusCode() !== 201
+                    ) {
+                        throw new ProtocolException('Default management login requires the selected success status.');
+                    }
                     $native = WebhookDeliveryApi::assertUnambiguousObject($body);
                     if ($login) {
                         WebhookDeliveryApi::assertStringFields($native, ['token', 'expires_at']);
@@ -181,6 +202,70 @@ final class WebhookDeliveryTransport implements ClientInterface
             return $bounded;
         } catch (Throwable) {
             throw new ProtocolException('Webhook delivery response could not be safely observed.');
+        }
+    }
+
+    private function defaultRequest(#[SensitiveParameter] RequestInterface $request, bool $login, bool $create): void
+    {
+        $allowed = ['host', 'accept', 'content-type', 'x-api-version',
+            ...($login ? ['x-client-id', 'x-api-key'] : ['authorization'])];
+        foreach (array_keys($request->getHeaders()) as $name) {
+            if (!in_array(strtolower($name), $allowed, true) || count($request->getHeader($name)) !== 1) {
+                throw new ProtocolException('Default management rejects alternate authentication or context headers.');
+            }
+        }
+        if (
+            $request->getHeaderLine('Host') !== 'api.sandbox.airwallex.com'
+            || $request->getHeaderLine('Accept') !== 'application/json'
+            || ($request->hasHeader('Content-Type') && $request->getHeaderLine('Content-Type') !== 'application/json')
+            || ($login && ($request->getHeaderLine('x-client-id') === ''
+                || $request->getHeaderLine('x-api-key') === ''))
+            || (!$login && preg_match('/^Bearer [^\x00-\x20\x7f]+$/D', $request->getHeaderLine('Authorization')) !== 1)
+        ) {
+            throw new ProtocolException('Default management requires its fixed credential and bearer roles.');
+        }
+        if (!$create) {
+            return;
+        }
+        $size = $request->getBody()->getSize();
+        if ($size === null || $size <= 0 || $size > 65536) {
+            throw new ProtocolException('The fresh registration body is outside its fixed boundary.');
+        }
+        $stream = $request->getBody();
+        if (!$stream->isSeekable()) {
+            throw new ProtocolException('The fresh registration requires a bounded seekable body.');
+        }
+        $position = $stream->tell();
+        try {
+            $stream->rewind();
+            $raw = $stream->read($size + 1);
+            if (strlen($raw) !== $size || !$stream->eof()) {
+                throw new ProtocolException('The fresh registration body did not match its bounded length.');
+            }
+            $body = WebhookDeliveryApi::assertUnambiguousObject($raw);
+        } finally {
+            $stream->seek($position);
+        }
+        $keys = array_keys(get_object_vars($body));
+        sort($keys);
+        $events = $body->events ?? null;
+        if (
+            !is_array($events) || !array_is_list($events) || count($events) !== 2
+            || !is_string($events[0]) || !is_string($events[1])
+        ) {
+            throw new ProtocolException('Default management requires the selected Billing event pair.');
+        }
+        sort($events, SORT_STRING);
+        $expected = WebhookDeliveryEvents::BillingCheckout->names();
+        sort($expected, SORT_STRING);
+        if (
+            $keys !== ['events', 'request_id', 'url', 'version'] || $events !== $expected
+            || !is_string($body->url ?? null) || !WebhookDeliveryApi::destination($body->url)
+            || ($body->version ?? null) !== '2026-08-21' || !is_string($body->request_id ?? null)
+            || $body->request_id === '' || strlen($body->request_id) > 50
+            || preg_match('/[\x00-\x20\x7f]/', $body->request_id) === 1
+        ) {
+            throw new ProtocolException('Default management cannot broaden the fresh registration contract.');
         }
     }
 

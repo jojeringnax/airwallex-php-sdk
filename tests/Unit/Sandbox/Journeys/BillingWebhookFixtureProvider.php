@@ -27,6 +27,11 @@ final class BillingWebhookFixtureProvider implements ClientInterface
     /** @var array<string,mixed> */
     private array $checkout = [];
     private bool $deleted = false;
+    private int $defaultLogins = 0;
+
+    public function __construct(private readonly bool $defaultManagement = false)
+    {
+    }
 
     public function sendRequest(RequestInterface $request): ResponseInterface
     {
@@ -45,9 +50,19 @@ final class BillingWebhookFixtureProvider implements ClientInterface
             $data[$key] = $value;
         }
         if ($path === '/api/v1/authentication/login') {
-            return self::json(['token' => $request->hasHeader('x-login-as')
-                ? 'SYNTHETIC_PRIVATE_ACCOUNT_TOKEN' : 'SYNTHETIC_PRIVATE_ORG_TOKEN',
-                'expires_at' => '2099-01-01T00:00:00Z']);
+            $token = $request->hasHeader('x-login-as') ? 'SYNTHETIC_PRIVATE_ACCOUNT_TOKEN'
+                : ($this->defaultManagement && ++$this->defaultLogins === 1
+                    ? 'SYNTHETIC_PRIVATE_DEFAULT_TOKEN' : 'SYNTHETIC_PRIVATE_ORG_TOKEN');
+            return self::json(['token' => $token,
+                'expires_at' => '2099-01-01T00:00:00Z'], $this->defaultManagement ? 201 : 200);
+        }
+        if ($this->defaultManagement) {
+            $expected = $path === '/api/v1/account' ? 'SYNTHETIC_PRIVATE_ACCOUNT_TOKEN'
+                : (str_starts_with($path, '/api/v1/webhooks/')
+                    ? 'SYNTHETIC_PRIVATE_DEFAULT_TOKEN' : 'SYNTHETIC_PRIVATE_ORG_TOKEN');
+            if ($request->getHeaderLine('Authorization') !== 'Bearer ' . $expected) {
+                throw new RuntimeException('Synthetic isolated token role did not match.');
+            }
         }
         if ($path === '/api/v1/account') {
             return self::json(['id' => 'SYNTHETIC_PRIVATE_ACCOUNT',
