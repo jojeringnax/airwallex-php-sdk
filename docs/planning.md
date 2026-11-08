@@ -16,8 +16,6 @@ The initial release covers both subscription billing and standalone Payments ([i
 - Standalone Payments: one-time payments, saving payment methods, subsequent charges using saved methods, authorization and capture, payment cancellation, payment status retrieval, and refunds.
 - Connected-account support remains an accepted initial requirement. Verify applicability and account context independently for each Billing and Payments operation.
 
-This is accepted product scope, not a claim that every operation or combination is available through Airwallex. Exact endpoints, lifecycle semantics, payment methods, countries, currencies, account eligibility, API versions and consumer interfaces still require contract review. Discounts/coupons, tax and usage-based billing are deferred beyond the initial release so the initial work can focus on the accepted subscription and payment journeys. Other capabilities not listed above are not implicitly included by the phrase “all payments.”
-
 ### Capability decisions
 
 | Capability | Initial release decision |
