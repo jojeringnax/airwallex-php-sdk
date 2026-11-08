@@ -275,6 +275,8 @@ A [fresh lifecycle diagnostic](https://github.com/jojeringnax/airwallex-php-sdk/
 
 The earlier drain-run HTTP-200 `invalid_response` observation remains unclassified: it was evaluated by the old SDK-derived `ACTIVE` guard and supplies no evidence of its actual gateway state. Correcting the guard to the pinned browser contract does not retrospectively classify that response.
 
+A [fresh corrected-gateway run](https://github.com/jojeringnax/airwallex-php-sdk/issues/42#issuecomment-6726782997), source `da1b2da3d8952952f007ded15a7d25822a62b479`, matched and delivered Checkout status HTTP 200/REQUESTED and an empty verified-Consent list with explicit `has_more=false`; status poison stayed false and no normal-read failure occurred. The original frame remained attached at the unchanged capture; all scoped uniqueness/visibility/enabled assertions were false, without an exact match-count claim. Customer/country/method configuration had zero admitted sends; their denied-family counts identify no caller, timing or field-absence cause. Own Checkout cancellation passed, credentials stayed unchanged and stderr was empty. This establishes those two scoped reads, with setup readiness, financial routing and source/instrument linkage still unverified. The separately researched parent-country caller and nonfinancial card-choice candidate grant no new authority in this mode.
+
 ## Manual Billing lifecycle
 
 Run the separate organization scenario with the same external configuration and private state-directory rules:
