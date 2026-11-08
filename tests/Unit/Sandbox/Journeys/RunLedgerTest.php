@@ -88,6 +88,25 @@ final class RunLedgerTest extends TestCase
         serialize($ledger);
     }
 
+    public function testObservedItemIdentitiesAreDurablePrivateAndCannotReplaceAnEarlierPhase(): void
+    {
+        $ledger = RunLedger::create(self::CONTEXT, $this->directory);
+        $references = ['subscription_id' => 'fixture-private-subscription', 'item_id' => 'fixture-private-item'];
+        $ledger->recordObservation('before_quantity', $references, self::CONTEXT);
+        $state = json_decode((string) file_get_contents(
+            $this->directory . '/' . $ledger->runId() . '/ledger.json',
+        ), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($state);
+        self::assertIsArray($state['observations']);
+        self::assertSame($references, $state['observations']['before_quantity']);
+        self::assertStringNotContainsString(
+            'fixture-private',
+            json_encode($ledger->evidence(), JSON_THROW_ON_ERROR) . print_r($ledger, true)
+        );
+        $this->expectException(RuntimeException::class);
+        $ledger->recordObservation('before_quantity', ['item_id' => 'replacement'], self::CONTEXT);
+    }
+
     public function testUrlStateSourcesAreRejected(): void
     {
         $this->expectException(RuntimeException::class);

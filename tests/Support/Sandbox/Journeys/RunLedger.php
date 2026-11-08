@@ -15,7 +15,7 @@ final class RunLedger
      * @var array{run_id:string,api_version:string,context_fingerprint:string,
      * source:array{base_commit:string,sdk_digest:string,harness_digest:string},
      * actions:array<string,array{request_id:string,body_hash:string}>,
-     * resources:array<string,list<string>>}
+     * resources:array<string,list<string>>,observations:array<string,array<string,string>>}
      */
     private array $state;
     private bool $healthy = true;
@@ -30,7 +30,7 @@ final class RunLedger
     ) {
         $this->state = [
             'run_id' => $runId, 'api_version' => '2026-08-21', 'context_fingerprint' => $contextFingerprint,
-            'source' => SourceEvidence::capture(), 'actions' => [], 'resources' => [],
+            'source' => SourceEvidence::capture(), 'actions' => [], 'resources' => [], 'observations' => [],
         ];
         $this->persist();
     }
@@ -122,6 +122,31 @@ final class RunLedger
             $this->state['resources'][$kind][] = $id;
             $this->persist();
         }
+    }
+
+    /** @param array<string,string> $references Private observed identities; never included in evidence(). */
+    public function recordObservation(
+        string $phase,
+        #[SensitiveParameter] array $references,
+        string $contextFingerprint,
+    ): void {
+        $this->assertContext($contextFingerprint);
+        if ($phase === '' || $references === []) {
+            throw new RuntimeException('An observation requires a phase and private references.');
+        }
+        foreach ($references as $reference) {
+            if ($reference === '') {
+                throw new RuntimeException('An observed reference is missing.');
+            }
+        }
+        if (isset($this->state['observations'][$phase])) {
+            if ($this->state['observations'][$phase] !== $references) {
+                throw new RuntimeException('An observation phase cannot replace its original private references.');
+            }
+            return;
+        }
+        $this->state['observations'][$phase] = $references;
+        $this->persist();
     }
 
     /** @return list<string> */
