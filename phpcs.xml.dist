@@ -4,6 +4,7 @@
     <file>src</file>
     <file>tests</file>
     <file>tools</file>
+    <file>examples</file>
     <arg name="extensions" value="php"/>
     <arg name="colors"/>
     <rule ref="PSR12"/>

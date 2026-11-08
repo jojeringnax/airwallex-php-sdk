@@ -1,0 +1,326 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/payment_sources",
+  "reviewed": "2026-11-08",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "f3dcbacb0453ce7a4808b6e97305dac6",
+  "endpoints": {
+    "createPaymentSource": {
+      "apiPath": "/api/v1/billing/payment_sources/create",
+      "method": "post",
+      "description": "Creates a **PaymentSource** using a linked payment method from a supported **Payment Service Provider (PSP)**.\nWhen **Airwallex Payments** is used as the PSP, you can create a **PaymentSource** with a **PaymentMethod** authorized for **merchant-initiated payments**. This authorization can be obtained in two ways:\n- **Indirectly**, by creating a **PaymentIntent** with `payment_consent.next_triggered_by=merchant`, and `payment_consent.merchant_trigger_reason=unscheduled`.\n- **Directly**, by creating a **PaymentConsent** with `next_triggered_by=merchant`, and `merchant_trigger_reason=unscheduled`.\n\nFor more details, refer to the [PaymentIntents API](/docs/api/payments/payment_intents) and [PaymentConsents API](/docs/api/payments/payment_consents) documentation.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "billing_customer_id",
+                "external_id",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "billing_customer_id": {
+                  "type": "string",
+                  "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) that this Payment Source belongs to."
+                },
+                "external_id": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "ID of the [Payment Method](/docs/api/payments/payment_methods) associated with the Payment Source."
+                },
+                "linked_payment_account_id": {
+                  "type": "string",
+                  "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section. Required if you have more than 1 payment account in your organisation."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Billing_PaymentSource"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.payment_source:write",
+          "group": "Billing",
+          "resource_name": "Payment Sources",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrievePaymentSource": {
+      "apiPath": "/api/v1/billing/payment_sources/{id}",
+      "method": "get",
+      "description": "Retrieves the details of a Payment Source.",
+      "parameters": [
+        {
+          "description": "ID of the Payment Source object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Billing_PaymentSource"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.payment_source:read",
+          "group": "Billing",
+          "resource_name": "Payment Sources",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listPaymentSources": {
+      "apiPath": "/api/v1/billing/payment_sources",
+      "method": "get",
+      "description": "Retrieves a list of Payment Sources based on the query parameters.",
+      "parameters": [
+        {
+          "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) that the Payment Source belongs to.",
+          "in": "query",
+          "name": "billing_customer_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "ID of the linked payment account that this Payment Source is created with. You can find this in the \"Account ID\" section under Account Details in the Settings on the Airwallex Webapp.",
+          "in": "query",
+          "name": "linked_payment_account_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The corresponding Payment Source ID on the payment provider's side. For Airwallex, this is the Payment Method ID.",
+          "in": "query",
+          "name": "external_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The start time of created_at in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end time of created_at in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of Payment Sources to be listed per page. Defaults to `20`.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponsePaymentSource"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.payment_source:read",
+          "group": "Billing",
+          "resource_name": "Payment Sources",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    }
+  },
+  "schemas": {
+    "Billing_PaymentSource": {
+      "required": [
+        "billing_customer_id",
+        "created_at",
+        "external_id",
+        "id",
+        "linked_payment_account_id",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "billing_customer_id": {
+          "type": "string",
+          "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) that this Payment Source belongs to."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when this Payment Source was created."
+        },
+        "external_id": {
+          "type": "string",
+          "description": "ID of the [Payment Method](/docs/api/payments/payment_methods) associated with the Payment Source."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Payment Source object."
+        },
+        "linked_payment_account_id": {
+          "type": "string",
+          "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when this Payment Source was last updated."
+        }
+      }
+    },
+    "CursorPaginationClientApiResponsePaymentSource": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/Billing_PaymentSource"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  }
+}

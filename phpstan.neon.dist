@@ -5,4 +5,5 @@ parameters:
         - src
         - tests
         - tools
+        - examples
     tmpDir: .phpstan.cache

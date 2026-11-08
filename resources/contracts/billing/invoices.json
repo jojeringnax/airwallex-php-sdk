@@ -1,0 +1,1401 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/invoices",
+  "reviewed": "2026-11-08",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "f3dcbacb0453ce7a4808b6e97305dac6",
+  "endpoints": {
+    "retrieveInvoice": {
+      "apiPath": "/api/v1/billing/invoices/{id}",
+      "method": "get",
+      "description": "Retrieves the details of an Invoice.",
+      "parameters": [
+        {
+          "description": "ID of the Invoice object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:read",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listInvoices": {
+      "apiPath": "/api/v1/billing/invoices",
+      "method": "get",
+      "description": "Retrieves a list of Invoices based on the query parameters.",
+      "parameters": [
+        {
+          "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) who the invoice is addressed to.",
+          "in": "query",
+          "name": "billing_customer_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "ID of the [Subscription](/docs/api/billing/subscriptions) which generated this invoice, if any.",
+          "in": "query",
+          "name": "subscription_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Status of the invoice. Once the invoice is created, it will be defaulted to `DRAFT`, and once the invoice is finalized, it will turn to `FINALIZED`. When an invoice is voided, it will become `VOIDED`.",
+          "in": "query",
+          "name": "status",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Status of the payment for the invoice, one of `UNPAID` and `PAID`.",
+          "in": "query",
+          "name": "payment_status",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The start date of `created_at` in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end date of `created_at` in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of Invoices per page. Defaults to `20`.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseInvoice"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:read",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "invoices_retrieveLineItem": {
+      "apiPath": "/api/v1/billing/invoices/{id}/line_items/{item_id}",
+      "method": "get",
+      "description": "Retrieves the details of a line item on an [Invoice](/docs/api/billing/invoices).",
+      "parameters": [
+        {
+          "description": "ID of the invoice object that this Invoice Line Item belongs to.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "ID of the Invoice Line Item object.",
+          "in": "path",
+          "name": "item_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceItem"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:read",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "invoices_listLineItems": {
+      "apiPath": "/api/v1/billing/invoices/{id}/line_items",
+      "method": "get",
+      "description": "Retrieves a list of Invoice Line Items based on the query parameters.",
+      "parameters": [
+        {
+          "description": "ID of the Invoice object that the Invoice Line Items belong to.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of invoiceItems per page. Defaults to `20`.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseInvoiceItem"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:read",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    }
+  },
+  "schemas": {
+    "Invoice": {
+      "required": [
+        "amount_due",
+        "applied_discounts",
+        "automatic_tax_status",
+        "billing_customer_id",
+        "created_at",
+        "currency",
+        "enable_automatic_tax",
+        "id",
+        "paid_out_of_band",
+        "payment_status",
+        "status",
+        "total_amount",
+        "total_discount_amounts",
+        "total_tax_amount",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "amount_due": {
+          "type": "number",
+          "description": "The total amount remaining to be paid on this invoice. When the amount due reaches 0, the invoice payment status transitions to `PAID`."
+        },
+        "applied_discounts": {
+          "type": "array",
+          "description": "List of discounts that are applied to the invoice. Discounts of invoice line items are applied before invoice discounts.",
+          "items": {
+            "$ref": "#/components/schemas/DiscountResponse"
+          }
+        },
+        "automatic_tax_status": {
+          "type": "string",
+          "description": "The automatic tax status of this invoice.",
+          "enum": [
+            "APPLIED",
+            "LOCATION_NOT_SUPPORTED",
+            "LOCATION_NOT_REGISTERED_BY_MERCHANT",
+            "ADDRESS_INCOMPLETE",
+            "DISABLED"
+          ],
+          "x-enumDescriptions": {
+            "APPLIED": "The automatic tax is applied.",
+            "LOCATION_NOT_SUPPORTED": "Automatic tax calculation isn't supported in the customer's location.",
+            "LOCATION_NOT_REGISTERED_BY_MERCHANT": "The merchant isn't registered to collect tax in the customer's location.",
+            "ADDRESS_INCOMPLETE": "The customer address was insufficient or invalid to determine the correct tax.",
+            "DISABLED": "The automatic tax is disabled."
+          }
+        },
+        "bank_transfer_instructions": {
+          "$ref": "#/components/schemas/InvoiceBankTransferInstructions",
+          "description": "Bank transfer instructions for paying this Invoice. Included when bank transfer is enabled, the Invoice currency is supported, and the Billing Customer is eligible."
+        },
+        "billing_customer_id": {
+          "type": "string",
+          "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) who this Invoice is issued to."
+        },
+        "collection_method": {
+          "type": "string",
+          "description": "Specify how payment is collected, one of `AUTO_CHARGE`, `CHARGE_ON_CHECKOUT` or `OUT_OF_BAND`."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when this invoice was created."
+        },
+        "credit_note_amount_after_payment": {
+          "type": "number",
+          "description": "The total amount of all credit notes issued for this invoice after invoice payment."
+        },
+        "credit_note_amount_before_payment": {
+          "type": "number",
+          "description": "The total amount of all credit notes issued for this invoice before invoice payment."
+        },
+        "currency": {
+          "type": "string",
+          "description": "The currency of the Invoice in 3-letter ISO-4217 format."
+        },
+        "days_until_due": {
+          "type": "integer",
+          "description": "Number of days from invoice finalization until payment is due.",
+          "format": "int32"
+        },
+        "default_tax_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number",
+          "description": "The tax percent between `0` and `100` to be applied to each Line Item's price. The tax will be exclusive."
+        },
+        "due_at": {
+          "type": "string",
+          "description": "Due date set by the merchant for this invoice, if any."
+        },
+        "e_invoicing_document_id": {
+          "type": "string",
+          "description": "The ID of the [E-Invoicing Document](/docs/api/billing/e-invoicing_documents) associated with this Invoice. `null` when no E-Invoicing Document has been created."
+        },
+        "enable_automatic_tax": {
+          "type": "boolean",
+          "description": "Whether automatic tax is enabled for this invoice. When enabled, the system attempts to calculate taxes automatically."
+        },
+        "finalized_at": {
+          "type": "string",
+          "description": "The time that the invoice draft was finalized."
+        },
+        "footer": {
+          "type": "string",
+          "description": "Additional payment instructions or supplementary information that merchants can share with their customers. Displayed in the Invoice PDF."
+        },
+        "hosted_url": {
+          "type": "string",
+          "description": "URL of the hosted page where customers can view and pay this invoice. The URL is valid for 35 days."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Invoice object."
+        },
+        "last_payment_attempt_at": {
+          "type": "string",
+          "description": "Time of last payment attempt. Only applicable when `subscription_id` is not `null`."
+        },
+        "legal_entity_id": {
+          "type": "string",
+          "description": "ID of the legal entity to be used as billing entity. You can find this ID in the Airwallex web app > Settings."
+        },
+        "linked_payment_account_id": {
+          "type": "string",
+          "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section."
+        },
+        "memo": {
+          "type": "string",
+          "description": "String used to describe the object. Referenced as memo or invoice note in Webapp."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "next_payment_attempt_at": {
+          "type": "string",
+          "description": "Time of next payment attempt. Only applicable when `subscription_id` is not `null`."
+        },
+        "number": {
+          "type": "string",
+          "description": "A unique, identifying string that appears on emails sent to the customer for this invoice."
+        },
+        "paid_at": {
+          "type": "string",
+          "description": "The time that the invoice was paid."
+        },
+        "paid_out_of_band": {
+          "type": "boolean",
+          "description": "Returns `true` if the invoice was manually marked paid, returns `false` if the invoice hasn't been paid yet or was paid on Airwallex."
+        },
+        "past_payment_attempt_count": {
+          "type": "integer",
+          "description": "The number of payment attempts made on this invoice so far. Only applicable when `subscription_id` is not `null`.",
+          "format": "int32"
+        },
+        "payment_options": {
+          "$ref": "#/components/schemas/InvoicePaymentOptions",
+          "description": "Payment settings of this Invoice. Only applicable if collection_method is `CHARGE_ON_CHECKOUT`."
+        },
+        "payment_source_id": {
+          "type": "string",
+          "description": "ID of the [Payment Source](/docs/api/billing/payment_sources) to pay for the invoice.  \nIf `collection_method` is `CHARGE_ON_CHECKOUT`, a Payment Source is automatically created during invoice payment when `payment_options.payment_method_save.next_triggered_by` is `MERCHANT` and `payment_options.payment_method_save.mode` is `ENABLED`, or when it is `COLLECT_CONSENT` and the customer has given consent."
+        },
+        "payment_status": {
+          "type": "string",
+          "description": "Status of the payment for the invoice, one of `UNPAID` and `PAID`."
+        },
+        "pdf_url": {
+          "type": "string",
+          "description": "The link to download the PDF for the invoice. The URL will be valid for 35 days. If the invoice has not been finalized yet, this will be `null`."
+        },
+        "remaining_payment_attempt_count": {
+          "type": "integer",
+          "description": "The number of the remaining payment attempts. If `0`, no more payment attempts would be triggered automatically for this invoice. Only applicable when `subscription_id` is not `null`.",
+          "format": "int32"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status of the invoice. Once the invoice is created, it will be defaulted to `DRAFT`, and once the invoice is finalized, it will turn to `FINALIZED`. When an invoice is voided, it will become `VOIDED`."
+        },
+        "subscription_id": {
+          "type": "string",
+          "description": "ID of the [Subscription](/docs/api/billing/subscriptions) that generated this invoice, if any."
+        },
+        "ui_options": {
+          "type": "object",
+          "description": "UI configuration for the digital invoice page.",
+          "properties": {
+            "theme_id": {
+              "type": "string",
+              "description": "ID of the theme to apply to this invoice, overriding the theme configured for its legal entity."
+            }
+          }
+        },
+        "total_amount": {
+          "type": "number",
+          "description": "The total amount of the invoice, including tax and discount if applicable."
+        },
+        "total_discount_amounts": {
+          "type": "array",
+          "description": " The aggregate amounts calculated per discount across all Invoice Line Items and the Invoice.",
+          "items": {
+            "$ref": "#/components/schemas/DiscountAmount"
+          }
+        },
+        "total_tax_amount": {
+          "type": "number",
+          "description": "The aggregate amounts calculated for all line items."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when this invoice was last updated."
+        },
+        "voided_at": {
+          "type": "string",
+          "description": "The time that the invoice was voided."
+        }
+      }
+    },
+    "DiscountResponse": {
+      "required": [
+        "applied_to",
+        "applied_to_id",
+        "billing_customer_id",
+        "created_at",
+        "discount_model",
+        "duration_type",
+        "id",
+        "name",
+        "source",
+        "starts_at",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "amount_off": {
+          "type": "number",
+          "description": "The fixed amount to deduct when `discount_model` is `FLAT`."
+        },
+        "applied_to": {
+          "type": "string",
+          "description": "Specifies the type of object this discount applies to. Possible values: \n- `SUBSCRIPTION`: Applies to an entire subscription. \n- `SUBSCRIPTION_ITEM`: Applies to a specific item within a subscription. \n- `INVOICE`: Applies to an entire invoice. \n- `INVOICE_LINE_ITEM`: Applies to a specific line item on an invoice."
+        },
+        "applied_to_id": {
+          "type": "string",
+          "description": "ID of the specific target object the discount is applied to. Must correspond to the object type defined in applied_to."
+        },
+        "billing_customer_id": {
+          "type": "string",
+          "description": "The ID of the billing customer to whom the coupon is applied."
+        },
+        "checkout_id": {
+          "type": "string",
+          "description": "The ID of the Checkout where this discount was redeemed, if applicable."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when the Discount was created.",
+          "format": "date-time"
+        },
+        "currency": {
+          "type": "string",
+          "description": "The currency of `amount_off` when `discount_model` is `FLAT`."
+        },
+        "discount_model": {
+          "type": "string",
+          "description": "Specified how to calculate the discount amount when applied, one of \n- `FLAT`: fixed amount off.\n- `PERCENTAGE`: percentage off."
+        },
+        "duration": {
+          "$ref": "#/components/schemas/CouponDuration",
+          "description": "The duration of the discount to apply, when `duration_type` is `CUSTOM`. `null` if `duration_type` is `ONCE` or `INDEFINITELY`."
+        },
+        "duration_type": {
+          "type": "string",
+          "description": "Determines how long the coupon's discount remains active after being applied. Possible values: \n- `ONCE`: Applies only to the first charge of a subscription or a one-off invoice.\n- `CUSTOM`: Applies to all charges within a specified number of billing cycles, as defined by duration.\n- `INDEFINITELY`: Applies to all future charges for the subscription until it is removed."
+        },
+        "ends_at": {
+          "type": "string",
+          "description": "The timestamp when the discount expires. Present only when the associated coupon's duration_type is CUSTOM."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Discount object."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the discount. For discounts created from a coupon, defaults to the coupon name at creation time."
+        },
+        "percentage_off": {
+          "type": "number",
+          "description": "The percentage between 0 to 100 to be applied to deduct when `discount_model` is `PERCENTAGE`."
+        },
+        "source": {
+          "type": "string",
+          "description": "Source of the Discount. Possible values: \n- `COUPON`: the discount is applied through a coupon."
+        },
+        "source_id": {
+          "type": "string",
+          "description": "ID of the creating source, e.g. is the ID of the coupon if source = COUPON."
+        },
+        "starts_at": {
+          "type": "string",
+          "description": "Time when the discount takes effect. For discounts applied to a subscription or subscription item, this corresponds to the start date of the first billing period."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when the Discount was updated.",
+          "format": "date-time"
+        }
+      }
+    },
+    "CouponDuration": {
+      "required": [
+        "period",
+        "period_unit"
+      ],
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "The number of period units.",
+          "format": "int32",
+          "minimum": 1
+        },
+        "period_unit": {
+          "type": "string",
+          "description": "Specifies duration. One of `DAY`, `WEEK`, `MONTH`, `YEAR`.",
+          "pattern": "^(DAY|WEEK|MONTH|YEAR)$"
+        }
+      },
+      "description": "The duration of the coupon to apply, when `duration_type`is `CUSTOM`. `null` if `duration_type` is `ONCE` or `INDEFINITELY`."
+    },
+    "InvoiceBankTransferInstructions": {
+      "required": [
+        "account_name",
+        "currency"
+      ],
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "description": "Currency of the receiving account (3-letter ISO-4217 code)."
+        },
+        "account_name": {
+          "type": "string",
+          "description": "Name of the account holder receiving the transfer."
+        },
+        "account_number": {
+          "type": "string",
+          "description": "Bank account number."
+        },
+        "account_category": {
+          "type": "string",
+          "description": "Category of the receiving bank account. One of `CHECKING`, `SAVINGS`, or `BUSINESS`.",
+          "enum": [
+            "CHECKING",
+            "SAVINGS",
+            "BUSINESS"
+          ]
+        },
+        "bank_name": {
+          "type": "string",
+          "description": "Name of the financial institution in which the receiving account is domiciled."
+        },
+        "iban": {
+          "type": "string",
+          "description": "IBAN number."
+        },
+        "swift_code": {
+          "type": "string",
+          "description": "Bank SWIFT or BIC code."
+        },
+        "routing_number": {
+          "type": "string",
+          "description": "Bank routing number. Applicable only to accounts in the United States."
+        },
+        "sort_code": {
+          "type": "string",
+          "description": "Bank sort code. Applicable only to accounts in the United Kingdom."
+        },
+        "bsb_number": {
+          "type": "string",
+          "description": "Bank State Branch (BSB) number. Applicable only to accounts in Australia."
+        },
+        "bank_code": {
+          "type": "string",
+          "description": "Code identifying the bank. Applicable in markets including Singapore and Hong Kong."
+        },
+        "branch_code": {
+          "type": "string",
+          "description": "Code identifying the bank branch. Used together with `bank_code`."
+        },
+        "transit_number": {
+          "type": "string",
+          "description": "Bank transit number. Applicable only to accounts in Canada."
+        },
+        "institution_number": {
+          "type": "string",
+          "description": "Institution number identifying the bank. Applicable only to accounts in Canada."
+        },
+        "charge_type": {
+          "type": "string",
+          "description": "Indicates who bears the bank charges on the transfer. Returned only for international (SWIFT) transfers. Omitted for local transfers.\nPossible value:\n- `OUR`: The payer covers all transfer charges so the full amount is received.",
+          "enum": [
+            "OUR"
+          ]
+        },
+        "merchant_address": {
+          "required": [
+            "country_code"
+          ],
+          "type": "object",
+          "description": "The recipient's registered business address, used when making an international (SWIFT) transfer. Returned only for SWIFT transfers. Omitted for local transfers.",
+          "properties": {
+            "country_code": {
+              "type": "string",
+              "description": "Two-letter ISO 3166-1 country code of the recipient's address."
+            },
+            "state": {
+              "type": "string",
+              "description": "State, province, or region of the recipient's address."
+            },
+            "suburb": {
+              "type": "string",
+              "description": "Suburb or city of the recipient's address."
+            },
+            "postcode": {
+              "type": "string",
+              "description": "Postal or ZIP code of the recipient's address."
+            },
+            "street_address": {
+              "type": "array",
+              "description": "Street address of the recipient, given as one or more address lines.",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "reference": {
+          "type": "string",
+          "description": "Unique payment reference to include with the bank transfer to match the payment to this Invoice. Available after the Invoice is finalized."
+        }
+      }
+    },
+    "InvoicePaymentOptions": {
+      "type": "object",
+      "properties": {
+        "payment_method_save": {
+          "$ref": "#/components/schemas/InvoicePaymentMethodSave",
+          "description": "Settings for saving this payment method for future use."
+        },
+        "payment_method_types": {
+          "type": "array",
+          "description": "Specify which payment methods to display on the digital invoice page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the digital invoice page.",
+          "items": {
+            "type": "string",
+            "description": "Specify which payment methods to display on the digital invoice page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the digital invoice page."
+          }
+        }
+      },
+      "description": "Payment settings of this Invoice. Only applicable if collection_method is `CHARGE_ON_CHECKOUT`."
+    },
+    "InvoicePaymentMethodSave": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "Controls whether the payment method can be saved for future use. Possible values: `ENABLED`, `DISABLED`, or `COLLECT_CONSENT`.  \n`ENABLED`: The payment method will be saved for future use.  \n`DISABLED`: The payment method will not be saved.  \n`COLLECT_CONSENT`: The digital invoice UI asks the customer whether they want to save the payment method."
+        },
+        "next_triggered_by": {
+          "type": "string",
+          "description": "Indicates who will use the saved payment source to trigger future payments. One of `MERCHANT` or `CUSTOMER`.  \nIf `MERCHANT`, a Payment Source is created for future use. If `CUSTOMER`, the payment method is saved only with the payment provider."
+        }
+      },
+      "description": "Settings for saving this payment method for future use."
+    },
+    "DiscountAmount": {
+      "required": [
+        "amount",
+        "applied_discount_id"
+      ],
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number",
+          "description": "The amount of the applied discount."
+        },
+        "applied_discount_id": {
+          "type": "string",
+          "description": "ID of the Discount object which is applied."
+        }
+      }
+    },
+    "CursorPaginationClientApiResponseInvoice": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/Invoice"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    },
+    "InvoiceItem": {
+      "required": [
+        "amount",
+        "applied_discounts",
+        "created_at",
+        "currency",
+        "discount_amounts",
+        "id",
+        "invoice_id",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number",
+          "description": "The amount of the Invoice Line Item."
+        },
+        "applied_discounts": {
+          "type": "array",
+          "description": "List of discounts that are applied to the invoice. Discounts of invoice line items are applied before invoice discounts.",
+          "items": {
+            "$ref": "#/components/schemas/DiscountResponse"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when the price was created."
+        },
+        "currency": {
+          "type": "string",
+          "description": "The currency of the Invoice Line Item in 3-letter ISO-4217 format."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the Invoice Line Item."
+        },
+        "discount_amounts": {
+          "type": "array",
+          "description": "The amount of discount calculated per discount for this line item. The Discount applied to the invoice will be apportioned to the [DiscountAmountResponse](/docs/api/billing/invoices)s of each invoice line item.",
+          "items": {
+            "$ref": "#/components/schemas/DiscountAmount"
+          }
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Invoice Line Item object."
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "ID of the [Invoice](/docs/api/billing/invoices) object that this Invoice Line Item belongs to."
+        },
+        "label": {
+          "type": "string",
+          "description": "String to describe what this line item charges for."
+        },
+        "line_item_group_id": {
+          "type": "string",
+          "description": "The ID of the line item group this line item belongs to."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "period_ends_at": {
+          "type": "string",
+          "description": "The end of the billing period associated with this Invoice Line Item. This value is exclusive."
+        },
+        "period_starts_at": {
+          "type": "string",
+          "description": "The start of the billing period associated with this Invoice Line Item. This value is inclusive."
+        },
+        "price": {
+          "$ref": "#/components/schemas/PriceWithProduct",
+          "description": "Price subscribed by the customer. Mutually exclusive with `rate_card_item`."
+        },
+        "quantity": {
+          "type": "integer",
+          "description": "The product quantity.",
+          "format": "int32"
+        },
+        "price_tier": {
+          "$ref": "#/components/schemas/InvoiceItemPriceTier",
+          "description": "The price tier this line item belongs to. Only present for graduated or volume pricing. Mutually exclusive with `rate_card_item_tier`."
+        },
+        "rate_card_item": {
+          "$ref": "#/components/schemas/RateCardItem",
+          "description": "Rate Card Item billed to the customer. Mutually exclusive with `price`."
+        },
+        "rate_card_item_tier": {
+          "$ref": "#/components/schemas/InvoiceItemPriceTier",
+          "description": "The Rate Card Item tier this line item belongs to. Only present for graduated or volume pricing. Mutually exclusive with `price_tier`."
+        },
+        "remaining_creditable_amount": {
+          "type": "number",
+          "description": "The total amount currently available to be credited for this invoice line item, excluding tax and discount."
+        },
+        "remaining_creditable_quantity": {
+          "type": "number",
+          "description": "Defines the maximum quantity of this line item available for future credits."
+        },
+        "tax_amount": {
+          "type": "number",
+          "description": "The tax amount for this line item."
+        },
+        "tax_breakdown": {
+          "type": "array",
+          "description": "The tax breakdown details the exact taxes that apply to this line item.",
+          "items": {
+            "$ref": "#/components/schemas/TaxBreakdownItem"
+          }
+        },
+        "tax_percent": {
+          "type": "number",
+          "description": "The effective tax percent of this invoice line item."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when the price was last updated."
+        }
+      }
+    },
+    "PriceWithProduct": {
+      "required": [
+        "active",
+        "created_at",
+        "currency",
+        "id",
+        "metered",
+        "pricing_model",
+        "product",
+        "product_id",
+        "tax_included",
+        "type",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean",
+          "description": "`true` if the price is available for new purchases, `false` otherwise."
+        },
+        "billing_type": {
+          "type": "string",
+          "description": "Indicates when should the price be billed, one of \n- `IN_ADVANCE`: billed at the beginning of the billing cycle.\n- `IN_ARREARS`: billed at the end of the billing cycle."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when the price was created."
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency of the price (in 3-letter ISO-4217 format)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Price description."
+        },
+        "flat_amount": {
+          "type": "number",
+          "description": "The fixed amount to be charged. Only required when the pricing model is `FLAT`."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Price object."
+        },
+        "lot": {
+          "$ref": "#/components/schemas/PriceLot",
+          "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT` price."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "meter_id": {
+          "type": "string",
+          "description": "ID of the Meter object specifying how to calculate the usage for this price."
+        },
+        "metered": {
+          "type": "boolean",
+          "description": "Specify how to determine the quantity of the product used in each billing cycle for subscription payments. `true` if the quantity is dynamically determined during the billing cycle. The merchant should call the Ingest Usage Events API to submit usage data when the product is used. `false` if the quantity is determined when creating a subscription."
+        },
+        "pricing_model": {
+          "type": "string",
+          "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `FLAT`: a fixed price.\n- `PER_UNIT`: a fixed price per unit quantity.\n- `VOLUME`: the unit price is based on which tier the total quantity falls in.\n- `GRADUATED`: the unit price changes as the quantity increases."
+        },
+        "product": {
+          "$ref": "#/components/schemas/ProductResponse",
+          "description": "Details of the [Product](/docs/api/billing/products) object this price is associated with."
+        },
+        "product_id": {
+          "type": "string",
+          "description": "ID of the [Product](/docs/api/billing/products) object this price is associated with."
+        },
+        "recurring": {
+          "$ref": "#/components/schemas/PriceRecurring"
+        },
+        "tax_included": {
+          "type": "boolean",
+          "description": "Whether the price includes tax."
+        },
+        "tiers": {
+          "type": "array",
+          "description": "List of quantity-based pricing tiers for this price. Required when the pricing model is `VOLUME` or `GRADUATED`.",
+          "items": {
+            "$ref": "#/components/schemas/PriceTier"
+          }
+        },
+        "type": {
+          "type": "string",
+          "description": "One of `ONE_OFF` or `RECURRING` depending on whether the price is for a one-off purchase or a recurring (subscription) purchase."
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The amount to be charged per product unit. Only required when the pricing model is `PER_UNIT`."
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for the price."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when the price was last updated."
+        }
+      },
+      "description": "Price subscribed by the customer."
+    },
+    "PriceLot": {
+      "required": [
+        "rounding_mode",
+        "size"
+      ],
+      "type": "object",
+      "properties": {
+        "rounding_mode": {
+          "pattern": "^UP$",
+          "type": "string",
+          "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+        },
+        "size": {
+          "minimum": 2,
+          "type": "integer",
+          "description": "The amount of quantity that constitutes a single billable lot.",
+          "format": "int32"
+        }
+      },
+      "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT` price."
+    },
+    "ProductResponse": {
+      "required": [
+        "active",
+        "created_at",
+        "id",
+        "name",
+        "unit",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean",
+          "description": "`true` if the product is available for new purchases, `false` otherwise."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when this product was created."
+        },
+        "description": {
+          "type": "string",
+          "description": "Product description."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Product object."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "name": {
+          "type": "string",
+          "description": "Product name."
+        },
+        "tax_code": {
+          "type": "string",
+          "description": "The tax category of the product."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Product unit."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when this product was last updated."
+        }
+      },
+      "description": "Details of the [Product](/docs/api/billing/products) object this price is associated with."
+    },
+    "PriceRecurring": {
+      "required": [
+        "period",
+        "period_unit"
+      ],
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `period=2` and `period_unit=MONTH`.",
+          "format": "int32"
+        },
+        "period_unit": {
+          "type": "string",
+          "description": "Specifies billing frequency. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+        }
+      },
+      "description": "The frequency at which the price is charged. null for one-time charge."
+    },
+    "PriceTier": {
+      "required": [
+        "level"
+      ],
+      "type": "object",
+      "properties": {
+        "flat_amount": {
+          "type": "number",
+          "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "level": {
+          "type": "integer",
+          "description": "The sequential position of the tier within the price definition. Starts from 1.",
+          "format": "int32"
+        },
+        "lot": {
+          "$ref": "#/components/schemas/PriceLot",
+          "description": "Defines how quantity is grouped into billable lots. The unit_amount is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `VOLUME` and `GRADUATED` prices."
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for the tier."
+        },
+        "upper_bound": {
+          "type": "number",
+          "description": "The upper quantity limit of this tier. This tier is applicable when the quantity does not exceed the upper bound of this tier, and is greater than the upper bound of the tier below it(or `0` if this is the first tier). For the last tier, the upper bound must be left empty.",
+          "minimum": 0
+        }
+      }
+    },
+    "InvoiceItemPriceTier": {
+      "required": [
+        "level"
+      ],
+      "type": "object",
+      "properties": {
+        "flat_amount": {
+          "type": "number",
+          "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`."
+        },
+        "level": {
+          "type": "integer",
+          "description": "The sequential position of the tier within the price definition. Starts from 1.",
+          "format": "int32"
+        },
+        "lower_bound": {
+          "type": "number",
+          "description": "The lower quantity limit of this tier (inclusive). For the first tier, the lower bound is 0."
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`."
+        },
+        "upper_bound": {
+          "type": "number",
+          "description": "The upper quantity limit of this tier (exclusive). For the last tier, the upper bound is null."
+        }
+      },
+      "description": "The price tier this line item belongs to. Only present for graduated or volume pricing."
+    },
+    "RateCardItem": {
+      "required": [
+        "created_at",
+        "dimension_values",
+        "id",
+        "pricing_model",
+        "rate_card_id"
+      ],
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "description": "Time when this rate card item was created."
+        },
+        "dimension_values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A dimension value that this item applies to."
+          },
+          "description": "The dimension values this item applies to. Each key must be one of the Rate Card Version's `dimension_keys` (a subset is allowed). Any key omitted here acts as a wildcard, matching any value for that dimension; an empty object matches all usage (a catch-all)."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Rate Card Item object."
+        },
+        "lot": {
+          "$ref": "#/components/schemas/RateCardItemLot",
+          "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT`."
+        },
+        "pricing_model": {
+          "type": "string",
+          "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `PER_UNIT`: a fixed price per unit quantity.\n- `VOLUME`: the unit price is based on which tier the total quantity falls in.\n- `GRADUATED`: the unit price changes as the quantity increases."
+        },
+        "rate_card_id": {
+          "type": "string",
+          "description": "ID of the Rate Card this item belongs to."
+        },
+        "tiers": {
+          "type": "array",
+          "description": "List of quantity-based pricing tiers for this item. Only present when the pricing model is `VOLUME` or `GRADUATED`.",
+          "items": {
+            "$ref": "#/components/schemas/RateCardItemTier"
+          }
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The amount to be charged per product unit. Only present when the pricing model is `PER_UNIT`."
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for this item."
+        }
+      },
+      "description": "A Rate Card Item represents the price for one dimension combination within a Rate Card version."
+    },
+    "RateCardItemLot": {
+      "required": [
+        "rounding_mode",
+        "size"
+      ],
+      "type": "object",
+      "properties": {
+        "rounding_mode": {
+          "pattern": "^UP$",
+          "type": "string",
+          "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+        },
+        "size": {
+          "minimum": 2,
+          "type": "integer",
+          "description": "The amount of quantity that constitutes a single billable lot.",
+          "format": "int32"
+        }
+      },
+      "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT`."
+    },
+    "RateCardItemTier": {
+      "required": [
+        "level"
+      ],
+      "type": "object",
+      "properties": {
+        "flat_amount": {
+          "type": "number",
+          "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "level": {
+          "type": "integer",
+          "description": "The sequential position of the tier within the item definition. Starts from 1.",
+          "format": "int32"
+        },
+        "lot": {
+          "$ref": "#/components/schemas/RateCardItemLot",
+          "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. Only applicable for `VOLUME` and `GRADUATED`."
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for the tier."
+        },
+        "upper_bound": {
+          "type": "number",
+          "description": "The upper quantity limit of this tier. For the last tier, the upper bound must be left empty.",
+          "minimum": 0
+        }
+      },
+      "description": "A quantity-based pricing tier for a Rate Card Item."
+    },
+    "TaxBreakdownItem": {
+      "required": [
+        "name",
+        "tax_amount",
+        "tax_percent",
+        "taxable_amount"
+      ],
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The display name of this tax component."
+        },
+        "tax_amount": {
+          "type": "number",
+          "description": "The amount of tax charged for this component."
+        },
+        "tax_percent": {
+          "type": "number",
+          "description": "The tax percent applied for this component."
+        },
+        "taxable_amount": {
+          "type": "number",
+          "description": "The portion of the subtotal that this tax component applies to."
+        }
+      }
+    },
+    "CursorPaginationClientApiResponseInvoiceItem": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/InvoiceItem"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  }
+}

@@ -55,7 +55,7 @@ For recovery, the [API inventory](api-contracts.md#payment-recovery-conflict) re
 
 ## Delivery and evidence gates
 
-This is a documentation contract review, not a sandbox validation result. There are no executable SDK interfaces yet. Before claiming integration support, use explicitly configured sandbox credentials and sanitized fixtures; no live financial operations are required.
+This reference records contract boundaries, not a sandbox validation result. Executable Billing resource interfaces and deterministic examples are documented in [Billing resources](billing-resources.md). Before claiming integration support, use explicitly configured sandbox credentials and sanitized fixtures; no live financial operations are required.
 
 | Owning work | Required result / validation |
 | --- | --- |

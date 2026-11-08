@@ -1,0 +1,578 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/billing_customers",
+  "reviewed": "2026-11-08",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "f3dcbacb0453ce7a4808b6e97305dac6",
+  "endpoints": {
+    "createBillingCustomer": {
+      "apiPath": "/api/v1/billing/billing_customers/create",
+      "method": "post",
+      "description": "Creates a Billing Customer.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "address": {
+                  "required": [
+                    "country_code"
+                  ],
+                  "type": "object",
+                  "description": "Address of the billing customer.",
+                  "properties": {
+                    "city": {
+                      "type": "string",
+                      "description": "City of the address."
+                    },
+                    "country_code": {
+                      "type": "string",
+                      "description": "The two-letter country code in ISO 3166-1 alpha-2 format."
+                    },
+                    "postcode": {
+                      "type": "string",
+                      "description": "PostCode of the address."
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State or province of the address."
+                    },
+                    "street": {
+                      "type": "string",
+                      "description": "Street of the address."
+                    }
+                  }
+                },
+                "default_billing_currency": {
+                  "type": "string",
+                  "description": "Default currency to use when billing this customer in 3-letter ISO-4217 format."
+                },
+                "default_legal_entity_id": {
+                  "type": "string",
+                  "description": "ID of the default legal entity to use when billing this customer. You can get this ID from the `legal_entity_id` in the response of the [Retrieve account details API](/docs/api/scale/accounts/retrieve)."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Additional description about the billing customer."
+                },
+                "email": {
+                  "type": "string",
+                  "description": "Email address of the billing customer."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the billing customer."
+                },
+                "nickname": {
+                  "type": "string",
+                  "description": "Internal nickname for the billing customer."
+                },
+                "phone_number": {
+                  "type": "string",
+                  "description": "Phone number of the billing customer."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                },
+                "tax_identification_number": {
+                  "type": "string",
+                  "description": "Tax identification number of the billing customer."
+                },
+                "type": {
+                  "pattern": "^(BUSINESS|INDIVIDUAL)$",
+                  "type": "string",
+                  "description": "Type of the billing customer. Defaults to `BUSINESS` if `tax_identification_number` exists. Otherwise defaults to `INDIVIDUAL`.",
+                  "enum": [
+                    "BUSINESS",
+                    "INDIVIDUAL"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerResponse"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `resource_not_found`(invalid `default_billing_entity_id`), `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.customer:write",
+          "group": "Billing",
+          "resource_name": "Billing Customers",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrieveBillingCustomer": {
+      "apiPath": "/api/v1/billing/billing_customers/{id}",
+      "method": "get",
+      "description": "Retrieves the details of a Billing Customer.",
+      "parameters": [
+        {
+          "description": "ID of the Billing Customer object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerResponse"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.customer:read",
+          "group": "Billing",
+          "resource_name": "Billing Customers",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listBillingCustomers": {
+      "apiPath": "/api/v1/billing/billing_customers",
+      "method": "get",
+      "description": "Retrieves a list of Billing Customers based on the query parameters.",
+      "parameters": [
+        {
+          "description": "The start time of `created_at` in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end time of `created_at` in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "Email address of the billing customer.",
+          "in": "query",
+          "name": "email",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of billing customer objects per page. Defaults to `20`.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseCustomer"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.customer:read",
+          "group": "Billing",
+          "resource_name": "Billing Customers",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "updateBillingCustomer": {
+      "apiPath": "/api/v1/billing/billing_customers/{id}/update",
+      "method": "post",
+      "description": "Updates a Billing Customer. Only fields provided in the request are updated, while omitted fields remain unchanged. Array fields are fully replaced if included. Set a field to null or an empty string (for strings) to clear its value.",
+      "parameters": [
+        {
+          "description": "ID of the Billing Customer object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "address": {
+                  "required": [
+                    "country_code"
+                  ],
+                  "type": "object",
+                  "description": "Address of the billing customer.",
+                  "properties": {
+                    "city": {
+                      "type": "string",
+                      "description": "City of the address."
+                    },
+                    "country_code": {
+                      "type": "string",
+                      "description": "The two-letter country code in ISO 3166-1 alpha-2 format."
+                    },
+                    "postcode": {
+                      "type": "string",
+                      "description": "PostCode of the address."
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State or province of the address."
+                    },
+                    "street": {
+                      "type": "string",
+                      "description": "Street of the address."
+                    }
+                  }
+                },
+                "default_billing_currency": {
+                  "type": "string",
+                  "description": "Default currency to use when billing this customer in 3-letter ISO-4217 format."
+                },
+                "default_legal_entity_id": {
+                  "type": "string",
+                  "description": "ID of the default legal entity to use when billing this customer."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Additional description about the billing customer."
+                },
+                "email": {
+                  "type": "string",
+                  "description": "Email address of the billing customer."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the billing customer."
+                },
+                "nickname": {
+                  "type": "string",
+                  "description": "Internal nickname for the billing customer."
+                },
+                "phone_number": {
+                  "type": "string",
+                  "description": "Phone number of the billing customer."
+                },
+                "tax_identification_number": {
+                  "type": "string",
+                  "description": "Tax identification number of the billing customer."
+                },
+                "type": {
+                  "pattern": "^(BUSINESS|INDIVIDUAL)$",
+                  "type": "string",
+                  "description": "Type of the billing customer.",
+                  "enum": [
+                    "BUSINESS",
+                    "INDIVIDUAL"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerResponse"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.customer:write",
+          "group": "Billing",
+          "resource_name": "Billing Customers",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": true,
+      "sdkPagination": false
+    }
+  },
+  "schemas": {
+    "CustomerResponse": {
+      "required": [
+        "automatic_tax_eligibility",
+        "created_at",
+        "id",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/components/schemas/CustomerAddress",
+          "description": "Address of the billing customer."
+        },
+        "automatic_tax_eligibility": {
+          "type": "string",
+          "description": "Indicates whether automatic tax can be applied for this customer based on the customer's current address data and the seller’s tax registration for that jurisdiction.",
+          "enum": [
+            "ELIGIBLE",
+            "LOCATION_NOT_SUPPORTED",
+            "ADDRESS_INCOMPLETE"
+          ],
+          "x-enumDescriptions": {
+            "ELIGIBLE": "Customer is in a jurisdiction where the seller is registered, and automatic tax can be applied.",
+            "LOCATION_NOT_SUPPORTED": "The customer's jurisdiction can be determined from the current address data, but automatic tax calculation isn't supported there.",
+            "ADDRESS_INCOMPLETE": "The customer's jurisdiction can't be determined from the provided address data."
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when the billing customer was created."
+        },
+        "default_billing_currency": {
+          "type": "string",
+          "description": "Default currency to use when billing this customer in 3-letter ISO-4217 format."
+        },
+        "default_legal_entity_id": {
+          "type": "string",
+          "description": "ID of the default legal entity to use when billing this customer."
+        },
+        "description": {
+          "type": "string",
+          "description": "Additional description about the billing customer."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the billing customer."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the billing customer object."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the billing customer."
+        },
+        "nickname": {
+          "type": "string",
+          "description": "Internal nickname for the billing customer."
+        },
+        "phone_number": {
+          "type": "string",
+          "description": "Phone number of the billing customer."
+        },
+        "tax_identification_number": {
+          "type": "string",
+          "description": "Tax identification number of the billing customer."
+        },
+        "type": {
+          "type": "string",
+          "description": "Type of the billing customer.",
+          "enum": [
+            "BUSINESS",
+            "INDIVIDUAL"
+          ]
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when the billing customer was last updated."
+        }
+      }
+    },
+    "CustomerAddress": {
+      "required": [
+        "country_code"
+      ],
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "description": "City of the address."
+        },
+        "country_code": {
+          "type": "string",
+          "description": "The two-letter country code in ISO 3166-1 alpha-2 format."
+        },
+        "postcode": {
+          "type": "string",
+          "description": "PostCode of the address."
+        },
+        "state": {
+          "type": "string",
+          "description": "State or province of the address."
+        },
+        "street": {
+          "type": "string",
+          "description": "Street of the address."
+        }
+      },
+      "description": "Address of the billing customer."
+    },
+    "CursorPaginationClientApiResponseCustomer": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/CustomerResponse"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  }
+}

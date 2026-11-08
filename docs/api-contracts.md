@@ -55,6 +55,8 @@ Permission labels come from the [API-key scope catalogue](https://www.airwallex.
 
 Credit notes/Billing transactions need a separate coverage decision beyond the accepted invoice retrieval and Payments refund workflows. Coupons, tax and usage resources remain deferred under planning; their presence in provider documentation does not authorize implementation.
 
+For implemented Billing routes, request validation, source snapshots and remaining runtime evidence, see [Billing resources](billing-resources.md).
+
 ## Representative contract checks
 
 Paths below are relative to `/api/v1`. These checks compare documented reads and mutations independently for Billing and Payments at `2026-08-21`; no sandbox API requests were executed. Billing Customer create/retrieve reference the same `CustomerResponse` schema; Intent create/retrieve reference `PaymentIntentSingle`. Login references `Token` and retains the required credential headers and optional `x-login-as` described above.

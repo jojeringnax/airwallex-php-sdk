@@ -24,6 +24,17 @@ Use resource-oriented synchronous methods with provider-shaped associative array
 
 These choices establish the future public surface before an initial release. Once shipped, changes follow the [compatibility and release policy](release-policy.md), including its release gates. Resource contracts determine operation coverage.
 
+## Provisional subordinate reads
+
+Billing item and line-item read capabilities are accepted. Their concrete signatures are provisional under [decision review #61](https://github.com/jojeringnax/airwallex-php-sdk/issues/61):
+
+| Resource | Provisional signatures |
+| --- | --- |
+| `subscriptions()` | `retrieveItem(string $id, string $itemId): array`, `listItems(string $id, array $query = []): array` |
+| `invoices()` | `retrieveLineItem(string $id, string $itemId): array`, `listLineItems(string $id, array $query = []): array` |
+
+The parent resource ID is explicit in every subordinate call. The coordinator selected these method shapes to preserve native routes without introducing another resource hierarchy; they are not described as human-approved. The review issue records compatibility implications and reversal options. For implemented Billing operations, schema provenance and remaining provider evidence, see [Billing resources](billing-resources.md).
+
 For implemented environment, token, transport, retry and diagnostic behavior, see [client configuration](client-configuration.md). Its optional clock and retry configuration remain a delegated provisional decision under [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60).
 
 ## Workflow references
