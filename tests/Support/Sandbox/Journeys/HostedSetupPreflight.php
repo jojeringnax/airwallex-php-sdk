@@ -12,14 +12,14 @@ use SensitiveParameter;
 
 /**
  * One fresh organization-owned SETUP, private browser read only, then owned cancellation.
- * @phpstan-type BrowserExpectation array{checkout_id:string,mode:string,currency:string}
+ * @phpstan-type Expectation array{checkout_id:string,mode:string,currency:string}
  */
 final class HostedSetupPreflight
 {
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,BrowserExpectation,bool,bool,bool):array<string,mixed>)|null $browser
+     * @param (Closure(string,Expectation,bool,bool,bool,bool,?HostedRiskJournal):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -33,7 +33,7 @@ final class HostedSetupPreflight
         try {
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
                 'playwright-module', 'create-one-hosted-setup', 'render-owned-data',
-                'observe-one-method-config', 'observe-normal-reads'];
+                'observe-one-method-config', 'observe-normal-reads', 'observe-risk-bootstrap'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -61,6 +61,13 @@ final class HostedSetupPreflight
                 throw new RuntimeException('Normal reads require explicit method observation.');
             }
             $safe['normal_reads_requested'] = $observeNormal;
+            $observeRisk = $options['observe-risk-bootstrap'] ?? false;
+            if (!is_bool($observeRisk) || ($observeRisk && !$observeNormal)) {
+                throw new RuntimeException('Risk bootstrap requires explicit normal reads.');
+            }
+            if ($observeRisk) {
+                $safe['risk_bootstrap_requested'] = true;
+            }
             $safe['render_requested'] = $render;
             $safe['method_config_requested'] = $observeConfig;
             $bridge = new HostedBrowser($strings['node-bin'], $strings['playwright-module']);
@@ -78,6 +85,14 @@ final class HostedSetupPreflight
             // Establish private durable state before even the prerequisite account read.
             $ledger = RunLedger::create($session->contextFingerprint(), $strings['state-dir']);
             $safe['run_id'] = $ledger->runId();
+            if ($observeRisk) {
+                $ledger->requestId('preflight_risk_bootstrap', [
+                    'profile' => 'partial_first_party_bws_only', 'visitor_limit' => 1, 'event_limit' => 8,
+                    'preflight_limit' => 1, 'body_limit_bytes' => 65536, 'event_total_limit_bytes' => 262144,
+                    'observation_window_max_ms' => 8000, 'browser_tools' => $safe['browser_tool_hashes'],
+                    'financial_authority' => false,
+                ], $session->contextFingerprint());
+            }
             $phase = 'account_prerequisite';
             $entity = $session->legalEntity();
             if ($entity === null) {
@@ -136,11 +151,14 @@ final class HostedSetupPreflight
                 }
             }
             $phase = 'browser_read_only';
+            $riskJournal = $observeRisk
+                ? new HostedRiskJournal($ledger, $fingerprint, $browserExpected, $safe['browser_tool_hashes']) : null;
             $safe['browser'] = HostedBrowser::sanitize(
-                $browser($url, $browserExpected, $render, $observeConfig, $observeNormal),
+                $browser($url, $browserExpected, $render, $observeConfig, $observeNormal, $observeRisk, $riskJournal),
                 $render,
                 $observeConfig,
                 $observeNormal,
+                $observeRisk,
             );
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {

@@ -456,6 +456,17 @@ class HostedPolicy {
       && url.href === (main ? this.#initial : this.#frameSource);
   }
 
+  // A private source-generated session, never an operator label or output field.
+  riskSessionMatches(value, main = false) {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(value) || !this.#frameSource) return false;
+    try {
+      const query = new URLSearchParams(new URL(this.#frameSource).hash.slice('#/elements/dropin?'.length));
+      const options = privateJson(Buffer.from(query.get('options') ?? ''));
+      return options.sessionId === value && this.#frameDelivered
+        && this.normalSourceMatches(main ? this.#initial : this.#frameSource, main);
+    } catch { return false; }
+  }
+
   normalSendAllowed(role) {
     return this.#observeNormal && this.#payerDelivered && this.normalWindowRemaining() > 0
       && Object.hasOwn(this.#normalAttempts, role) && this.#normalAttempts[role] > 0
