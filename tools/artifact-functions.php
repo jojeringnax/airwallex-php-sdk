@@ -164,7 +164,9 @@ function archivedPackageDefinition(string $archive): array
     }
     $runtimeNames = array_keys($requires);
     sort($runtimeNames);
-    $approvedNames = ['php', 'psr/http-client', 'psr/http-factory', 'psr/http-message', 'psr/simple-cache'];
+    $approvedNames = [
+        'php', 'php-64bit', 'psr/http-client', 'psr/http-factory', 'psr/http-message', 'psr/simple-cache',
+    ];
     if ($runtimeNames !== $approvedNames) {
         throw new RuntimeException('Archived runtime dependencies differ from the accepted interface-only policy.');
     }

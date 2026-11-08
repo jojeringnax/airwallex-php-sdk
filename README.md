@@ -1,6 +1,6 @@
 # Airwallex PHP SDK
 
-A framework-independent PHP SDK for Airwallex Billing and Payments, targeting API and webhook version **2026-08-21** on **PHP 8.3–8.5**.
+A framework-independent PHP SDK for Airwallex Billing and Payments, targeting API and webhook version **2026-08-21** on **64-bit PHP 8.3–8.5**.
 
 The package is **unreleased development software**. No stable Composer version or production-readiness claim is made. The initial release still requires the [release gates](docs/release-policy.md#observable-release-gates), including account-specific sandbox/provider evidence.
 
