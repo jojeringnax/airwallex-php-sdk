@@ -16,7 +16,7 @@ use Psr\Http\Message\ResponseInterface;
 use SensitiveParameter;
 use Throwable;
 
-/** A genuinely streaming default, allowing only account authentication and the single bare config GET. */
+/** A genuinely streaming default, allowing only fixed authentication and the single bare config GET. */
 final class WebhookConfigTransport implements ClientInterface
 {
     private readonly ClientInterface $http;
@@ -29,8 +29,11 @@ final class WebhookConfigTransport implements ClientInterface
      * @param ClientInterface|null $http Fixture or already-streaming seam; an arbitrary client may prebuffer.
      * @param (Closure():float)|null $clock Monotonic seconds for deterministic deadline tests.
      */
-    public function __construct(?ClientInterface $http = null, ?Closure $clock = null)
-    {
+    public function __construct(
+        ?ClientInterface $http = null,
+        ?Closure $clock = null,
+        private readonly WebhookConfigProfile $profile = WebhookConfigProfile::Account,
+    ) {
         $this->http = $http ?? new Client([
             'handler' => new StreamHandler(), 'stream' => true, 'read_timeout' => 5,
             'timeout' => 30, 'connect_timeout' => 10, 'verify' => true,
@@ -49,6 +52,7 @@ final class WebhookConfigTransport implements ClientInterface
         }
     }
 
+    /** @throws ProtocolException|TransportException */
     public function sendRequest(#[SensitiveParameter] RequestInterface $request): ResponseInterface
     {
         $uri = $request->getUri();
@@ -63,6 +67,12 @@ final class WebhookConfigTransport implements ClientInterface
             || ($read && $request->hasHeader('x-login-as'))
         ) {
             throw new ProtocolException('Webhook configuration transport requires its fixed Sandbox operations.');
+        }
+        if ($this->profile === WebhookConfigProfile::DefaultLogin) {
+            $this->defaultHeaders($request, $login);
+            if ($read && !$this->loginSent) {
+                throw new ProtocolException('The default-login read requires its separate authentication exchange.');
+            }
         }
         if (($read && $this->readSent) || ($login && $this->loginSent)) {
             throw new ProtocolException('Webhook configuration operations cannot be repeated in this observation.');
@@ -102,9 +112,35 @@ final class WebhookConfigTransport implements ClientInterface
                 $stream->close();
             }
             $this->deadline($started);
+            if ($this->profile === WebhookConfigProfile::DefaultLogin && $login && $response->getStatusCode() === 201) {
+                $proof = WebhookConfigObservation::nativeObject($body);
+                if (!is_string($proof->token ?? null) || !is_string($proof->expires_at ?? null)) {
+                    throw new ProtocolException('The default login did not return its native string contract.');
+                }
+                $this->deadline($started);
+            }
             return $bounded;
         } catch (Throwable) {
             throw new ProtocolException('Webhook configuration response could not be safely observed.');
+        }
+    }
+
+    private function defaultHeaders(#[SensitiveParameter] RequestInterface $request, bool $login): void
+    {
+        $allowed = ['host', 'accept', 'x-api-version', ...($login ? ['x-client-id', 'x-api-key'] : ['authorization'])];
+        foreach (array_keys($request->getHeaders()) as $name) {
+            if (!in_array(strtolower($name), $allowed, true) || count($request->getHeader($name)) !== 1) {
+                throw new ProtocolException('Default login rejects alternate authentication or context headers.');
+            }
+        }
+        if (
+            $request->getHeaderLine('Accept') !== 'application/json'
+            || $request->getHeaderLine('x-api-version') !== '2026-08-21'
+            || ($login && ($request->getHeaderLine('x-client-id') === ''
+                || $request->getHeaderLine('x-api-key') === ''))
+            || (!$login && preg_match('/^Bearer [^\x00-\x20\x7f]+$/D', $request->getHeaderLine('Authorization')) !== 1)
+        ) {
+            throw new ProtocolException('The default-login profile requires its fixed credential/token header roles.');
         }
     }
 

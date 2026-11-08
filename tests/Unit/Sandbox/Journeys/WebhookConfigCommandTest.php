@@ -24,6 +24,9 @@ final class WebhookConfigCommandTest extends TestCase
         yield 'duplicate' => [['--environment=sandbox', '--environment=sandbox']];
         yield 'not equals' => [['--environment', 'sandbox']];
         yield 'ID' => [['--id=SYNTHETIC_PRIVATE_ID']];
+        yield 'valued read flag' => [['--read-one-page=true']];
+        yield 'duplicate read flag' => [['--read-one-page', '--read-one-page']];
+        yield 'ledger' => [['--ledger=/SYNTHETIC_PRIVATE_LEDGER']];
     }
 
     /** @param list<string> $arguments */
@@ -31,6 +34,7 @@ final class WebhookConfigCommandTest extends TestCase
     public function testRealCliFailsWithoutReadingConfigurationOrPrintingInputs(array $arguments): void
     {
         $this->cli($arguments);
+        $this->cli($arguments, defaultLogin: true);
     }
 
     public function testNoArgvUnknownRootStillFailsWithoutWarnings(): void
@@ -39,23 +43,34 @@ final class WebhookConfigCommandTest extends TestCase
             ['--environment=sandbox', '--sdk-root=/SYNTHETIC_PRIVATE_ROOT'],
             ['-d', 'register_argc_argv=0']
         );
+        $this->cli(
+            ['--environment=sandbox', '--sdk-root=/SYNTHETIC_PRIVATE_ROOT'],
+            ['-d', 'register_argc_argv=0'],
+            true
+        );
     }
 
     public function testUnavailableStreamWrapperConfigurationFailsBeforeProvenanceOrAuthentication(): void
     {
         $this->cli(['--environment=sandbox', '--credentials-file=/SYNTHETIC_PRIVATE_FILE',
             '--state-dir=/SYNTHETIC_PRIVATE_STATE'], ['-d', 'allow_url_fopen=0']);
+        $this->cli(['--environment=sandbox', '--credentials-file=/SYNTHETIC_PRIVATE_FILE',
+            '--state-dir=/SYNTHETIC_PRIVATE_STATE'], ['-d', 'allow_url_fopen=0'], true);
     }
 
     /**
      * @param list<string> $arguments
      * @param list<string> $phpOptions
      */
-    private function cli(array $arguments, array $phpOptions = []): void
+    private function cli(array $arguments, array $phpOptions = [], bool $defaultLogin = false): void
     {
+        $tool = $defaultLogin ? 'webhook-default-login-read.php' : 'webhook-config-observation.php';
+        if ($defaultLogin) {
+            $arguments[] = '--read-one-page';
+        }
         $process = proc_open(
             [PHP_BINARY, ...$phpOptions,
-            dirname(__DIR__, 4) . '/tools/webhook-config-observation.php', ...$arguments],
+            dirname(__DIR__, 4) . '/tools/' . $tool, ...$arguments],
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes
         );
@@ -77,9 +92,16 @@ final class WebhookConfigCommandTest extends TestCase
         self::assertFalse($safe['mutation_sent']);
         self::assertFalse($safe['receiver_followed']);
         self::assertSame(
-            hash_file('sha256', dirname(__DIR__, 4) . '/tools/webhook-config-observation.php'),
+            hash_file('sha256', dirname(__DIR__, 4) . '/tools/' . $tool),
             $safe['tool_sha256']
         );
+        if ($defaultLogin) {
+            self::assertSame('DEFAULT', $safe['login_profile']);
+            self::assertSame('default-login', $safe['context']);
+        } else {
+            self::assertSame('account', $safe['context']);
+            self::assertArrayNotHasKey('login_profile', $safe);
+        }
     }
     /** @return array{resource,resource,resource} */
     private static function pipes(mixed $pipes): array

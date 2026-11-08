@@ -20,7 +20,7 @@ use SensitiveParameter;
 use stdClass;
 use Throwable;
 
-/** One account-owned configuration page, never a delivery or registration mutation. */
+/** One fixed configuration page, never a delivery, ownership claim or registration mutation. */
 final class WebhookConfigObservation
 {
     private const array EVENTS = [
@@ -38,11 +38,15 @@ final class WebhookConfigObservation
         'refund' => ['accepted', 'failed', 'received', 'settled'],
     ];
 
-    public static function contextFingerprint(#[SensitiveParameter] Configuration $configuration): string
-    {
+    public static function contextFingerprint(
+        #[SensitiveParameter] Configuration $configuration,
+        WebhookConfigProfile $profile = WebhookConfigProfile::Account,
+    ): string {
         return hash('sha256', json_encode(['environment' => 'sandbox',
-            'credentials' => $configuration->credentials()->fingerprint(), 'context' => 'account',
-            'login_account' => $configuration->accountId()], JSON_THROW_ON_ERROR));
+            'credentials' => $configuration->credentials()->fingerprint(), 'context' => $profile->context(),
+            'login_account' => $profile === WebhookConfigProfile::Account ? $configuration->accountId() : null,
+            ...($profile === WebhookConfigProfile::DefaultLogin ? ['login_profile' => 'DEFAULT'] : []),
+        ], JSON_THROW_ON_ERROR));
     }
 
     /**
@@ -55,14 +59,18 @@ final class WebhookConfigObservation
         string $directory,
         ?ClientInterface $http = null,
         ?Closure $synchronize = null,
+        WebhookConfigProfile $profile = WebhookConfigProfile::Account,
     ): array {
-        $safe = ['scenario' => 'webhook-config-observation', 'api_version' => '2026-08-21',
-            'context' => 'account', 'result' => 'fail', 'phase' => 'read_provenance',
+        $safe = ['scenario' => $profile->scenario(), 'api_version' => '2026-08-21',
+            'context' => $profile->context(), 'result' => 'fail', 'phase' => 'read_provenance',
             'private_snapshot_retained' => false, 'configuration_read_succeeded' => false,
             'first_page_only' => true, 'global_absence_proven' => false,
             'organization_manager_verified' => false, 'raw_delivery_observed' => false,
             'signatures_verified' => false, 'receiver_followed' => false, 'mutation_sent' => false];
-        $fingerprint = self::contextFingerprint($configuration);
+        if ($profile === WebhookConfigProfile::DefaultLogin) {
+            $safe['login_profile'] = 'DEFAULT';
+        }
+        $fingerprint = self::contextFingerprint($configuration, $profile);
         try {
             WebhookConfigTransport::assertAvailable();
             $ledger->assertContext($fingerprint);
@@ -71,15 +79,18 @@ final class WebhookConfigObservation
             if ($identity === false) {
                 throw new RuntimeException('Private observation directory identity is unavailable.');
             }
-            $toolHash = hash_file('sha256', dirname(__DIR__, 4) . '/tools/webhook-config-observation.php');
+            $toolHash = hash_file('sha256', dirname(__DIR__, 4) . '/tools/' . $profile->tool());
             if ($toolHash === false) {
                 throw new RuntimeException('Observation tool provenance is unavailable.');
             }
             $safe['tool_sha256'] = $toolHash;
             $ledger->requestId('webhook_configuration_read', ['method' => 'GET', 'path' => '/api/v1/webhooks',
-                'api_version' => '2026-08-21', 'tool_sha256' => $toolHash], $fingerprint);
+                'api_version' => '2026-08-21', 'tool_sha256' => $toolHash,
+                ...($profile === WebhookConfigProfile::DefaultLogin ? ['login_profile' => 'DEFAULT',
+                    'x_login_as_present' => false] : []),
+            ], $fingerprint);
             $safe['phase'] = 'authentication';
-            $transport = new WebhookConfigTransport($http);
+            $transport = new WebhookConfigTransport($http, profile: $profile);
             $factory = new HttpFactory();
             $exchange = new HttpExchange(Environment::Sandbox, $transport, $factory, $factory);
             $decoder = new ResponseDecoder();
@@ -88,7 +99,7 @@ final class WebhookConfigObservation
                 $decoder,
                 $configuration->credentials(),
                 Environment::Sandbox,
-                $configuration->accountId(),
+                $profile === WebhookConfigProfile::Account ? $configuration->accountId() : null,
                 null,
                 null,
                 static fn (): int => time()
@@ -107,11 +118,9 @@ final class WebhookConfigObservation
             }
             // The transport has already bounded/closed the original stream; this is its bounded in-memory copy.
             $raw = (string) $response->getBody();
-            (new JsonCodec())->decodeObject($raw); // Validate the bounded object before inspecting known string fields.
-            $page = json_decode($raw, depth: 64, flags: JSON_THROW_ON_ERROR);
-            self::uniqueObjectKeys($raw);
+            $page = self::nativeObject($raw);
             if (
-                !$page instanceof stdClass || !is_array($page->items ?? null)
+                !is_array($page->items ?? null)
                 || !array_is_list($page->items) || count($page->items) > 20
             ) {
                 throw new ProtocolException('The first configuration page does not match the bounded contract.');
@@ -154,6 +163,7 @@ final class WebhookConfigObservation
             $safe['phase'] = 'private_retention';
             $snapshot = ['format' => 1, 'api_version' => '2026-08-21', 'method' => 'GET',
                 'path' => '/api/v1/webhooks', 'tool_sha256' => $toolHash, 'items' => $items,
+                ...($profile === WebhookConfigProfile::DefaultLogin ? ['login_profile' => 'DEFAULT'] : []),
                 'pagination' => $pagination] + $ledger->evidence();
             $hash = self::retain(
                 $folder,
@@ -175,6 +185,21 @@ final class WebhookConfigObservation
             $safe['reason'] = 'observation_not_completed';
         }
         return $safe + $ledger->evidence();
+    }
+
+    /** Bounded native proof shared with the DEFAULT login response; never expose names or values. */
+    public static function nativeObject(#[SensitiveParameter] string $raw): stdClass
+    {
+        if (strlen($raw) > 65536) {
+            throw new ProtocolException('The private configuration object exceeded its observation bound.');
+        }
+        (new JsonCodec())->decodeObject($raw);
+        $object = json_decode($raw, depth: 64, flags: JSON_THROW_ON_ERROR);
+        self::uniqueObjectKeys($raw);
+        if (!$object instanceof stdClass) {
+            throw new ProtocolException('The private configuration object is unavailable.');
+        }
+        return $object;
     }
 
     /** Validate key uniqueness after JSON syntax/depth validation; never expose names or values. */
