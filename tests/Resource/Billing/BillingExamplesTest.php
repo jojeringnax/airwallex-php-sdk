@@ -55,6 +55,11 @@ final class BillingExamplesTest extends HttpTestCase
             '"billing_customer_id":"bcus_fixture"',
             (string) $http->requests[4]->getBody(),
         );
+        self::assertStringContainsString('"currency":"EUR"', (string) $http->requests[4]->getBody());
+        self::assertStringContainsString(
+            '"subscription_data":{"days_until_due":0}',
+            (string) $http->requests[4]->getBody(),
+        );
         foreach ($http->requests as $request) {
             self::assertSame('', $request->getHeaderLine('x-on-behalf-of'));
         }
