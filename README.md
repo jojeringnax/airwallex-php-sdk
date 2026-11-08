@@ -2,7 +2,7 @@
 
 A framework-independent PHP SDK for Airwallex Billing and Payments, targeting API and webhook version **2026-08-21** on **64-bit PHP 8.3–8.5**.
 
-The package is **unreleased development software**. No stable Composer version or production-readiness claim is made. The initial release still requires the [release gates](docs/release-policy.md#observable-release-gates), including account-specific sandbox/provider evidence.
+The package is **unreleased development software**. No stable Composer version or production-readiness claim is made. The initial release still requires the [release gates](docs/release-policy.md#observable-release-gates), including account-specific sandbox/provider evidence. The [readiness record](docs/release-readiness.md) maps current claims to completed checks and remaining prerequisites.
 
 Start with the [consumer guide](docs/usage.md) for development-source installation, explicit credentials/account contexts, and runnable recipes. The SDK accepts PSR-18/PSR-17 implementations and provider-shaped arrays; applications own their persistence, browser integration and access policy.
 
