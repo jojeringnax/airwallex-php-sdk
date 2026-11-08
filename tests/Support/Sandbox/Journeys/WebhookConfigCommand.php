@@ -10,7 +10,7 @@ use Psr\Http\Client\ClientInterface;
 use RuntimeException;
 use SensitiveParameter;
 
-/** Fixed account configuration read; no destination/identity/paging/root/context overrides. */
+/** Fixed configuration reads; no destination/identity/paging/root/context overrides. */
 final class WebhookConfigCommand
 {
     /**
@@ -24,12 +24,22 @@ final class WebhookConfigCommand
         ?ClientInterface $http = null,
         ?Closure $ledgers = null,
         ?Closure $synchronize = null,
+        WebhookConfigProfile $profile = WebhookConfigProfile::Account,
     ): array {
-        $safe = ['scenario' => 'webhook-config-observation', 'api_version' => '2026-08-21',
-            'result' => 'fail', 'phase' => 'configuration', 'context' => 'account',
+        $safe = ['scenario' => $profile->scenario(), 'api_version' => '2026-08-21',
+            'result' => 'fail', 'phase' => 'configuration', 'context' => $profile->context(),
             'mutation_sent' => false, 'receiver_followed' => false, 'raw_delivery_observed' => false,
             'signatures_verified' => false, 'global_absence_proven' => false];
+        if ($profile === WebhookConfigProfile::DefaultLogin) {
+            $safe['login_profile'] = 'DEFAULT';
+            if (($options['read-one-page'] ?? null) !== true) {
+                return $safe;
+            }
+        }
         foreach ($options as $name => $value) {
+            if ($profile === WebhookConfigProfile::DefaultLogin && $name === 'read-one-page' && $value === true) {
+                continue;
+            }
             if (
                 !in_array($name, ['environment', 'credentials-file', 'state-dir'], true)
                 || !is_string($value) || $value === ''
@@ -47,12 +57,19 @@ final class WebhookConfigCommand
             self::externalCredentials($path);
             $safe['source'] = SourceEvidence::capture();
             $configuration = Configuration::load('sandbox', $path);
-            $fingerprint = WebhookConfigObservation::contextFingerprint($configuration);
+            $fingerprint = WebhookConfigObservation::contextFingerprint($configuration, $profile);
             $safe['context_fingerprint'] = $fingerprint;
             $safe['phase'] = 'read_provenance';
             $ledger = $ledgers === null
                 ? RunLedger::create($fingerprint, $directory) : $ledgers($fingerprint, $directory);
-            return WebhookConfigObservation::execute($configuration, $ledger, $directory, $http, $synchronize);
+            return WebhookConfigObservation::execute(
+                $configuration,
+                $ledger,
+                $directory,
+                $http,
+                $synchronize,
+                $profile
+            );
         } catch (\Throwable) {
             return $safe;
         }
