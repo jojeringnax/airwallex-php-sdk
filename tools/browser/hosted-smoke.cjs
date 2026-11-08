@@ -5,7 +5,7 @@ const path = require('node:path');
 const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
-  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0 };
+  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0 };
   let tamper = false;
   let payerReply = 'matched';
   const server = http.createServer((request, response) => {
@@ -26,7 +26,19 @@ async function smoke(playwright) {
           const headers = { Authorization: 'Bearer ' + new URL(location.href).searchParams.get('s') };
           const getter = '/billing/payer-web-api/checkout?ts=' + Date.now();
           window.payerDelivered = false;
-          fetch(getter, { headers }).then(r => r.json()).then(() => { window.payerDelivered = true; }).catch(async () => {
+          fetch(getter, { headers }).then(r => r.json()).then(data => {
+            window.payerDelivered = true;
+            if (new URL(location.href).searchParams.get('render')) {
+              const options = { mode: 'recurring', currency: data.currency,
+                customer_id: data.setupModeDetails.billingCustomerExternalId,
+                client_secret: data.setupModeDetails.externalCustomerClientSecret };
+              if (new URL(location.href).searchParams.get('wrongframe')) options.customer_id = 'PRIVATE_OTHER';
+              const frame = document.createElement('iframe');
+              frame.src = location.origin + '/render-frame#/elements/dropin?' + new URLSearchParams({
+                options: JSON.stringify(options), lang: 'en', appVersion: 'v2.56.0' });
+              document.body.append(frame);
+            }
+          }).catch(async () => {
             await Promise.all([
               fetch(getter, { headers }).catch(() => {}),
               fetch('/billing/payer-web-api/checkout/status', { headers }).catch(() => {}),
@@ -53,8 +65,17 @@ async function smoke(playwright) {
             : payerReply === 'oversized' ? 'x'.repeat(65537)
             : JSON.stringify({ mode: payerReply === 'wrong_mode' ? 'PAYMENT' : 'SETUP',
               currency: payerReply === 'wrong_currency' ? 'USD' : 'EUR',
-              setupModeDetails: { billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER' } }));
+              setupModeDetails: { billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER',
+                externalCustomerClientSecret: 'PRIVATE_CLIENT_SECRET' } }));
         }
+        break;
+      case '/render-frame':
+        hits.render++;
+        response.writeHead(200, { 'Content-Type': 'text/html' }).end(
+          '<!doctype html><p>Fixture render frame</p><script src="/render-sdk.js?ts=' + Date.now() + '"></script>');
+        break;
+      case '/render-sdk.js':
+        response.writeHead(200, { 'Content-Type': 'application/javascript' }).end('window.fixtureRendered = true;');
         break;
       case '/frame':
         hits.frame++;
@@ -168,9 +189,31 @@ async function smoke(playwright) {
       }
       payerChecks++;
     }
+    payerReply = 'matched';
+    const renderHits = hits.render;
+    const rendered = await inspect(origin + '/payer-page?s=' + token + '&render=1', playwright, origin, async page => {
+      if (await page.evaluate(() => window.payerDelivered) !== true) throw new Error('Local render delivery failed.');
+      const frame = page.frames().find(candidate => candidate !== page.mainFrame());
+      if (!frame || await frame.evaluate(() => window.fixtureRendered) !== true) throw new Error('Local render frame failed.');
+      await frame.evaluate(async () => {
+        await Promise.all([
+          fetch('/api/v1/pa/payment_consents/create', { method: 'POST' }).catch(() => {}),
+          fetch('/billing/payer-web-api/checkout/status').catch(() => {}),
+          fetch('/billing/payer-web-api/checkout/complete', { method: 'POST' }).catch(() => {}),
+        ]);
+      });
+    }, expected, true);
+    if (!rendered.payer_payload_delivered || rendered.bound_render_frames !== 1 || rendered.verified_render_assets !== 1
+        || rendered.financial_routing_verified || hits.render !== renderHits + 1 || hits.forbidden !== 0
+        || rendered.proxy_external_connections !== 0) throw new Error('Local render boundary failed.');
+    const wrongFrame = await inspect(origin + '/payer-page?s=' + token + '&render=1&wrongframe=1',
+      playwright, origin, null, expected, true);
+    if (wrongFrame.bound_render_frames !== 0 || hits.render !== renderHits + 1 || hits.forbidden !== 0) {
+      throw new Error('Local mismatched render frame escaped.');
+    }
     return { ...result, deny_before_send: true, fixture_forbidden_hits: 0, fixture_websocket_hits: 0,
       altered_script_blocked: true, payer_binding_checks: payerChecks, payer_payloads_delivered: 0,
-      payer_cookie_forwarding_blocked: true };
+      payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 
