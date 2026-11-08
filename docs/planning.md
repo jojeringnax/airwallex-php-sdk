@@ -16,7 +16,7 @@ For [issue #1](https://github.com/jojeringnax/airwallex-php-sdk/issues/1), the m
 - Standalone Payments: one-time payments, saving payment methods, subsequent charges using saved methods, authorization and capture, payment cancellation, payment status retrieval, and refunds.
 - Connected-account support remains an accepted initial requirement. Verify applicability and account context independently for each Billing and Payments operation.
 
-This is accepted product scope, not a claim that every operation or combination is available through Airwallex. Exact endpoints, lifecycle semantics, payment methods, countries, currencies, account eligibility, API versions and consumer interfaces still require contract review. Discounts, tax, usage billing and other capabilities not listed above remain undecided rather than implicitly included by the phrase “all payments.”
+This is accepted product scope, not a claim that every operation or combination is available through Airwallex. Exact endpoints, lifecycle semantics, payment methods, countries, currencies, account eligibility, API versions and consumer interfaces still require contract review. Discounts/coupons, tax and usage-based billing are deferred beyond the initial release so the initial work can focus on the accepted subscription and payment journeys. Other capabilities not listed above are not implicitly included by the phrase “all payments.”
 
 ### Capability decisions
 
@@ -30,8 +30,9 @@ This is accepted product scope, not a claim that every operation or combination 
 | Invoice retrieval | Required; document/PDF access needs capability review |
 | Webhook state synchronization | Required |
 | Connected-account support | Required, subject to independent contract verification per family |
-| Discounts, tax and usage billing | Undecided; no inclusion or exclusion approved yet |
-| Countries, currencies and payment methods | No specific combinations selected yet |
+| Discounts/coupons, tax and usage-based billing | Deferred beyond the initial release |
+| Countries and currencies | No SDK-specific restrictions; expose provider-supported combinations for the applicable contract and account |
+| Payment methods | All provider-supported methods applicable to the accepted flows and account context |
 
 ### Workflow review and follow-up evidence
 
@@ -43,7 +44,7 @@ The accepted scope covers signup through customer creation and checkout, renewal
 - [Consumer examples (#6)](https://github.com/jojeringnax/airwallex-php-sdk/issues/6): review representative signup, renewal, change-plan, cancellation, failed-payment and invoice journeys against verified contracts before implementation.
 - [Sandbox validation (#42)](https://github.com/jojeringnax/airwallex-php-sdk/issues/42): establish account access and entitlements, and validate accepted journeys with sanitized evidence.
 
-The undecided capabilities and geographic/payment-method coverage remain open decisions. This document records the accepted direction without claiming that all original issue #1 acceptance criteria have been resolved.
+The maintainer selected broad geographic, currency and payment-method coverage to avoid an arbitrary SDK subset. This is a coverage requirement, not verified provider availability or a promise that every method supports recurring collection, saved-method charging, authorization/capture or connected-account use. Contract review must map supported combinations and identify unavailable or uncertain combinations before implementation; any proposed reduction in the accepted scope requires a maintainer decision.
 
 The existing Billing-focused implementation plan must be reconciled with this Payments scope before implementation. Identify missing Payments work and its dependencies during contract review; the current milestone list does not yet establish a delivery sequence for those additions.
 
@@ -62,5 +63,5 @@ The list below includes SDK work only. Linked GitHub milestones retain their exi
 1. [Decisions and contracts](https://github.com/jojeringnax/airwallex-php-sdk/milestone/1): agree scope, examples, compatibility and verified provider contracts.
 2. [SDK foundation](https://github.com/jojeringnax/airwallex-php-sdk/milestone/2): Composer tooling, transport, authentication, precision, errors, retries and pagination.
 3. [Billing workflows](https://github.com/jojeringnax/airwallex-php-sdk/milestone/3): customers, catalog, checkout, subscription lifecycle and invoices.
-4. [Advanced billing](https://github.com/jojeringnax/airwallex-php-sdk/milestone/5): credit notes, discounts, tax and usage billing, subject to capability decisions.
+4. [Advanced billing](https://github.com/jojeringnax/airwallex-php-sdk/milestone/5): discounts/coupons, tax and usage billing are deferred beyond the initial release; credit-note scope remains subject to capability review.
 5. [Release readiness](https://github.com/jojeringnax/airwallex-php-sdk/milestone/6): sandbox evidence, consumer documentation and distributable artifacts.
