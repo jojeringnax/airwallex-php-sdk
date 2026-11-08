@@ -779,7 +779,7 @@ function methodFixtureModule(fault) {
     const fail = () => { throw new Error('PRIVATE_METHOD_URL_SECRET'); };
     const timeout = globalThis.setTimeout;
     globalThis.setTimeout = (callback, delay, ...args) => timeout(callback, [5000, 10000].includes(delay) ? 1 : delay, ...args);
-    const fixture = { created: false, disposed: false, gets: 0 };
+    const fixture = { created: false, disposed: false, gets: 0, detached: false };
     module.exports = { fixture, request: { async newContext(options) {
       if (fault === 'context' || options.ignoreHTTPSErrors !== false || !options.proxy) fail();
       if (fault === 'delayed') await new Promise(resolve => setTimeout(resolve, 30));
@@ -803,15 +803,28 @@ function methodFixtureModule(fault) {
       let handler, opened;
       const mainFrame = {};
       let token;
-      const frame = { parentFrame: () => mainFrame,
+      const frame = { parentFrame: () => mainFrame, isDetached() {
+        if (fault === 'attachment_error') fail();
+        if (fault === 'attachment_invalid') return 'PRIVATE_INVALID';
+        return fixture.detached;
+      },
         async frameElement() { return { async getAttribute() { return 'http://127.0.0.1:54321/render-frame#/elements/dropin?'
           + new URLSearchParams({ appVersion: 'v2.56.0', lang: 'en', options: JSON.stringify({ mode: 'recurring', currency: 'EUR',
             client_secret: 'PRIVATE_CLIENT_SECRET', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER' }) }); }, async dispose() {} }; },
         locator(selector) {
           const match = /^input\\[name="(cardnumber|expiry|cvc)"\\]$/.exec(selector);
           if (!match || fault === 'locator') fail();
-          return { async count() { if (fault === 'readiness_count') fail(); return 1; },
-            async isVisible() { if (fault === 'readiness_visible') fail(); return true; },
+          return { async count() {
+              if (fault === 'detached_mid_count' || (fault === 'detached_late_field' && match[1] === 'expiry')) {
+                fixture.detached = true; fail();
+              }
+              if (fault === 'detached_after_count') fixture.detached = true;
+              if (fault === 'readiness_count') fail(); return 1;
+            },
+            async isVisible() {
+              if (fault === 'detached_visible') { fixture.detached = true; fail(); }
+              if (fault === 'readiness_visible') fail(); return true;
+            },
             async isEnabled() { if (fault === 'readiness_enabled') fail(); return match[1] !== 'cvc'; } };
         } };
       const routed = (kind, sourceFrame) => handler({ request() { return {
@@ -822,7 +835,10 @@ function methodFixtureModule(fault) {
           : kind === 'frame' ? {} : { 'client-secret': 'PRIVATE_CLIENT_SECRET', 'content-type': 'application/json',
             'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout', 'x-cloud-trace-context': '0123456789abcdef0123456789abcdef',
             cookie: 'PRIVATE_COOKIE', referer: 'PRIVATE_URL' } };
-      }, async abort() { if (kind === 'method' && fault === 'abort') fail(); },
+      }, async abort() {
+          if (kind === 'method' && fault === 'detached_route_error') { fixture.detached = true; fail(); }
+          if (kind === 'method' && fault === 'abort') fail();
+        },
         async fetch() { if (kind === 'method') fail(); return { status: () => 200,
           async body() { return Buffer.from(kind === 'frame' ? '<!doctype html>' : JSON.stringify({ mode: 'SETUP', currency: 'EUR',
             setupModeDetails: { externalCustomerClientSecret: 'PRIVATE_CLIENT_SECRET', billingCustomerExternalId: 'PRIVATE_EXTERNAL_CUSTOMER' } })); },
@@ -837,6 +853,7 @@ function methodFixtureModule(fault) {
           if (fault === 'delayed') { await Promise.resolve(); fail(); }
           await pending;
           await routed('method', frame); // Replay remains denied, including rejected or malformed outcomes.
+          if (fault === 'detached_before') fixture.detached = true;
         } };
       return { async newContext() { return { async addInitScript() {}, async route(_pattern, callback) { handler = callback; },
         async routeWebSocket() {}, on(_event, callback) { opened = callback; }, async newPage() { opened(page); return page; },
@@ -847,7 +864,9 @@ function methodFixtureModule(fault) {
 
 for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 'http_503', 'invalid_json', 'oversized',
   'declared_oversized', 'context', 'get', 'headers', 'body', 'fulfill', 'response_dispose', 'context_dispose',
-  'abort', 'locator', 'readiness_count', 'readiness_visible', 'readiness_enabled', 'delayed', 'wrong_frame']) {
+  'abort', 'locator', 'readiness_count', 'readiness_visible', 'readiness_enabled', 'delayed', 'wrong_frame',
+  'attachment_error', 'attachment_invalid', 'detached_before', 'detached_mid_count', 'detached_after_count',
+  'detached_visible', 'detached_late_field', 'detached_route_error']) {
   test(`bound configuration worker keeps once-only headers, response and private failure boundaries: ${fault}`, () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-method-module-fixture-'));
     try {
@@ -864,7 +883,25 @@ for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 
       assert.equal(child.stderr, '');
       assert.doesNotMatch(child.stdout, /PRIVATE_METHOD|PRIVATE_CLIENT|PRIVATE_EXTERNAL|PRIVATE_COOKIE/u);
       const output = JSON.parse(child.stdout);
-      if (['success', 'redirect', 'invalid_json', 'oversized', 'declared_oversized', 'wrong_frame'].includes(fault) || fault.startsWith('http_')) {
+      if (['detached_before', 'detached_mid_count', 'detached_after_count', 'detached_visible', 'detached_late_field'].includes(fault)) {
+        assert.equal(child.status, 0);
+        assert.equal(output.method_config_observation, 'matched');
+        assert.equal(output.method_config_http_status, 200);
+        assert.equal(output.method_config_payload_delivered, true);
+        assert.equal(output.method_config_card_advertised, true);
+        assert.equal(output.card_readiness_observed, false);
+        assert.equal(output.readiness_frame_detached, true);
+        assert.equal(output.readiness_attachment_field, fault === 'detached_late_field' ? 'expiry' : 'cardnumber');
+        assert.equal(output.readiness_frame_detached_before_count, fault === 'detached_before');
+        if (fault === 'detached_before') assert.equal(Object.hasOwn(output, 'readiness_frame_detached_after_count'), false);
+        else assert.equal(output.readiness_frame_detached_after_count, true);
+
+        assert.equal(output.card_readiness_unavailable_reason, 'frame_detached');
+        assert.equal(output.readiness_detach_stage, fault === 'detached_before' ? 'before_count' : 'after_count');
+        for (const field of ['cardnumber', 'expiry', 'cvc']) for (const suffix of ['unique', 'visible', 'enabled']) {
+          assert.equal(Object.hasOwn(output, field + '_' + suffix), false);
+        }
+      } else if (['success', 'redirect', 'invalid_json', 'oversized', 'declared_oversized', 'wrong_frame'].includes(fault) || fault.startsWith('http_')) {
         assert.equal(child.status, 0);
         assert.equal(output.method_config_get_attempted, true);
         assert.equal(output.method_config_http_status, fault === 'redirect' ? 302 : fault.startsWith('http_') ? Number(fault.slice(5)) : 200);
@@ -878,10 +915,21 @@ for (const fault of ['success', 'redirect', 'http_401', 'http_403', 'http_404', 
         const phase = { context: 'method_context', get: 'method_get', headers: 'method_headers', body: 'method_body',
           fulfill: 'method_fulfill', response_dispose: 'method_response_dispose', context_dispose: 'shutdown_request_context',
           abort: 'method_abort', locator: 'readiness_cardnumber_locator', readiness_count: 'readiness_cardnumber_count',
-          readiness_visible: 'readiness_cardnumber_visible', readiness_enabled: 'readiness_cardnumber_enabled', delayed: 'navigation' }[fault];
+          readiness_visible: 'readiness_cardnumber_visible', readiness_enabled: 'readiness_cardnumber_enabled', delayed: 'navigation',
+          attachment_error: 'readiness_attachment', attachment_invalid: 'readiness_attachment', detached_route_error: 'route_action' }[fault];
         assert.equal(output.browser_failure_phase, phase);
         assert.equal(output.method_config_get_attempted, true);
         assert.equal(output.method_config_send_started, !['context', 'delayed'].includes(fault));
+        if (['readiness_count', 'readiness_visible', 'readiness_enabled', 'attachment_error', 'attachment_invalid', 'detached_route_error'].includes(fault)) {
+          assert.equal(output.method_config_observation, 'matched');
+          assert.equal(output.method_config_card_advertised, true);
+          assert.equal(output.method_config_http_status, 200);
+          if (fault === 'readiness_count') {
+            assert.equal(output.readiness_frame_detached_before_count, false);
+            assert.equal(output.readiness_frame_detached_after_count, false);
+          }
+        }
+
         if (fault === 'delayed') {
           assert.equal(output.late_context_disposed, true); assert.equal(output.no_late_get, true);
         }

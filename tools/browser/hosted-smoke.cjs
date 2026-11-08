@@ -116,7 +116,9 @@ async function smoke(playwright) {
                   if (name === 'cvc') input.disabled = true;
                   document.body.append(input);
                 }
-                if (options.detachFixture) setTimeout(() => window.frameElement.remove(), 1000);
+                if (options.detachFixture) setTimeout(() => {
+                  const old = window.frameElement; old.replaceWith(old.cloneNode(false));
+                }, 1000);
                 return Promise.all([target, '/country', '/api/v1/pa/customers/PRIVATE',
                   '/api/v1/pa/payment_consents', '/api/v1/pa/PRIVATE', '/billing/payer-web-api/checkout/status']
                   .map(url => fetch(url, { headers }).catch(() => {})));
@@ -310,17 +312,17 @@ async function smoke(playwright) {
         || Object.values(configured.denied_read_families).some(count => count !== 1)) {
       throw new Error('Local bound method-config/readiness boundary failed.');
     }
-    let detached = false;
-    try {
-      await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&detach=1',
-        playwright, origin, null, expected, true, true);
-    } catch (error) {
-      const evidence = error.evidence();
-      detached = evidence.browser_failure_phase === 'readiness_cardnumber_count'
-        && evidence.method_config_http_status === 200 && evidence.method_config_send_started === true
-        && evidence.bound_render_frames === 1 && !JSON.stringify(evidence).includes('PRIVATE');
+    const detached = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&detach=1',
+      playwright, origin, null, expected, true, true);
+    if (detached.method_config_observation !== 'matched' || detached.method_config_http_status !== 200
+        || !detached.method_config_card_advertised || !detached.method_config_payload_delivered
+        || detached.card_readiness_observed || detached.card_readiness_unavailable_reason !== 'frame_detached'
+        || detached.readiness_frame_detached !== true || detached.readiness_detach_stage !== 'before_count'
+        || detached.bound_render_frames !== 1 || detached.render_frame_checks.limit_reached !== 1
+        || Object.hasOwn(detached, 'cardnumber_unique') || Object.hasOwn(detached, 'cardnumber_visible')
+        || Object.hasOwn(detached, 'cardnumber_enabled') || hits.forbidden !== 0) {
+      throw new Error('Local detached-frame availability evidence was lost.');
     }
-    if (!detached || hits.forbidden !== 0) throw new Error('Local detached-frame failure evidence was lost.');
     const deniedConfig = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1',
       playwright, origin, null, expected, true);
     if (hits.method !== methodBefore + 2 || Object.hasOwn(deniedConfig, 'method_config_requested')) {
@@ -351,7 +353,7 @@ async function smoke(playwright) {
       payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true,
       public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
       altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
-      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_failure_diagnostics_verified: true };
+      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

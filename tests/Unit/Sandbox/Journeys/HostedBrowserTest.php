@@ -160,6 +160,12 @@ final class HostedBrowserTest extends TestCase
         echo '{"result":"fail","reason":"browser_preflight_failed","card_entry_enabled":false,
           "browser_failure_phase":"readiness_cardnumber_count","method_config_requested":true,
           "method_config_get_attempted":true,"method_config_send_started":true,"method_config_http_status":200,
+          "method_config_response_observed":true,"method_config_observation":"matched","method_config_items":2,
+          "method_config_card_advertised":true,"method_config_payload_delivered":true,
+          "candidate_origin":"sandbox","render_requested":true,"checkout_token_matches":true,
+          "payer_request_scope_verified":true,"payer_get_attempted":true,"payer_response_observed":true,
+          "payer_mode_matches":true,"payer_currency_matches":true,"payer_observation":"matched",
+          "payer_http_status":200,"payer_payload_delivered":true,"card_readiness_observed":false,
           "bound_render_frames":1,"blocked_requests":17,"message":"PRIVATE_URL_SECRET"}';
         exit(1);
         PHP);
@@ -171,6 +177,12 @@ final class HostedBrowserTest extends TestCase
         self::assertSame(200, $safe['method_config_http_status']);
         self::assertSame(1, $safe['bound_render_frames']);
         self::assertTrue($safe['method_config_send_started']);
+        self::assertSame('matched', $safe['method_config_observation']);
+        self::assertTrue($safe['method_config_card_advertised']);
+        self::assertTrue($safe['method_config_payload_delivered']);
+        self::assertSame(2, $safe['method_config_items']);
+        self::assertFalse($safe['card_readiness_observed']);
+
         self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
         $data = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
             'browser_failure_phase' => 'PRIVATE_PROVIDER_PATH'];
@@ -178,6 +190,53 @@ final class HostedBrowserTest extends TestCase
         $data['result'] = 'blocked';
         $data['browser_failure_phase'] = 'navigation';
         self::assertArrayNotHasKey('browser_failure_phase', HostedBrowser::sanitize($data));
+    }
+
+    public function testKnownDetachedFramePreservesMethodFactsWithoutInventingFieldAbsence(): void
+    {
+        $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'method_config_requested' => true,
+            'method_config_get_attempted' => true, 'method_config_send_started' => true,
+            'method_config_response_observed' => true, 'method_config_http_status' => 200,
+            'method_config_observation' => 'matched', 'method_config_items' => 2,
+            'method_config_card_advertised' => true, 'method_config_pagination_known' => false,
+            'card_readiness_observed' => false, 'card_readiness_unavailable_reason' => 'frame_detached',
+            'readiness_frame_detached' => true, 'readiness_detach_stage' => 'after_count', 'bound_render_frames' => 1,
+            'readiness_attachment_field' => 'cardnumber', 'readiness_frame_detached_before_count' => false,
+            'readiness_frame_detached_after_count' => true,
+            'cardnumber_unique' => false, 'cardnumber_visible' => false, 'cvc_enabled' => false,
+            'private_error' => 'PRIVATE_FRAME_ERROR'];
+        $safe = HostedBrowser::sanitize($data, true, true);
+        self::assertFalse($safe['card_readiness_observed']);
+        self::assertSame('frame_detached', $safe['card_readiness_unavailable_reason']);
+        self::assertSame('after_count', $safe['readiness_detach_stage']);
+        self::assertFalse($safe['readiness_frame_detached_before_count']);
+        self::assertTrue($safe['readiness_frame_detached_after_count']);
+        self::assertSame('matched', $safe['method_config_observation']);
+        self::assertSame(200, $safe['method_config_http_status']);
+        self::assertSame(2, $safe['method_config_items']);
+        self::assertTrue($safe['method_config_card_advertised']);
+        self::assertFalse($safe['method_config_pagination_known']);
+        foreach (['cardnumber_unique', 'cardnumber_visible', 'cvc_enabled'] as $key) {
+            self::assertArrayNotHasKey($key, $safe);
+        }
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        foreach (
+            ['card_readiness_observed', 'readiness_frame_detached', 'readiness_detach_stage',
+            'bound_render_frames'] as $key
+        ) {
+            $invalid = $data;
+            unset($invalid[$key]);
+            $failed = false;
+            try {
+                HostedBrowser::sanitize($invalid, true, true);
+            } catch (RuntimeException) {
+                $failed = true;
+            }
+            self::assertTrue($failed, $key);
+        }
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true);
     }
 
     /** @return iterable<string,array{string}> */

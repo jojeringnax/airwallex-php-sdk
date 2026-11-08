@@ -152,7 +152,7 @@ final readonly class HostedBrowser
             'method_context', 'method_get', 'method_status', 'method_headers', 'method_body', 'method_fulfill',
             'method_response_dispose', 'method_abort', 'websocket_close', 'dialog_dismiss',
             'shutdown_browser_context', 'shutdown_browser', 'shutdown_request_context', 'shutdown_proxy',
-            'shutdown_directory', 'unclassified'];
+            'shutdown_directory', 'readiness_attachment', 'unclassified'];
         foreach (['cardnumber', 'expiry', 'cvc'] as $field) {
             foreach (['locator', 'count', 'visible', 'enabled'] as $step) {
                 $failurePhases[] = 'readiness_' . $field . '_' . $step;
@@ -227,15 +227,44 @@ final readonly class HostedBrowser
                 throw new RuntimeException('Method observation lacked the bound read-only response.');
             }
         }
+        $detachStage = $data['readiness_detach_stage'] ?? null;
+        if (($data['card_readiness_unavailable_reason'] ?? null) === 'frame_detached') {
+            if (
+                !$observeConfig || ($data['card_readiness_observed'] ?? null) !== false
+                || ($data['readiness_frame_detached'] ?? null) !== true
+                || !in_array($detachStage, ['before_count', 'after_count'], true)
+                || !is_int($data['bound_render_frames'] ?? null) || $data['bound_render_frames'] < 1
+                || !in_array($data['readiness_attachment_field'] ?? null, ['cardnumber', 'expiry', 'cvc'], true)
+                || ($detachStage === 'before_count'
+                    ? ($data['readiness_frame_detached_before_count'] ?? null) !== true
+                    : ($data['readiness_frame_detached_after_count'] ?? null) !== true)
+            ) {
+                throw new RuntimeException('Detached-frame evidence lacked its read-only observation.');
+            }
+            $safe['card_readiness_unavailable_reason'] = 'frame_detached';
+            $safe['readiness_frame_detached'] = true;
+            $safe['readiness_detach_stage'] = $detachStage;
+        }
         if ($observeConfig) {
+            if (in_array($data['readiness_attachment_field'] ?? null, ['cardnumber', 'expiry', 'cvc'], true)) {
+                $safe['readiness_attachment_field'] = $data['readiness_attachment_field'];
+            }
             foreach (
                 ['method_config_requested', 'method_config_get_attempted', 'method_config_send_started',
                 'method_config_response_observed',
                 'method_config_payload_delivered', 'method_config_pagination_known', 'method_config_has_more',
-                'method_config_card_advertised', 'card_readiness_observed', 'cardnumber_unique', 'cardnumber_visible',
+                'method_config_card_advertised', 'card_readiness_observed',
+                'readiness_frame_detached_before_count', 'readiness_frame_detached_after_count',
+                'cardnumber_unique', 'cardnumber_visible',
                 'cardnumber_enabled', 'expiry_unique', 'expiry_visible', 'expiry_enabled',
                 'cvc_unique', 'cvc_visible', 'cvc_enabled'] as $key
             ) {
+                if (
+                    preg_match('/^(?:cardnumber|expiry|cvc)_/', $key) === 1
+                    && ($data['card_readiness_observed'] ?? null) !== true
+                ) {
+                    continue;
+                }
                 if (is_bool($data[$key] ?? null)) {
                     $safe[$key] = $data[$key];
                 }

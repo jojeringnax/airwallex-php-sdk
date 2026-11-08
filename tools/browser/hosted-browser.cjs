@@ -28,6 +28,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let boundFrame;
   let shuttingDown = false;
   let result;
+  let readiness = {};
+  let readinessAttachment = {};
   let failed = false;
   let firstFailure;
   let methodSendStarted = false;
@@ -309,18 +311,51 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       if (policy.bindingEvidence().payer_get_attempted) await observed;
     }
     if (policy.bindingEvidence().payer_payload_delivered) await new Promise(resolve => setTimeout(resolve, 10000));
-    let readiness = {};
     if (observeConfig) {
       readiness = { card_readiness_observed: false };
       if (boundFrame) {
+        const detached = stage => {
+          try {
+            const value = boundFrame.isDetached();
+            if (typeof value !== 'boolean') throw new Error('Invalid frame attachment observation.');
+            readinessAttachment[stage === 'before_count'
+              ? 'readiness_frame_detached_before_count' : 'readiness_frame_detached_after_count'] = value;
+            return value;
+          } catch { markFailure('readiness_attachment'); throw new Error('Browser preflight failed safely.'); }
+        };
+        const unavailable = stage => ({ card_readiness_observed: false,
+          card_readiness_unavailable_reason: 'frame_detached', readiness_frame_detached: true,
+          readiness_detach_stage: stage });
+        const observations = {};
         for (const name of ['cardnumber', 'expiry', 'cvc']) {
-          const field = await step(`readiness_${name}_locator`, () => boundFrame.locator(`input[name="${name}"]`));
-          const count = await step(`readiness_${name}_count`, () => field.count());
-          readiness[`${name}_unique`] = count === 1;
-          readiness[`${name}_visible`] = count === 1 && await step(`readiness_${name}_visible`, () => field.isVisible());
-          readiness[`${name}_enabled`] = count === 1 && await step(`readiness_${name}_enabled`, () => field.isEnabled());
+          readinessAttachment = { readiness_attachment_field: name };
+          if (detached('before_count')) { readiness = unavailable('before_count'); break; }
+          let phase = `readiness_${name}_locator`;
+          let countStarted = false;
+          try {
+            const field = boundFrame.locator(`input[name="${name}"]`);
+            phase = `readiness_${name}_count`;
+            countStarted = true;
+            const count = await field.count();
+            if (detached('after_count')) { readiness = unavailable('after_count'); break; }
+            observations[`${name}_unique`] = count === 1;
+            phase = `readiness_${name}_visible`;
+            observations[`${name}_visible`] = count === 1 && await field.isVisible();
+            phase = `readiness_${name}_enabled`;
+            observations[`${name}_enabled`] = count === 1 && await field.isEnabled();
+            if (detached('after_count')) { readiness = unavailable('after_count'); break; }
+          } catch {
+            if (detached(countStarted ? 'after_count' : 'before_count')) {
+              readiness = unavailable(countStarted ? 'after_count' : 'before_count'); break;
+            }
+            readiness = { card_readiness_observed: false };
+            markFailure(phase);
+            throw new Error('Browser preflight failed safely.');
+          }
         }
-        readiness.card_readiness_observed = true;
+        if (readiness.card_readiness_unavailable_reason === undefined) {
+          readiness = { card_readiness_observed: true, ...observations };
+        }
       }
     }
     const visible = await step('visible_label', () =>
@@ -332,7 +367,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       navigation_passed: true, test_mode_visible: visible,
       sandbox_origin_verified: false, card_entry_enabled: false,
       ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
-      ...policy.bindingEvidence(), ...payer, ...(observeConfig ? { ...method, ...readiness } : {}),
+      ...policy.bindingEvidence(), ...payer, ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
       browser_version: /^[0-9]+(?:\.[0-9]+){1,3}$/u.test(browser.version()) ? browser.version() : 'unclassified',
       ...counts, proxy_rejections: proxy.counts.rejected,
       proxy_connections: proxy.counts.connected,
@@ -356,10 +391,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   if (failed || result === undefined) throw new PreflightFailure({
     result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false,
     browser_failure_phase: firstFailure ?? 'unclassified', ...counts,
-    ...policy.renderEvidence(), ...policy.methodEvidence(),
-    ...(payer.payer_http_status === undefined ? {} : { payer_http_status: payer.payer_http_status }),
-    ...(method.method_config_http_status === undefined ? {} : { method_config_http_status: method.method_config_http_status }),
-    ...(observeConfig ? { method_config_send_started: methodSendStarted } : {}),
+    ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
+    ...policy.bindingEvidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
+    ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
   });
   return { ...result, ...counts, ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
