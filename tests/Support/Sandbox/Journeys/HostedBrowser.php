@@ -43,7 +43,7 @@ final readonly class HostedBrowser
 
     /**
      * @param array{checkout_id:string,mode:string,currency:string} $expected SDK-verified own Checkout.
-     * @return array<string,string|int|bool>
+     * @return array<string,string|int|bool|array<string,int>>
      */
     public function inspect(
         #[SensitiveParameter] string $url,
@@ -123,7 +123,7 @@ final readonly class HostedBrowser
         }
     }
 
-    /** @return array<string,string|int|bool> */
+    /** @return array<string,string|int|bool|array<string,int>> */
     public static function sanitize(#[SensitiveParameter] mixed $data, bool $render = false): array
     {
         if (!is_array($data) || ($data['card_entry_enabled'] ?? null) !== false) {
@@ -201,6 +201,25 @@ final readonly class HostedBrowser
             if (isset($data[$key]) && is_int($data[$key]) && $data[$key] >= 0 && $data[$key] <= 1000000) {
                 $safe[$key] = $data[$key];
             }
+        }
+        if ($render && is_array($data['render_frame_checks'] ?? null)) {
+            $checks = [];
+            foreach (
+                ['document_candidates', 'method_mismatch', 'frame_unavailable', 'parent_mismatch',
+                'request_origin_mismatch', 'request_path_or_query_mismatch', 'source_unavailable',
+                'scope_unverified', 'payer_not_delivered', 'reference_unavailable', 'limit_reached',
+                'invalid_source_url', 'source_origin_mismatch', 'source_path_or_query_mismatch',
+                'fragment_route_mismatch', 'fragment_keys_mismatch', 'build_mismatch', 'language_mismatch',
+                'invalid_options', 'mode_mismatch', 'currency_mismatch', 'secret_mismatch',
+                'customer_mismatch', 'intent_mismatch', 'qualified', 'document_redirect',
+                'document_http_or_build_mismatch', 'fulfilled'] as $key
+            ) {
+                $count = $data['render_frame_checks'][$key] ?? null;
+                if (is_int($count) && $count >= 0 && $count <= 1000000) {
+                    $checks[$key] = $count;
+                }
+            }
+            $safe['render_frame_checks'] = $checks;
         }
         $payerStatus = $data['payer_http_status'] ?? null;
         if (is_int($payerStatus) && $payerStatus >= 100 && $payerStatus <= 599) {

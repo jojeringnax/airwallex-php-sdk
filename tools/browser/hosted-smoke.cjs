@@ -205,15 +205,18 @@ async function smoke(playwright) {
     }, expected, true);
     if (!rendered.payer_payload_delivered || rendered.bound_render_frames !== 1 || rendered.verified_render_assets !== 1
         || rendered.financial_routing_verified || hits.render !== renderHits + 1 || hits.forbidden !== 0
-        || rendered.proxy_external_connections !== 0) throw new Error('Local render boundary failed.');
+        || rendered.proxy_external_connections !== 0 || rendered.render_frame_checks.qualified !== 1
+        || rendered.render_frame_checks.fulfilled !== 1) throw new Error('Local render boundary failed.');
     const wrongFrame = await inspect(origin + '/payer-page?s=' + token + '&render=1&wrongframe=1',
       playwright, origin, null, expected, true);
-    if (wrongFrame.bound_render_frames !== 0 || hits.render !== renderHits + 1 || hits.forbidden !== 0) {
+    if (wrongFrame.bound_render_frames !== 0 || hits.render !== renderHits + 1 || hits.forbidden !== 0
+        || wrongFrame.render_frame_checks.document_candidates !== 1
+        || wrongFrame.render_frame_checks.customer_mismatch !== 1 || wrongFrame.render_frame_checks.qualified !== 0) {
       throw new Error('Local mismatched render frame escaped.');
     }
     return { ...result, deny_before_send: true, fixture_forbidden_hits: 0, fixture_websocket_hits: 0,
       altered_script_blocked: true, payer_binding_checks: payerChecks, payer_payloads_delivered: 0,
-      payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true };
+      payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 
