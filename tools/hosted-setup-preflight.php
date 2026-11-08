@@ -10,10 +10,10 @@ $arguments = $argv ?? [];
 $options = getopt('', [
     'environment:', 'credentials-file:', 'state-dir:', 'node-bin:', 'playwright-module:',
     'create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
-    'observe-risk-bootstrap', 'observe-parent-country',
+    'observe-risk-bootstrap', 'observe-parent-country', 'observe-one-currency-settings',
 ], $lastArgument);
 $flags = ['create-one-hosted-setup', 'render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
-    'observe-risk-bootstrap', 'observe-parent-country'];
+    'observe-risk-bootstrap', 'observe-parent-country', 'observe-one-currency-settings'];
 $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin', 'playwright-module', ...$flags];
 if (is_array($options)) {
     $valid = $lastArgument === count($arguments);
