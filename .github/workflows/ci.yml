@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: PHP ${{ matrix.php }} / ${{ matrix.dependencies }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        dependencies: [lowest, latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, mbstring, xml, xmlwriter
+          coverage: none
+          tools: composer:v2
+      - name: Validate package metadata
+        run: composer validate --strict
+      - name: Resolve lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --prefer-lowest --prefer-dist --no-interaction
+      - name: Resolve latest dependencies
+        if: matrix.dependencies == 'latest'
+        run: composer update --prefer-dist --no-interaction
+      - name: Verify resolved platform requirements
+        run: composer check-platform-reqs
+      - name: Run deterministic tests, style and static analysis
+        run: composer check
+      - name: Install clean consumer with lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer check:consumer -- --lowest
+      - name: Install clean consumer with latest dependencies
+        if: matrix.dependencies == 'latest'
+        run: composer check:consumer
