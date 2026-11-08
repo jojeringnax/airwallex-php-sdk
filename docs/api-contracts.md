@@ -57,6 +57,8 @@ Credit notes/Billing transactions need a separate coverage decision beyond the a
 
 For implemented Billing routes, request validation, source snapshots and remaining runtime evidence, see [Billing resources](billing-resources.md).
 
+For implemented Payments resource operations, method-specific request conditions, replay evidence and remaining runtime gates, see [Payments resource contracts](payments-contracts.md).
+
 ## Representative contract checks
 
 Paths below are relative to `/api/v1`. These checks compare documented reads and mutations independently for Billing and Payments at `2026-08-21`; no sandbox API requests were executed. Billing Customer create/retrieve reference the same `CustomerResponse` schema; Intent create/retrieve reference `PaymentIntentSingle`. Login references `Token` and retains the required credential headers and optional `x-login-as` described above.

@@ -51,6 +51,13 @@ final readonly class ApiTransport
         if (!in_array($operation->family, ['billing', 'payments'], true)) {
             throw new ConfigurationException('Unsupported API family.');
         }
+        if (
+            $operation->family === 'payments' && $this->delegatedAccountId !== null
+            && (($body !== null && array_key_exists('connected_account_id', $body))
+                || array_key_exists('connected_account_id', $query))
+        ) {
+            throw new ConfigurationException('Delegated Payments cannot combine connected-account selectors.');
+        }
         if ($operation->family === 'billing' && $this->delegatedAccountId !== null) {
             throw new ConfigurationException('Billing does not support connected-account delegation.');
         }

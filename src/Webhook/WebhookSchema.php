@@ -14,6 +14,40 @@ final class WebhookSchema
         'payment_consent' => ['created', 'updated', 'pending', 'verified', 'disabled', 'paused',
             'requires_payment_method', 'requires_customer_action', 'verification_failed'],
         'payment_method' => ['created', 'updated', 'attached', 'detached', 'disabled'],
+        'payment_intent' => [
+            'cancelled',
+            'created',
+            'payment_failed',
+            'pending',
+            'pending_review',
+            'requires_capture',
+            'requires_customer_action',
+            'requires_payment_method',
+            'succeeded',
+            'updated',
+        ],
+        'payment_attempt' => [
+            'authentication_failed',
+            'authentication_redirected',
+            'authorization_failed',
+            'authorized',
+            'cancelled',
+            'capture_failed',
+            'capture_requested',
+            'expired',
+            'failed_to_process',
+            'paid',
+            'pending_authorization',
+            'received',
+            'risk_declined',
+            'settled',
+        ],
+        'refund' => [
+            'accepted',
+            'failed',
+            'received',
+            'settled',
+        ],
     ];
 
     private const array STATUSES = [
@@ -23,6 +57,33 @@ final class WebhookSchema
         'payment_consent' => ['PENDING', 'VERIFIED', 'DISABLED', 'PAUSED',
             'REQUIRES_PAYMENT_METHOD', 'REQUIRES_CUSTOMER_ACTION'],
         'payment_method' => ['CREATED', 'DISABLED'],
+        'payment_intent' => [
+            'REQUIRES_PAYMENT_METHOD',
+            'REQUIRES_CUSTOMER_ACTION',
+            'PENDING_REVIEW',
+            'REQUIRES_CAPTURE',
+            'PENDING',
+            'SUCCEEDED',
+            'CANCELLED',
+        ],
+        'payment_attempt' => [
+            'RECEIVED',
+            'AUTHENTICATION_REDIRECTED',
+            'PENDING_AUTHORIZATION',
+            'AUTHORIZED',
+            'CAPTURE_REQUESTED',
+            'EXPIRED',
+            'CANCELLED',
+            'FAILED',
+            'SETTLED',
+            'PAID',
+        ],
+        'refund' => [
+            'RECEIVED',
+            'ACCEPTED',
+            'SETTLED',
+            'FAILED',
+        ],
     ];
 
     private const array INTEGER_PATHS = [
@@ -37,6 +98,20 @@ final class WebhookSchema
             '/terms_of_use/billing_cycle_charge_day', '/terms_of_use/payment_schedule/period',
             '/terms_of_use/total_billing_cycles'],
         'payment_method' => [],
+        'payment_intent' => [
+            '/additional_info/customer_activity_data/purchase_summaries/*/successful_purchase_count',
+            '/additional_info/enhanced_scheme_data/products/*/quantity',
+            '/additional_info/online_travel_agency_data/customer/loyalty_program_points',
+            '/order/products/*/quantity',
+            '/order/sellers/*/additional_info/sales_summary/sales_count',
+            '/payment_consent/terms_of_use/billing_cycle_charge_day',
+            '/payment_consent/terms_of_use/payment_schedule/period',
+            '/payment_consent/terms_of_use/total_billing_cycles',
+        ],
+        'payment_attempt' => [
+        ],
+        'refund' => [
+        ],
     ];
 
     /**

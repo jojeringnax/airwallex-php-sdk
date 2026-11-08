@@ -1,0 +1,441 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/payments/customers",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "f3dcbacb0453ce7a4808b6e97305dac6"
+  },
+  "annotations": [],
+  "endpoints": {
+    "createCustomer": {
+      "apiPath": "/api/v1/pa/customers/create",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "merchant_customer_id",
+                "request_id"
+              ],
+              "properties": {
+                "address": {
+                  "type": "object",
+                  "required": [
+                    "country_code"
+                  ],
+                  "properties": {
+                    "city": {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    "country_code": {
+                      "type": "string"
+                    },
+                    "postcode": {
+                      "type": "string",
+                      "maxLength": 10
+                    },
+                    "state": {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    "street": {
+                      "type": "string",
+                      "maxLength": 1000
+                    }
+                  }
+                },
+                "business_name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "email": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "first_name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "last_name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "merchant_customer_id": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "phone_number": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Customer"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "retrieveCustomer": {
+      "apiPath": "/api/v1/pa/customers/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Customer"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "listCustomers": {
+      "apiPath": "/api/v1/pa/customers",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "from_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "merchant_customer_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page_num",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "to_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Customer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": true
+    },
+    "updateCustomer": {
+      "apiPath": "/api/v1/pa/customers/{id}/update",
+      "method": "post",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "request_id"
+              ],
+              "properties": {
+                "address": {
+                  "type": "object",
+                  "required": [
+                    "country_code"
+                  ],
+                  "properties": {
+                    "city": {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    "country_code": {
+                      "type": "string"
+                    },
+                    "postcode": {
+                      "type": "string",
+                      "maxLength": 10
+                    },
+                    "state": {
+                      "type": "string",
+                      "maxLength": 100
+                    },
+                    "street": {
+                      "type": "string",
+                      "maxLength": 1000
+                    }
+                  }
+                },
+                "business_name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "email": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "first_name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "last_name": {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                "merchant_customer_id": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "phone_number": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Customer"
+              }
+            }
+          }
+        },
+        "201": {},
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:write",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    }
+  },
+  "schemas": {
+    "Customer": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/components/schemas/Payment_Acceptance_Address"
+        },
+        "business_name": {
+          "type": "string"
+        },
+        "client_secret": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "email": {
+          "type": "string"
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "last_name": {
+          "type": "string"
+        },
+        "merchant_customer_id": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "phone_number": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Payment_Acceptance_Address": {
+      "type": "object",
+      "required": [
+        "country_code"
+      ],
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "street": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

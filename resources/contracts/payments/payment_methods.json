@@ -1,0 +1,676 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/payments/payment_methods",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "f3dcbacb0453ce7a4808b6e97305dac6"
+  },
+  "annotations": [],
+  "endpoints": {
+    "retrievePaymentMethod": {
+      "apiPath": "/api/v1/pa/payment_methods/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentMethod"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": false
+    },
+    "listPaymentMethods": {
+      "apiPath": "/api/v1/pa/payment_methods",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "customer_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "from_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page_num",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "name": "status",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "to_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "type",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PaymentMethod"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_acceptance:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Acceptance",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": true
+    }
+  },
+  "schemas": {
+    "PaymentMethod": {
+      "type": "object",
+      "properties": {
+        "ach_direct_debit": {
+          "$ref": "#/components/schemas/AchDirectDebit"
+        },
+        "applepay": {
+          "$ref": "#/components/schemas/Applepay"
+        },
+        "bacs_direct_debit": {
+          "$ref": "#/components/schemas/BacsDirectDebit"
+        },
+        "becs_direct_debit": {
+          "$ref": "#/components/schemas/BecsDirectDebit"
+        },
+        "card": {
+          "$ref": "#/components/schemas/Payment_Acceptance_Card"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "eft_direct_debit": {
+          "$ref": "#/components/schemas/EftDirectDebit"
+        },
+        "googlepay": {
+          "$ref": "#/components/schemas/Googlepay"
+        },
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "sepa_direct_debit": {
+          "$ref": "#/components/schemas/SepaDirectDebit"
+        },
+        "status": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "AchDirectDebit": {
+      "type": "object",
+      "properties": {
+        "aba_routing_number": {
+          "type": "string"
+        },
+        "account_number": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        }
+      }
+    },
+    "MicroDebitResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "MicroDepositResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "Applepay": {
+      "type": "object",
+      "properties": {
+        "billing": {
+          "$ref": "#/components/schemas/Billing"
+        },
+        "lifecycle_id": {
+          "type": "string"
+        },
+        "payment_data_type": {
+          "type": "string"
+        },
+        "tokenized_card": {
+          "$ref": "#/components/schemas/TokenizedCard"
+        }
+      }
+    },
+    "Billing": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/components/schemas/Payment_Acceptance_Address"
+        },
+        "date_of_birth": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "last_name": {
+          "type": "string"
+        },
+        "phone_number": {
+          "type": "string"
+        }
+      }
+    },
+    "Payment_Acceptance_Address": {
+      "type": "object",
+      "required": [
+        "country_code"
+      ],
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "street": {
+          "type": "string"
+        }
+      }
+    },
+    "TokenizedCard": {
+      "type": "object",
+      "required": [
+        "expiry_month",
+        "expiry_year"
+      ],
+      "properties": {
+        "authentication_method": {
+          "$ref": "#/components/schemas/AuthenticationMethod"
+        },
+        "bin": {
+          "type": "string"
+        },
+        "brand": {
+          "type": "string"
+        },
+        "device_manufacturer_identifier": {
+          "type": "string"
+        },
+        "expiry_month": {
+          "type": "string"
+        },
+        "expiry_year": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "is_commercial": {
+          "type": "boolean"
+        },
+        "issuer_country_code": {
+          "type": "string"
+        },
+        "issuer_name": {
+          "type": "string"
+        },
+        "last4": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "AuthenticationMethod": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "emv": {
+          "$ref": "#/components/schemas/Emv"
+        },
+        "three_ds": {
+          "$ref": "#/components/schemas/ThreeDomainSecure"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "Emv": {
+      "type": "object",
+      "required": [
+        "emv_data"
+      ],
+      "properties": {
+        "emv_data": {
+          "type": "string"
+        },
+        "encrypted_pin_data": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreeDomainSecure": {
+      "type": "object",
+      "required": [
+        "online_payment_cryptogram"
+      ],
+      "properties": {
+        "eci_indicator": {
+          "type": "string"
+        },
+        "online_payment_cryptogram": {
+          "type": "string"
+        }
+      }
+    },
+    "BacsDirectDebit": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "address": {
+          "$ref": "#/components/schemas/BacsDirectDebitAddress"
+        },
+        "bank_name": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        },
+        "sort_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BacsDirectDebitAddress": {
+      "type": "object",
+      "required": [
+        "line1",
+        "postcode",
+        "town"
+      ],
+      "properties": {
+        "country_code": {
+          "type": "string"
+        },
+        "line1": {
+          "type": "string"
+        },
+        "line2": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "town": {
+          "type": "string"
+        }
+      }
+    },
+    "BecsDirectDebit": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bsb_number": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        }
+      }
+    },
+    "Payment_Acceptance_Card": {
+      "type": "object",
+      "properties": {
+        "additional_info": {
+          "$ref": "#/components/schemas/CardAdditionalInfo"
+        },
+        "billing": {
+          "$ref": "#/components/schemas/Billing"
+        },
+        "bin": {
+          "type": "string"
+        },
+        "brand": {
+          "type": "string"
+        },
+        "card_type": {
+          "type": "string"
+        },
+        "expiry_month": {
+          "type": "string"
+        },
+        "expiry_year": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "is_commercial": {
+          "type": "boolean"
+        },
+        "issuer_country_code": {
+          "type": "string"
+        },
+        "issuer_name": {
+          "type": "string"
+        },
+        "korean_card": {
+          "$ref": "#/components/schemas/KoreanCardData"
+        },
+        "last4": {
+          "type": "string"
+        },
+        "lifecycle_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "number_type": {
+          "type": "string"
+        }
+      }
+    },
+    "CardAdditionalInfo": {
+      "type": "object",
+      "properties": {
+        "merchant_verification_value": {
+          "type": "string"
+        },
+        "token_requestor_id": {
+          "type": "string"
+        }
+      }
+    },
+    "KoreanCardData": {
+      "type": "object",
+      "properties": {
+        "business_number": {
+          "type": "string"
+        },
+        "date_of_birth": {
+          "type": "string"
+        },
+        "password_first2": {
+          "type": "string"
+        }
+      }
+    },
+    "EftDirectDebit": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "institution_number": {
+          "type": "string"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        },
+        "transit_number": {
+          "type": "string"
+        }
+      }
+    },
+    "Googlepay": {
+      "type": "object",
+      "properties": {
+        "billing": {
+          "$ref": "#/components/schemas/Billing"
+        },
+        "lifecycle_id": {
+          "type": "string"
+        },
+        "payment_data_type": {
+          "type": "string"
+        },
+        "tokenized_card": {
+          "$ref": "#/components/schemas/TokenizedCard"
+        }
+      }
+    },
+    "SepaDirectDebit": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/components/schemas/SepaDirectDebitAddress"
+        },
+        "bank_name": {
+          "type": "string"
+        },
+        "business_account": {
+          "type": "boolean"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "iban": {
+          "type": "string"
+        },
+        "micro_debit": {
+          "$ref": "#/components/schemas/MicroDebitResult"
+        },
+        "micro_deposit": {
+          "$ref": "#/components/schemas/MicroDepositResult"
+        },
+        "owner_email": {
+          "type": "string"
+        },
+        "owner_name": {
+          "type": "string"
+        }
+      }
+    },
+    "SepaDirectDebitAddress": {
+      "type": "object",
+      "required": [
+        "postcode",
+        "street",
+        "town"
+      ],
+      "properties": {
+        "country_code": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "street": {
+          "type": "string"
+        },
+        "town": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
