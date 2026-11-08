@@ -21,7 +21,7 @@ final class SandboxCommand
     public static function run(array $options, ?Closure $sessions = null): array
     {
         $scenario = $options['scenario'] ?? null;
-        $allowed = ['authentication', 'billing-catalogue', 'billing-checkouts'];
+        $allowed = ['authentication', 'billing-catalogue', 'billing-checkouts', 'payments-lifecycle'];
         $label = in_array($scenario, $allowed, true) ? $scenario : 'configuration';
         $result = ['scenario' => $label, 'api_version' => '2026-08-21', 'result' => 'fail'];
         $session = null;
@@ -47,6 +47,13 @@ final class SandboxCommand
             $result['context_fingerprint'] = $session->contextFingerprint();
             if ($scenario === 'authentication') {
                 return array_replace($result, AuthenticationScenario::run($configuration, $context));
+            }
+            if ($scenario === 'payments-lifecycle') {
+                if ($session->isOrganization()) {
+                    throw new RuntimeException('Payments lifecycle requires account context.');
+                }
+                $ledger = RunLedger::create($session->contextFingerprint(), $directory);
+                return array_replace($result, PaymentsLifecycle::execute($session, $ledger));
             }
             if (!$session->isOrganization()) {
                 throw new RuntimeException('Billing catalogue validation requires organization context.');
