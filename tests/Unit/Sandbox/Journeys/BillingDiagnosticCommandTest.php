@@ -30,6 +30,9 @@ final class BillingDiagnosticCommandTest extends TestCase
             'environment' => 'sandbox', 'credentials-file' => '/nonexistent-private-fixture',
         ]];
         yield 'wrong argument types' => [['environment' => 'sandbox', 'credentials-file' => [], 'state-dir' => []]];
+        yield 'unsupported scenario' => [[
+            'environment' => 'sandbox', 'credentials-file' => '/unread-private-fixture', 'scenario' => 'other',
+        ]];
     }
 
     /** @param array<string,mixed> $options */
@@ -48,17 +51,19 @@ final class BillingDiagnosticCommandTest extends TestCase
         }
     }
 
-    /** @return iterable<string,array{string,?string}> */
+    /** @return iterable<string,array{string,?string,string}> */
     public static function providerCodes(): iterable
     {
-        yield 'public code' => ['validation_error', 'validation_error'];
-        yield 'opaque lowercase code' => ['private_provider_identifier', null];
+        yield 'public code' => ['validation_error', 'validation_error', 'billing-lifecycle'];
+        yield 'opaque lowercase code' => ['private_provider_identifier', null, 'billing-lifecycle'];
+        yield 'separate no-trial scenario' => ['validation_error', 'validation_error', 'billing-lifecycle-no-trial'];
     }
 
     #[DataProvider('providerCodes')]
     public function testFreshCommandUsesGuardedOrganizationLifecycleAndOnlyWhitelistedErrorEvidence(
         string $code,
         ?string $expectedCode,
+        string $scenario,
     ): void {
         $directory = sys_get_temp_dir() . '/airwallex-billing-diagnostic-fixture-' . bin2hex(random_bytes(6));
         mkdir($directory, 0700);
@@ -107,8 +112,11 @@ final class BillingDiagnosticCommandTest extends TestCase
         try {
             $result = BillingDiagnosticCommand::run([
                 'environment' => 'sandbox', 'credentials-file' => $credentials, 'state-dir' => $directory,
+                'scenario' => $scenario,
             ], $http);
             self::assertSame('fail', $result['result']);
+            self::assertSame($scenario, $result['scenario']);
+            self::assertSame($scenario === 'billing-lifecycle', $result['trial_requested']);
             self::assertSame('organization', $result['context']);
             self::assertTrue($result['ambiguous_mutation']);
             self::assertIsArray($result['steps']);
@@ -127,6 +135,9 @@ final class BillingDiagnosticCommandTest extends TestCase
             // The Account configuration token is separate from the organization Billing token.
             self::assertSame('fixture_account', $http->requests[0]->getHeaderLine('x-login-as'));
             self::assertSame('', $http->requests[2]->getHeaderLine('x-login-as'));
+            $create = json_decode((string) $http->requests[11]->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($create);
+            self::assertSame($scenario === 'billing-lifecycle', array_key_exists('trial_ends_at', $create));
             $json = json_encode($result, JSON_THROW_ON_ERROR);
             foreach (['SENTINEL_PRIVATE_DATA', 'fixture_', 'private_provider_identifier'] as $private) {
                 self::assertStringNotContainsString($private, $json);

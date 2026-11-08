@@ -36,6 +36,7 @@ final class BillingLifecycle
         #[SensitiveParameter] private readonly string $legalEntity,
         private readonly Closure $wait,
         private readonly int $observationAttempts,
+        private readonly bool $withTrial,
     ) {
     }
 
@@ -47,6 +48,7 @@ final class BillingLifecycle
         ?Closure $clock = null,
         ?Closure $wait = null,
         int $observationAttempts = 7,
+        bool $withTrial = true,
     ): array {
         if (
             !$session->isOrganization() || $legalEntity === ''
@@ -61,8 +63,12 @@ final class BillingLifecycle
             $legalEntity,
             $wait ?? static fn (int $seconds) => sleep($seconds),
             $observationAttempts,
+            $withTrial,
         );
-        $result = ['scenario' => 'billing-lifecycle', 'api_version' => '2026-08-21', 'result' => 'pass'];
+        $result = [
+            'scenario' => $withTrial ? 'billing-lifecycle' : 'billing-lifecycle-no-trial',
+            'api_version' => '2026-08-21', 'result' => 'pass', 'trial_requested' => $withTrial,
+        ];
         try {
             $now = ($clock ?? static fn (): int => time())();
             if (!is_int($now) || $now < 0) {
@@ -152,6 +158,10 @@ final class BillingLifecycle
         $subscriptions = $this->session->client->billing()->subscriptions();
         $start = gmdate('Y-m-d\TH:i:s\Z', $now + 86400);
         $trial = gmdate('Y-m-d\TH:i:s\Z', $now + 172800);
+        $timing = ['starts_at' => $start];
+        if ($this->withTrial) {
+            $timing['trial_ends_at'] = $trial;
+        }
         $this->subscriptionFields = [
             'billing_customer_id' => $this->customer, 'legal_entity_id' => $this->legalEntity,
             'collection_method' => 'OUT_OF_BAND', 'currency' => 'EUR', 'days_until_due' => 30,
@@ -159,11 +169,8 @@ final class BillingLifecycle
             'metadata' => ['sdk_validation_run' => $this->ledger->runId()],
         ];
         $created = $this->mutate(
-            'create_future_trial',
-            $this->subscriptionFields + [
-                'starts_at' => $start, 'trial_ends_at' => $trial,
-                'items' => [['price_id' => $this->firstPrice, 'quantity' => 1]],
-            ],
+            $this->withTrial ? 'create_future_trial' : 'create_future_start',
+            $this->subscriptionFields + $timing + ['items' => [['price_id' => $this->firstPrice, 'quantity' => 1]]],
             static fn (array $wire): array => $subscriptions->create($wire),
             createdKind: 'subscriptions',
         );
@@ -171,14 +178,18 @@ final class BillingLifecycle
         $pending = $this->subscriptionState('future_start', 'PENDING');
         if (
             !self::sameInstant($pending['starts_at'] ?? null, $start)
-            || !self::sameInstant($pending['trial_ends_at'] ?? null, $trial)
+            || ($this->withTrial && !self::sameInstant($pending['trial_ends_at'] ?? null, $trial))
         ) {
             throw new ProtocolException('Future start or trial timestamps differ from the requested times.');
         }
         $this->update('start_now', ['starts_at' => 'NOW']);
-        $this->subscriptionState('trial_started', 'IN_TRIAL');
-        $this->update('end_trial_now', ['trial_ends_at' => 'NOW']);
-        $active = $this->subscriptionState('trial_ended', 'ACTIVE', requireCycle: true);
+        if ($this->withTrial) {
+            $this->subscriptionState('trial_started', 'IN_TRIAL');
+            $this->update('end_trial_now', ['trial_ends_at' => 'NOW']);
+            $active = $this->subscriptionState('trial_ended', 'ACTIVE', requireCycle: true);
+        } else {
+            $active = $this->subscriptionState('activated_without_trial', 'ACTIVE', requireCycle: true);
+        }
         $anchor = self::timestamp($active['billing_cycle_anchor_at'] ?? null);
         self::timestamp($active['current_period_starts_at'] ?? null);
         self::timestamp($active['current_period_ends_at'] ?? null);

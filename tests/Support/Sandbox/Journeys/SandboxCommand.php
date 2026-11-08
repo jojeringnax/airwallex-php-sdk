@@ -21,7 +21,10 @@ final class SandboxCommand
     public static function run(array $options, ?Closure $sessions = null): array
     {
         $scenario = $options['scenario'] ?? null;
-        $allowed = ['authentication', 'billing-catalogue', 'billing-checkouts', 'billing-lifecycle'];
+        $allowed = [
+            'authentication', 'billing-catalogue', 'billing-checkouts',
+            'billing-lifecycle', 'billing-lifecycle-no-trial',
+        ];
         $label = in_array($scenario, $allowed, true) ? $scenario : 'configuration';
         $result = ['scenario' => $label, 'api_version' => '2026-08-21', 'result' => 'fail'];
         $session = null;
@@ -60,6 +63,12 @@ final class SandboxCommand
                 $journey = match ($scenario) {
                     'billing-catalogue' => BillingCatalogue::execute($session, $ledger, $legalEntity),
                     'billing-lifecycle' => BillingLifecycle::execute($session, $ledger, $legalEntity),
+                    'billing-lifecycle-no-trial' => BillingLifecycle::execute(
+                        $session,
+                        $ledger,
+                        $legalEntity,
+                        withTrial: false,
+                    ),
                     'billing-checkouts' => BillingCheckoutMatrix::execute(
                         $session,
                         $ledger,
@@ -78,7 +87,9 @@ final class SandboxCommand
         }
         if (
             $session !== null
-            && in_array($scenario, ['billing-catalogue', 'billing-checkouts', 'billing-lifecycle'], true)
+            && in_array($scenario, [
+                'billing-catalogue', 'billing-checkouts', 'billing-lifecycle', 'billing-lifecycle-no-trial',
+            ], true)
         ) {
             $result['login_requests'] = $session->loginRequests();
         }

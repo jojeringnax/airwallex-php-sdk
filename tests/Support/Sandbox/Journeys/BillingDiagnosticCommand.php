@@ -21,9 +21,11 @@ final class BillingDiagnosticCommand
         $failure = ['scenario' => 'billing-diagnostic', 'api_version' => '2026-08-21', 'result' => 'fail'];
         $credentials = $options['credentials-file'] ?? null;
         $directory = $options['state-dir'] ?? null;
+        $scenario = $options['scenario'] ?? 'billing-lifecycle';
         if (
             ($options['environment'] ?? null) !== 'sandbox' || !is_string($credentials) || $credentials === ''
             || ($directory !== null && !is_string($directory))
+            || !in_array($scenario, ['billing-lifecycle', 'billing-lifecycle-no-trial'], true)
         ) {
             return $failure;
         }
@@ -33,7 +35,7 @@ final class BillingDiagnosticCommand
                 'timeout' => 30, 'connect_timeout' => 10,
             ]));
             $result = SandboxCommand::run([
-                'scenario' => 'billing-lifecycle', 'environment' => 'sandbox', 'context' => 'organization',
+                'scenario' => $scenario, 'environment' => 'sandbox', 'context' => 'organization',
                 'credentials-file' => $credentials, 'state-dir' => $directory,
             ], static fn (Configuration $configuration, string $context): SandboxSession
                 => new SandboxSession($configuration, $context, $diagnostics));

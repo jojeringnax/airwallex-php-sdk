@@ -6,7 +6,7 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\BillingDiagnosticComman
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-$options = getopt('', ['environment:', 'credentials-file:', 'state-dir:']);
+$options = getopt('', ['environment:', 'credentials-file:', 'state-dir:', 'scenario:']);
 $result = BillingDiagnosticCommand::run($options === false ? [] : $options);
 $result['diagnostic_tool_sha256'] = hash_file('sha256', __FILE__);
 echo json_encode($result, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES) . "\n";

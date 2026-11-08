@@ -77,6 +77,20 @@ Each asynchronous state/item/cycle checkpoint and missing-invoice discovery perm
 
 Every mutation has a distinct durably recorded request identity and is sent once. Any failed sent mutation is conservatively treated as ambiguous: subsequent writes, including cleanup, stop. The retained private ledger supports reconciliation. After acknowledged outcomes, cleanup first retrieves only recorded own Subscriptions, cancels a known non-cancelled state once with `proration_behavior=NONE`, and confirms `CANCELLED` within the read bound. Unconfirmed cancellation stops archive writes. Only afterward are this run's returned Price/Product IDs archived. Customer, Subscription and invoice history remain. Deterministic fixtures cover the scenario and failure gates; an actual run is separate evidence, and this manual journey does not validate instrument collection, recovery, webhook delivery or either cross-account Billing model.
 
+### Separate manual lifecycle without a trial
+
+Run `--scenario=billing-lifecycle-no-trial --context=organization` through `tools/sandbox.php`, or retain the narrow diagnostic output with:
+
+```sh
+php tools/billing-diagnostic.php --environment=sandbox --credentials-file=/absolute/private/path/.env --state-dir=/absolute/private/run-state-directory --scenario=billing-lifecycle-no-trial
+```
+
+This is a new run with its own Customer, catalogue, action identities and ledger. It omits the optional `trial_ends_at` field entirely, observes the requested future `PENDING` start, updates `starts_at=NOW`, and requires an observed `ACTIVE` state with valid cycle timestamps. It then performs the same quantity/proration, Price replacement, period-end flag reversal, invoice reads and owned cancellation/archive checks. Its result is labeled `billing-lifecycle-no-trial` with `trial_requested=false`; it never sends a trial-ending update or records trial-started/trial-ended checkpoints. Pending or rejected activation remains unfinished evidence under the same bounded GET/no-replay rules.
+
+The original `billing-lifecycle` and default diagnostic path still submit the future start plus later trial, require `IN_TRIAL`, and explicitly end that trial before requiring `ACTIVE`. The trial scenario remains unvalidated against the provider: the observed fresh-create rejection identified only the lexical field term `trial_ends_at`, which establishes neither universal lack of support nor its precise conditional requirement. Passing the separate no-trial path cannot satisfy trial acceptance or alter the prior uncertain action.
+
+For retained catalogue cleanup after either rejected create, first load each original private ledger under its exact organization/credential fingerprint and preserve its original action records. Retrieve only its recorded Customer, Product and two Prices, validate each returned ID and run marker, validate each Price's recorded Product relationship and EUR configuration, and stop if any reference is missing or mismatched. Archive only those recorded Prices, then that Product, through `active=false` updates; the [selected Price contract](https://www.airwallex.com/docs/api/billing/prices) defines this field as availability for new purchases. Already inactive resources need no write. Record distinct cleanup intents durably in a separate private ledger before each update, send each once, verify its own readback, and stop all further writes on an ambiguous outcome. Keep Customer/history and all uncertain Subscription state; this plan includes no Subscription cancellation, discovery-based sweep or replay of the failed create. An operator executes only an independently reviewed cleanup implementation; the lifecycle command does not resume or clean an earlier ledger.
+
 ### Reconcile an uncertain Subscription create
 
 An operator can run the separate read-only probe against a private ledger; the agent preparing this helper does not read actual credentials or run state:

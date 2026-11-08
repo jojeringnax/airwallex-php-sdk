@@ -158,11 +158,33 @@ final class BillingLifecycleTest extends TestCase
         ];
     }
 
+    /** @return list<array{int,string}|Throwable> */
+    private function withoutTrialFixtures(): array
+    {
+        $fixtures = $this->fixtures();
+        // Keep the first NOW update; omit the IN_TRIAL read and trial-ending mutation response.
+        array_splice($fixtures, 12, 2);
+        $result = [];
+        foreach ($fixtures as $entry) {
+            if (!is_array($entry)) {
+                $result[] = $entry;
+                continue;
+            }
+            $body = json_decode($entry[1], true, flags: JSON_THROW_ON_ERROR);
+            if (is_array($body) && array_key_exists('trial_ends_at', $body)) {
+                unset($body['trial_ends_at']);
+                $entry[1] = json_encode($body, JSON_THROW_ON_ERROR);
+            }
+            $result[] = $entry;
+        }
+        return $result;
+    }
+
     /**
      * @param list<array{int,string}|Throwable> $responses
      * @return array{array<string,mixed>,RecordingClient,RunLedger,int,list<int>}
      */
-    private function runJourney(array $responses, int $attempts = 3): array
+    private function runJourney(array $responses, int $attempts = 3, bool $withTrial = true): array
     {
         $queue = array_map(
             static fn (array | Throwable $entry): Response | Throwable
@@ -196,6 +218,7 @@ final class BillingLifecycleTest extends TestCase
                 $delays[] = $seconds;
             },
             observationAttempts: $attempts,
+            withTrial: $withTrial,
         );
         return [$result, $recording, $ledger, $waits, $delays];
     }
@@ -204,6 +227,8 @@ final class BillingLifecycleTest extends TestCase
     {
         [$result, $http, $ledger, $waits] = $this->runJourney($this->fixtures());
         self::assertSame('pass', $result['result']);
+        self::assertSame('billing-lifecycle', $result['scenario']);
+        self::assertTrue($result['trial_requested']);
         self::assertFalse($result['ambiguous_mutation']);
         self::assertSame(0, $waits);
         self::assertSame([
@@ -273,6 +298,85 @@ final class BillingLifecycleTest extends TestCase
         self::assertSame('GET', $http->requests[12]->getMethod());
         self::assertSame('GET', $http->requests[13]->getMethod());
         self::assertStringContainsString('"trial_ends_at":"NOW"', (string) $http->requests[14]->getBody());
+    }
+
+    public function testSeparatelyLabeledNoTrialJourneyObservesActivationAndAllRemainingCheckpoints(): void
+    {
+        [$result, $http, $ledger, $waits] = $this->runJourney($this->withoutTrialFixtures(), withTrial: false);
+        self::assertSame('pass', $result['result']);
+        self::assertSame('billing-lifecycle-no-trial', $result['scenario']);
+        self::assertFalse($result['trial_requested']);
+        self::assertSame(0, $waits);
+        self::assertIsArray($result['steps']);
+        self::assertArrayNotHasKey('trial_started', $result['steps']);
+        self::assertArrayNotHasKey('trial_ended', $result['steps']);
+        foreach (
+            [
+            'future_start', 'activated_without_trial', 'quantity_observed', 'quantity_cycle_kept',
+            'replacement_observed', 'plan_cycle_kept', 'ending_scheduled', 'period_end_flag_cleared',
+            ] as $step
+        ) {
+            self::assertSame('pass', $result['steps'][$step]);
+        }
+        self::assertSame(['customers' => 1, 'products' => 1, 'prices' => 2, 'subscriptions' => 1], $ledger->counts());
+        self::assertCount(32, $http->requests);
+        foreach ($http->requests as $request) {
+            self::assertStringNotContainsString('trial_ends_at', (string) $request->getBody());
+        }
+        self::assertSame([
+            'subscriptions_0' => 'pass', 'prices_0' => 'pass', 'prices_1' => 'pass', 'products_0' => 'pass',
+        ], $result['cleanup']);
+        self::assertIsArray($result['observations']);
+        self::assertTrue($result['observations']['pdf_url_present']);
+    }
+
+    public function testNoTrialJourneyWaitsForActiveWithoutMutatingOrClaimingTrialCompletion(): void
+    {
+        $fixtures = $this->withoutTrialFixtures();
+        $responses = [
+            ...array_slice($fixtures, 0, 12),
+            [200, self::json(self::subscription('IN_TRIAL'))],
+            ...array_slice($fixtures, 12),
+        ];
+        [$result, $http, , $waits] = $this->runJourney($responses, withTrial: false);
+        self::assertSame('pass', $result['result']);
+        self::assertFalse($result['trial_requested']);
+        self::assertSame(1, $waits);
+        self::assertSame('GET', $http->requests[12]->getMethod());
+        self::assertSame('GET', $http->requests[13]->getMethod());
+        foreach ($http->requests as $request) {
+            self::assertStringNotContainsString('trial_ends_at', (string) $request->getBody());
+        }
+    }
+
+    public function testNoTrialCreateFailureRemainsAmbiguousAndCannotReplayOrArchive(): void
+    {
+        $responses = array_slice($this->withoutTrialFixtures(), 0, 9);
+        $responses[] = [400, '{"code":"validation_error"}'];
+        [$result, $http, $ledger] = $this->runJourney($responses, withTrial: false);
+        self::assertSame('fail', $result['result']);
+        self::assertTrue($result['ambiguous_mutation']);
+        self::assertFalse($result['trial_requested']);
+        self::assertSame([], $ledger->created('subscriptions'));
+        self::assertCount(10, $http->requests);
+    }
+
+    public function testNoTrialJourneyCannotTreatAnUnfinishedTrialStateAsActive(): void
+    {
+        $responses = array_slice($this->withoutTrialFixtures(), 0, 12);
+        for ($index = 0; $index < 3; ++$index) {
+            $responses[] = [200, self::json(self::subscription('IN_TRIAL'))];
+        }
+        $responses = [...$responses, ...$this->cleanupFixtures('IN_TRIAL')];
+        [$result, $http, , $waits] = $this->runJourney($responses, withTrial: false);
+        self::assertSame('pending', $result['result']);
+        self::assertSame('activated_without_trial_not_observed_within_read_bound', $result['reason']);
+        self::assertFalse($result['trial_requested']);
+        self::assertSame(2, $waits);
+        self::assertCount(21, $http->requests);
+        foreach ($http->requests as $request) {
+            self::assertStringNotContainsString('trial_ends_at', (string) $request->getBody());
+        }
     }
 
     public function testExhaustedObservationIsPendingAndOnlyOwnedCleanupFollows(): void
