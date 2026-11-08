@@ -27,6 +27,7 @@ final class InvoiceAccessObservation
         private readonly ?Closure $clock = null,
         private readonly bool $followPdfRedirect = false,
         private readonly bool $followAirwallexPdfRedirect = false,
+        private readonly bool $withoutPdfRange = false,
     ) {
     }
 
@@ -52,6 +53,9 @@ final class InvoiceAccessObservation
             'complete_pdf_verified' => false, 'rendering_verified' => false,
             'expiry_verified' => false, 'renewal_verified' => false, 'signature_verified' => false,
             'mutation_sent' => false, 'redirect_followed' => false, 'third_party_followed' => false];
+        if ($this->withoutPdfRange) {
+            $safe['pdf_request_profile'] = 'ordinary_get';
+        }
         if ($this->followAirwallexPdfRedirect) {
             $safe['pdf_redirect_scope'] = 'airwallex_domain';
         }
@@ -62,7 +66,8 @@ final class InvoiceAccessObservation
         try {
             $ledger->assertContext($fingerprint);
             if (
-                (($this->followPdfRedirect || $this->followAirwallexPdfRedirect) && !$this->readPdf)
+                (($this->followPdfRedirect || $this->followAirwallexPdfRedirect || $this->withoutPdfRange)
+                    && !$this->readPdf)
                 || ($this->followPdfRedirect && $this->followAirwallexPdfRedirect)
             ) {
                 throw new ProtocolException('A PDF redirect requires the explicit original PDF read.');
@@ -92,7 +97,8 @@ final class InvoiceAccessObservation
                 $this->http,
                 $this->clock,
                 $this->followPdfRedirect,
-                $this->followAirwallexPdfRedirect
+                $this->followAirwallexPdfRedirect,
+                $this->withoutPdfRange
             );
             if ($this->readPdf) {
                 $safe['pdf_policy'] = InvoiceAccessPolicy::pdfPolicy($invoice['pdf_url'] ?? null);
@@ -100,14 +106,13 @@ final class InvoiceAccessObservation
                 if ($pdf !== null) {
                     $safe['phase'] = 'pdf_read';
                     try {
+                        $request = $this->pdfRequest($pdf);
                         $ledger->requestId('invoice_pdf_prefix_read', ['method' => 'GET',
                             'invoice_id' => $invoice['id'], 'prior_ledger_sha256' => $priorDigest,
-                            'url_sha256' => hash('sha256', $pdf), 'range' => 'bytes=0-1023'], $fingerprint);
+                            'url_sha256' => hash('sha256', $pdf), ...$this->pdfIntent($request)], $fingerprint);
                         $safe['pdf_send_started'] = true;
-                        $response = $http->sendRequest(new Request('GET', $pdf, [
-                            'Accept' => 'application/pdf', 'Accept-Encoding' => 'identity', 'Range' => 'bytes=0-1023',
-                        ]));
-                        $safe += self::pdf($response);
+                        $response = $http->sendRequest($request);
+                        $safe += self::pdf($response, $this->withoutPdfRange);
                         $safe['pdf_outcome'] = $safe['pdf_observed_outcome'];
                         $safe['pdf_prefix_matched'] = $safe['pdf_outcome'] === 'bounded_prefix_observed';
                         unset($safe['pdf_observed_outcome']);
@@ -123,11 +128,13 @@ final class InvoiceAccessObservation
                             $locationHash = $decision['location_sha256'];
                             if ($target !== null && $locationHash !== null) {
                                 try {
+                                    $followRequest = $this->pdfRequest($target);
                                     $references = ['original_status' => (string) $response->getStatusCode(),
                                         'original_url_sha256' => hash('sha256', $pdf),
                                         'location_sha256' => $locationHash, 'target_sha256' => hash('sha256', $target),
                                         ...($this->followAirwallexPdfRedirect
-                                            ? ['pdf_redirect_scope' => 'airwallex_domain'] : [])];
+                                            ? ['pdf_redirect_scope' => 'airwallex_domain'] : []),
+                                        ...($this->withoutPdfRange ? $this->pdfIntent($followRequest) : [])];
                                     $ledger->recordObservation(
                                         'invoice_pdf_redirect_response',
                                         $references,
@@ -135,16 +142,13 @@ final class InvoiceAccessObservation
                                     );
                                     $ledger->requestId('invoice_pdf_redirect_prefix_read', ['method' => 'GET',
                                         'invoice_id' => $invoice['id'], 'prior_ledger_sha256' => $priorDigest,
-                                        'range' => 'bytes=0-1023', ...$references], $fingerprint);
+                                        ...$this->pdfIntent($followRequest), ...$references], $fingerprint);
                                     $http->bindPdfRedirect($target);
                                     $safe['phase'] = 'pdf_redirect_read';
                                     $safe['pdf_redirect_send_started'] = true;
                                     $safe['redirect_followed'] = true;
-                                    $followed = $http->sendRequest(new Request('GET', $target, [
-                                        'Accept' => 'application/pdf', 'Accept-Encoding' => 'identity',
-                                        'Range' => 'bytes=0-1023',
-                                    ]));
-                                    $followedFacts = self::pdf($followed);
+                                    $followed = $http->sendRequest($followRequest);
+                                    $followedFacts = self::pdf($followed, $this->withoutPdfRange);
                                     foreach ($followedFacts as $name => $value) {
                                         $label = $name === 'pdf_observed_outcome' ? 'pdf_redirect_outcome'
                                             : 'pdf_redirect_' . substr($name, 4);
@@ -199,13 +203,33 @@ final class InvoiceAccessObservation
         }
     }
 
-    /** @return array<string,string|int|bool> */
-    private static function pdf(#[SensitiveParameter] ResponseInterface $response): array
+    private function pdfRequest(#[SensitiveParameter] string $target): Request
     {
+        return new Request('GET', $target, ['Accept' => 'application/pdf', 'Accept-Encoding' => 'identity',
+            ...($this->withoutPdfRange ? [] : ['Range' => 'bytes=0-1023'])]);
+    }
+
+    /** @return array<string,string> */
+    private function pdfIntent(#[SensitiveParameter] Request $request): array
+    {
+        // Hash the exact prepared PSR header map, not later HTTP-client wire defaults.
+        return $this->withoutPdfRange ? ['pdf_request_profile' => 'ordinary_get',
+            'request_headers_sha256' => hash('sha256', json_encode($request->getHeaders(), JSON_THROW_ON_ERROR))]
+            : ['range' => 'bytes=0-1023'];
+    }
+
+    /** @return array<string,string|int|bool> */
+    private static function pdf(
+        #[SensitiveParameter] ResponseInterface $response,
+        bool $withoutRange = false,
+    ): array {
         $status = $response->getStatusCode();
         $media = self::media($response);
         $safe = ['pdf_http_status' => $status, 'pdf_media' => $media,
             'pdf_observed_outcome' => $status >= 300 && $status < 400 ? 'redirect_unfollowed' : 'http_rejected'];
+        if ($withoutRange && $status === 206) {
+            return array_replace($safe, ['pdf_observed_outcome' => 'invalid_response', 'pdf_range_coherent' => false]);
+        }
         if (!in_array($status, [200, 206], true)) {
             return $safe;
         }

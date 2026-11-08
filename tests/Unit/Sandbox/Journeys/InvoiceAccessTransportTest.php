@@ -484,4 +484,115 @@ final class InvoiceAccessTransportTest extends TestCase
         self::assertSame(0, $stream->bytes);
         self::assertTrue($stream->closed);
     }
+    /** @return iterable<string,array{bool,bool}> */
+    public static function requestProfiles(): iterable
+    {
+        foreach ([false, true] as $ordinary) {
+            foreach ([false, true] as $follow) {
+                yield ($ordinary ? 'ordinary' : 'range') . ($follow ? ' follow' : ' original') => [$ordinary, $follow];
+            }
+        }
+    }
+
+    #[DataProvider('requestProfiles')]
+    public function testRequestProfileAllowsExactlyItsOwnHeaderSetAtBothHops(bool $ordinary, bool $follow): void
+    {
+        $target = 'https://documents.airwallex.com/PRIVATE.pdf';
+        $client = new RecordingClient(new Client(['handler' => new MockHandler([
+            ...($follow ? [new Response(301, ['Location' => $target])] : []), new Response(200, [], 'prefix'),
+        ])]));
+        $http = new InvoiceAccessTransport(
+            self::PDF,
+            null,
+            $client,
+            allowAirwallexPdfRedirect: $follow,
+            withoutPdfRange: $ordinary
+        );
+        $correct = $ordinary ? self::request()->withoutHeader('Range') : self::request();
+        if ($follow) {
+            $http->sendRequest($correct);
+            $http->bindPdfRedirect($target);
+            $correct = $correct->withUri(new Uri($target));
+        }
+        $wrong = $ordinary ? $correct->withHeader('Range', 'bytes=0-1023') : $correct->withoutHeader('Range');
+        try {
+            $http->sendRequest($wrong);
+            self::fail('A different PDF request profile was accepted.');
+        } catch (ProtocolException) {
+            self::assertCount($follow ? 1 : 0, $client->requests);
+        }
+        $http->sendRequest($correct);
+        self::assertCount($follow ? 2 : 1, $client->requests);
+        foreach ($client->requests as $request) {
+            self::assertSame(!$ordinary, $request->hasHeader('Range'));
+        }
+    }
+
+    /** @return iterable<string,array{string,bool}> */
+    public static function ordinaryStreamFailures(): iterable
+    {
+        foreach (self::redirectReadFailures() as $label => [$mode]) {
+            yield $label . ' original' => [$mode, false];
+            yield $label . ' follow' => [$mode, true];
+        }
+    }
+
+    #[DataProvider('ordinaryStreamFailures')]
+    public function testOrdinaryStreamingFailureIsClosedBoundedAndNotReplayable(string $mode, bool $follow): void
+    {
+        $target = 'https://documents.airwallex.com/PRIVATE.pdf';
+        $stream = new SimulationProbeStream(str_repeat('x', 100000), $mode === 'slow' ? 'one_byte' : $mode);
+        $ticks = 0;
+        $client = new RecordingClient(new Client(['handler' => new MockHandler([
+            ...($follow ? [new Response(301, ['Location' => $target])] : []),
+            $mode === 'transport' ? new RuntimeException('PRIVATE_FAILURE') : new Response(200, [], $stream),
+        ])]));
+        $http = new InvoiceAccessTransport(
+            self::PDF,
+            null,
+            $client,
+            static function () use (&$ticks, $mode): float {
+                return $mode === 'slow' ? ++$ticks * 2.0 : 0.0;
+            },
+            allowAirwallexPdfRedirect: $follow,
+            withoutPdfRange: true
+        );
+        $request = self::request()->withoutHeader('Range');
+        if ($follow) {
+            $http->sendRequest($request);
+            $http->bindPdfRedirect($target);
+            $request = $request->withUri(new Uri($target));
+        }
+        foreach ([1, 2] as $attempt) {
+            try {
+                $http->sendRequest($request);
+                self::fail('A failed ordinary PDF request passed or replayed.');
+            } catch (ProtocolException | TransportException $error) {
+                self::assertNull($error->getPrevious());
+                self::assertStringNotContainsString('PRIVATE', (string) $error);
+                self::assertCount($follow ? 2 : 1, $client->requests);
+            }
+        }
+        if ($mode !== 'transport') {
+            self::assertTrue($stream->closed);
+            self::assertLessThanOrEqual(1025, $stream->bytes);
+        }
+    }
+
+    public function testOrdinaryProfileRetainsHeaderBudgetEvenWithoutRedirectScope(): void
+    {
+        $stream = new SimulationProbeStream('PRIVATE_BODY', 'broken');
+        $client = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(200, ['PRIVATE_HEADER' => str_repeat('x', 65537)], $stream),
+        ])]));
+        $http = new InvoiceAccessTransport(self::PDF, null, $client, withoutPdfRange: true);
+        try {
+            $http->sendRequest(self::request()->withoutHeader('Range'));
+            self::fail('Ordinary PDF headers bypassed the observation cap.');
+        } catch (ProtocolException) {
+            self::assertCount(1, $client->requests);
+            self::assertSame(0, $stream->bytes);
+            self::assertTrue($stream->closed);
+        }
+    }
 }

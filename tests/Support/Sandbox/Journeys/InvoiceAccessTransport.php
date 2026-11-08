@@ -39,6 +39,7 @@ final class InvoiceAccessTransport implements ClientInterface
         ?Closure $clock = null,
         private readonly bool $allowPdfRedirect = false,
         private readonly bool $allowAirwallexPdfRedirect = false,
+        private readonly bool $withoutPdfRange = false,
     ) {
         if (
             ($allowPdfRedirect && $allowAirwallexPdfRedirect)
@@ -74,12 +75,12 @@ final class InvoiceAccessTransport implements ClientInterface
         foreach ($request->getHeaders() as $name => $values) {
             $headers[strtolower($name)] = $values;
         }
-        $pdfHeaders = self::headers($headers, ['accept' => 'application/pdf', 'accept-encoding' => 'identity',
-            'host' => 'invoice.sandbox.airwallex.com', 'range' => 'bytes=0-1023']);
+        $profile = ['accept' => 'application/pdf', 'accept-encoding' => 'identity',
+            ...($this->withoutPdfRange ? [] : ['range' => 'bytes=0-1023'])];
+        $pdfHeaders = self::headers($headers, ['host' => 'invoice.sandbox.airwallex.com', ...$profile]);
         $initial = $this->pdf !== null && $uri === $this->pdf && $pdfHeaders;
         $redirect = $this->redirectTarget !== null && $uri === $this->redirectTarget
-            && self::headers($headers, ['accept' => 'application/pdf', 'accept-encoding' => 'identity',
-                'host' => $request->getUri()->getHost(), 'range' => 'bytes=0-1023']);
+            && self::headers($headers, ['host' => $request->getUri()->getHost(), ...$profile]);
         $payer = $this->payerToken !== null && $uri === InvoiceAccessPolicy::PAYER
             && self::headers($headers, ['accept' => 'application/json', 'accept-encoding' => 'identity',
                 'host' => 'invoice.sandbox.airwallex.com', 'authorization' => 'Bearer ' . $this->payerToken]);
@@ -102,12 +103,12 @@ final class InvoiceAccessTransport implements ClientInterface
         try {
             $stream = $response->getBody();
             try {
-                if ($pdf && $this->allowAirwallexPdfRedirect) {
+                if ($pdf && ($this->allowAirwallexPdfRedirect || $this->withoutPdfRange)) {
                     self::boundHeaders($response);
                 }
                 $started = ($this->clock)();
                 $body = '';
-                $success = $pdf ? in_array($response->getStatusCode(), [200, 206], true)
+                $success = $pdf && !$this->withoutPdfRange ? in_array($response->getStatusCode(), [200, 206], true)
                     : $response->getStatusCode() === 200;
                 $limit = $success ? ($pdf ? 1025 : 65537) : 0;
                 while (strlen($body) < $limit) {

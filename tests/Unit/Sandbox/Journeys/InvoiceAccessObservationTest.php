@@ -112,11 +112,12 @@ final class InvoiceAccessObservationTest extends TestCase
         bool $payer = true,
         bool $follow = false,
         bool $airwallex = false,
+        bool $withoutRange = false,
     ): array {
         return ['environment' => 'sandbox', 'credentials-file' => $this->directory . '/credentials',
             'prior-ledger' => $this->prior, 'state-dir' => $this->directory,
             'read-one-pdf-prefix' => $pdf, 'read-one-payer-invoice' => $payer, 'follow-one-pdf-redirect' => $follow,
-            'follow-one-airwallex-pdf-redirect' => $airwallex];
+            'follow-one-airwallex-pdf-redirect' => $airwallex, 'pdf-prefix-without-range' => $withoutRange];
     }
 
     /** @return array<array-key,mixed> */
@@ -809,6 +810,11 @@ final class InvoiceAccessObservationTest extends TestCase
         yield 'production' => [['--environment=production', '--read-one-pdf-prefix']];
         yield 'flag value' => [['--read-one-pdf-prefix=true']];
         yield 'follow flag value' => [['--follow-one-pdf-redirect=false']];
+        yield 'ordinary flag value' => [['--pdf-prefix-without-range=false']];
+        yield 'ordinary duplicate' => [['--pdf-prefix-without-range', '--pdf-prefix-without-range']];
+        yield 'ordinary without PDF' => [['--environment=sandbox', '--pdf-prefix-without-range']];
+        yield 'ordinary production' => [['--environment=production', '--read-one-pdf-prefix',
+            '--pdf-prefix-without-range']];
         yield 'company flag value' => [['--follow-one-airwallex-pdf-redirect=false']];
         yield 'company duplicate' => [['--follow-one-airwallex-pdf-redirect', '--follow-one-airwallex-pdf-redirect']];
         yield 'company without PDF' => [['--environment=sandbox', '--follow-one-airwallex-pdf-redirect']];
@@ -1027,6 +1033,178 @@ final class InvoiceAccessObservationTest extends TestCase
         self::assertFalse($result['owner_chain_verified']);
         self::assertSame([], $links->requests);
         self::assertFalse($result['redirect_followed']);
+        self::sanitized($result);
+    }
+    public function testOrdinaryProfileIsDurableBeforeLoginAndBindsExactPreparedHeadersAtBothHops(): void
+    {
+        $target = 'https://documents.airwallex.com/PRIVATE%2fpdf?cap=PRIVATE%3D';
+        $sdk = $this->sdk(beforeLogin: function (): void {
+            $journal = $this->journal();
+            self::assertIsArray($journal['observations']);
+            self::assertSame(
+                ['profile' => 'ordinary_get',
+                'prior_ledger_sha256' => hash_file('sha256', $this->prior)],
+                $journal['observations']['invoice_pdf_request_profile']
+            );
+        });
+        $initial = $this->invoice()['pdf_url'];
+        self::assertIsString($initial);
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            function (RequestInterface $request) use ($initial, $target): Response {
+                self::assertFalse($request->hasHeader('Range'));
+                $prepared = new \GuzzleHttp\Psr7\Request(
+                    'GET',
+                    $initial,
+                    ['Accept' => 'application/pdf', 'Accept-Encoding' => 'identity']
+                );
+                $journal = $this->journal();
+                self::assertIsArray($journal['actions']);
+                self::assertIsArray($journal['actions']['invoice_pdf_prefix_read']);
+                $intent = ['method' => 'GET', 'invoice_id' => 'PRIVATE_INVOICE',
+                    'prior_ledger_sha256' => hash_file('sha256', $this->prior),
+                    'url_sha256' => hash('sha256', $initial), 'pdf_request_profile' => 'ordinary_get',
+                    'request_headers_sha256' => hash(
+                        'sha256',
+                        json_encode($prepared->getHeaders(), JSON_THROW_ON_ERROR)
+                    )];
+                self::assertSame(
+                    hash('sha256', json_encode($intent, JSON_THROW_ON_ERROR)),
+                    $journal['actions']['invoice_pdf_prefix_read']['body_hash']
+                );
+                return new Response(301, ['Location' => $target]);
+            },
+            function (RequestInterface $request) use ($target): Response {
+                self::assertSame($target, (string) $request->getUri());
+                self::assertFalse($request->hasHeader('Range'));
+                foreach (
+                    ['Authorization', 'Cookie', 'Referer', 'x-api-key', 'x-client-id', 'client-secret',
+                    'x-api-version', 'x-login-as', 'x-on-behalf-of'] as $name
+                ) {
+                    self::assertFalse($request->hasHeader($name));
+                }
+                $prepared = new \GuzzleHttp\Psr7\Request(
+                    'GET',
+                    $target,
+                    ['Accept' => 'application/pdf', 'Accept-Encoding' => 'identity']
+                );
+                $journal = $this->journal();
+                self::assertIsArray($journal['observations']);
+                self::assertIsArray($journal['observations']['invoice_pdf_redirect_response']);
+                $reference = $journal['observations']['invoice_pdf_redirect_response'];
+                self::assertSame('ordinary_get', $reference['pdf_request_profile']);
+                self::assertSame(
+                    hash('sha256', json_encode($prepared->getHeaders(), JSON_THROW_ON_ERROR)),
+                    $reference['request_headers_sha256']
+                );
+                self::assertArrayNotHasKey('range', $reference);
+                return new Response(200, ['Content-Type' => 'application/pdf'], "%PDF-1.7\n" . str_repeat('x', 100000));
+            },
+        ])]));
+        $options = $this->options(payer: false, airwallex: true, withoutRange: true);
+        $result = InvoiceAccessCommand::run($options, $sdk, $links);
+        self::assertSame('pass', $result['result']);
+        self::assertSame('ordinary_get', $result['pdf_request_profile']);
+        self::assertSame(301, $result['pdf_http_status']);
+        self::assertSame(200, $result['pdf_redirect_http_status']);
+        self::assertSame(1024, $result['pdf_redirect_prefix_bytes']);
+        self::assertTrue($result['pdf_redirect_prefix_cut']);
+        self::assertCount(2, $links->requests);
+        self::sanitized($result, true);
+    }
+
+    /** @return iterable<string,array{bool,bool,int,string,string,bool}> */
+    public static function ordinaryResponses(): iterable
+    {
+        foreach (['none' => [false, false], 'same' => [true, false], 'company' => [false, true]] as $mode => $flags) {
+            foreach (
+                [
+                'PDF200' => [200, 'application/pdf', "%PDF-1.7\n", true],
+                'bad media200' => [200, 'text/plain', "%PDF-1.7\n", false],
+                'bad magic200' => [200, 'application/pdf', 'PRIVATE_NOT_PDF', false],
+                'unsolicited206' => [206, 'application/pdf', "%PDF-1.7\n", false],
+                'rejected403' => [403, 'text/plain', 'PRIVATE_DENIAL', false],
+                ] as $label => $response
+            ) {
+                yield $mode . $label => [$flags[0], $flags[1], $response[0], $response[1], $response[2], $response[3]];
+            }
+        }
+    }
+
+    #[DataProvider('ordinaryResponses')]
+    public function testOrdinaryProfileKeepsPrefixMediaAndStatusGuardsForEveryExistingScope(
+        bool $same,
+        bool $company,
+        int $status,
+        string $media,
+        string $bytes,
+        bool $matched,
+    ): void {
+        $follow = $same || $company;
+        $stream = new SimulationProbeStream($bytes . str_repeat('x', 100000), $status === 200 ? 'normal' : 'broken');
+        $reply = new Response($status, ['Content-Type' => $media, 'Content-Range' => 'bytes 0-1023/100000'], $stream);
+        $replies = $follow ? [new Response(301, ['Location' => '/PRIVATE.pdf']), $reply] : [$reply];
+        $links = new RecordingClient(new Client(['handler' => new MockHandler($replies)]));
+        $result = InvoiceAccessCommand::run($this->options(
+            payer: false,
+            follow: $same,
+            airwallex: $company,
+            withoutRange: true
+        ), $this->sdk(), $links);
+        self::assertSame($matched ? 'pass' : 'pending', $result['result']);
+        self::assertSame($matched, $result['pdf_prefix_matched']);
+        self::assertSame($follow ? 301 : $status, $result['pdf_http_status']);
+        self::assertSame(
+            $status === 206 ? 'invalid_response'
+            : ($status === 403 ? 'http_rejected' : ($matched ? 'bounded_prefix_observed' : 'invalid_response')),
+            $result['pdf_outcome']
+        );
+        self::assertSame($status === 200 ? 1025 : 0, $stream->bytes);
+        self::assertTrue($stream->closed);
+        self::assertCount($follow ? 2 : 1, $links->requests);
+        foreach ($links->requests as $request) {
+            self::assertFalse($request->hasHeader('Range'));
+        }
+        self::sanitized($result, $follow);
+    }
+
+    /** @return iterable<string,array{string,int,int}> */
+    public static function ordinaryDurabilityFailures(): iterable
+    {
+        yield 'profile before auth' => ['invoice_pdf_request_profile', 0, 0];
+        yield 'original intent' => ['invoice_pdf_prefix_read', 5, 0];
+        yield 'original response' => ['invoice_pdf_redirect_response', 5, 1];
+        yield 'follow intent' => ['invoice_pdf_redirect_prefix_read', 5, 1];
+    }
+
+    #[DataProvider('ordinaryDurabilityFailures')]
+    public function testOrdinaryDurabilityFailureStopsItsSend(string $phase, int $sdkSends, int $linkSends): void
+    {
+        $sdk = $this->sdk();
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            new Response(301, ['Location' => 'https://documents.airwallex.com/PRIVATE.pdf']),
+        ])]));
+        $result = InvoiceAccessCommand::run(
+            $this->options(payer: false, airwallex: true, withoutRange: true),
+            $sdk,
+            $links,
+            static fn (string $fingerprint, string $directory): RunLedger => RunLedger::create(
+                $fingerprint,
+                $directory,
+                synchronize: static function () use ($directory, $phase): bool {
+                    foreach (glob($directory . '/sdk-validation-*/ledger.json.writing') ?: [] as $file) {
+                        $bytes = file_get_contents($file);
+                        if (is_string($bytes) && str_contains($bytes, $phase)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+            )
+        );
+        self::assertSame($phase === 'invoice_pdf_request_profile' ? 'fail' : 'pending', $result['result']);
+        self::assertCount($sdkSends, $sdk->requests);
+        self::assertCount($linkSends, $links->requests);
+        self::assertFalse($result['pdf_redirect_send_started'] ?? false);
         self::sanitized($result);
     }
 }
