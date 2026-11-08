@@ -53,9 +53,17 @@ This scenario creates a fresh synthetic Customer, Product, one recurring Price a
 
 The test supplies public reserved `https://example.com` success/back destinations for `HOSTED`, and a return destination for `EMBEDDED`/`ELEMENTS`. No browser follows them. A controlled sandbox HOSTED probe accepted success/back URLs without `return_url`; another HOSTED request with `return_url` returned validation error terms identifying `return_url`/`ui_mode`. This is observed test configuration, not an added global SDK requiredness rule for fields absent from the selected schema's required list.
 
+PAYMENT supplies `invoice_data.days_until_due=0`; SUBSCRIPTION supplies `subscription_data.days_until_due=0` and a finite one-month duration. A [fresh matrix](https://github.com/jojeringnax/airwallex-php-sdk/issues/42#issuecomment-6722652823) passed all nine control flows with these explicit mode-specific objects. Every expiry interval still differed from the documented hour, so the overall contract observation failed. The harness preserves that discrepancy and does not infer completion or expiry from timestamps.
+
 Each mode records its own outcome so a rejected setup path does not hide independent payment/subscription results. There is no browser purchase or instrument collection, no completed checkout, and no inference of paid invoices or active subscriptions. These completion/reconciliation and actual expiration journeys remain required under #42. The run cancels only its returned-created active Checkouts and archives its own catalogue; Customer/history remain. If a cancellation outcome is ambiguous, cleanup reads its current state and does not repeat the mutation. Update and cancel have no documented provider request identifier; the ledger records local intent without adding an undocumented field.
 
 Source: [Billing Checkouts API](https://www.airwallex.com/docs/api/billing/billing_checkouts), selected version `2026-08-21`. The SDK supplies server operations; browser initialization and completion belong to the application.
+
+### Bounded Checkout error diagnostics
+
+`php tools/checkout-diagnostic.php --environment=sandbox --credentials-file=/absolute/private/path/.env --state-dir=/absolute/private/run-state-directory` runs a **new** organization Checkout matrix with the same guarded transport and durable mutation/cleanup rules. It creates fresh synthetic catalogue/customer/Checkout resources; it does not resume an old ledger or accept another SDK root, account context, scenario or base URL.
+
+The optional observer inspects only Checkout create errors. It retains fixed mode/UI labels, exact selected-contract error codes and known request-field names/paths mentioned in top-level `source`/`message` fields. Unknown codes, dynamic metadata keys/values, raw messages, bodies, headers, identifiers and URLs are excluded. Request/response inspection is limited to 64 KiB, text to 8 KiB, each record to 32 field names/paths and output to 32 records, with truncation/drop indicators. Seekable stream positions are restored; non-seekable streams remain unread. Failed restoration stops the diagnostic rather than sending or decoding altered stream content. The tracked command also records its own SHA-256 beside the existing SDK/harness source evidence. These observations help distinguish validation fields; they do not diagnose permissions, activation or another provider cause from an HTTP 400 alone.
 
 ## Payments lifecycle writes
 
