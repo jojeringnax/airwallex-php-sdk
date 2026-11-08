@@ -30,8 +30,8 @@ final class ArtifactInspectionTest extends TestCase
         $metadata = [
             'name' => 'jojeringnax/airwallex-php-sdk', 'license' => 'MIT',
             'require' => [
-                'php' => '>=8.3 <8.6', 'psr/http-client' => '^1.0', 'psr/http-factory' => '^1.0',
-                'psr/http-message' => '^2.0', 'psr/simple-cache' => '^3.0',
+                'php' => '>=8.3 <8.6', 'php-64bit' => '*', 'psr/http-client' => '^1.0',
+                'psr/http-factory' => '^1.0', 'psr/http-message' => '^2.0', 'psr/simple-cache' => '^3.0',
             ],
         ];
         file_put_contents($this->package . '/composer.json', json_encode($metadata, JSON_THROW_ON_ERROR));

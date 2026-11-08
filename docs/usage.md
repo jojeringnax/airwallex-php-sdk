@@ -4,7 +4,7 @@ Use this guide to install the development package and connect the implemented SD
 
 ## Install the unreleased development source
 
-Use PHP **8.3, 8.4 or 8.5** and Composer 2. No stable SDK tag or package-registry release is available. In a consuming application's `composer.json`, register the repository and require its development branch:
+Use **64-bit PHP 8.3, 8.4 or 8.5** and Composer 2. The [runtime boundary](architecture.md#package-and-runtime-support) and Composer platform checks apply to the complete SDK, including webhook verification. No stable SDK tag or package-registry release is available. In a consuming application's `composer.json`, register the repository and require its development branch:
 
 ```json
 {

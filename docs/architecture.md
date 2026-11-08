@@ -6,7 +6,9 @@ The SDK is a single framework-independent PHP package. See [development planning
 
 | Package | Namespace | Supported runtimes |
 | --- | --- | --- |
-| `jojeringnax/airwallex-php-sdk` | `Jojeringnax\Airwallex` | PHP 8.3, 8.4 and 8.5 |
+| `jojeringnax/airwallex-php-sdk` | `Jojeringnax\Airwallex` | 64-bit PHP 8.3, 8.4 and 8.5 |
+
+The 64-bit platform boundary is a delegated provisional decision under [#101](https://github.com/jojeringnax/airwallex-php-sdk/issues/101), open for human review. The accepted webhook clock returns Unix milliseconds as a PHP integer; contemporary timestamps exceed the 32-bit signed range. [PHP integer range](https://www.php.net/manual/en/language.types.integer.php) depends on the build, so Composer requires its [virtual `php-64bit` platform package](https://getcomposer.org/doc/articles/composer-platform-dependencies.md). This installs no new code and preserves the clock interface. Supporting 32-bit PHP would require a separately designed timestamp contract and validation; it is not part of this provisional baseline.
 
 The SDK installs without a framework or database. Applications choose their own integration and persistence model.
 
