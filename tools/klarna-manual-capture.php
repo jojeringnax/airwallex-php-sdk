@@ -9,8 +9,13 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 $options = [];
 $valid = true;
 foreach (array_slice($argv ?? [], 1) as $argument) {
-    if ($argument === '--create-one-klarna' && !array_key_exists('create-one-klarna', $options)) {
-        $options['create-one-klarna'] = true;
+    if (in_array($argument, ['--create-one-klarna', '--use-guide-amount'], true)) {
+        $name = substr($argument, 2);
+        if (array_key_exists($name, $options)) {
+            $valid = false;
+            break;
+        }
+        $options[$name] = true;
     } elseif (
         preg_match('/^--(environment|credentials-file|state-dir|case)=(.+)$/D', $argument, $parts) === 1
         && !array_key_exists($parts[1], $options)

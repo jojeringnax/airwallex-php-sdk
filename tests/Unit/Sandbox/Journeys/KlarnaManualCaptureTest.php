@@ -8,7 +8,10 @@ use Closure;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\Psr7\Response;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\KlarnaManualCapture;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\KlarnaManualCaptureCommand;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -46,10 +49,11 @@ final class KlarnaManualCaptureTest extends TestCase
     }
 
     /** @return array<string,mixed> */
-    private function options(string $case = 'capture-refund'): array
+    private function options(string $case = 'capture-refund', bool $guide = false): array
     {
         return ['environment' => 'sandbox', 'credentials-file' => $this->directory . '/credentials',
-            'state-dir' => $this->directory, 'case' => $case, 'create-one-klarna' => true];
+            'state-dir' => $this->directory, 'case' => $case, 'create-one-klarna' => true,
+            'use-guide-amount' => $guide];
     }
 
     /** @param (Closure(string,string):RunLedger)|null $ledgers
@@ -58,7 +62,8 @@ final class KlarnaManualCaptureTest extends TestCase
     private function execute(
         string $case = 'capture-refund',
         ?ResponseInterface $redirect = null,
-        ?Closure $ledgers = null
+        ?Closure $ledgers = null,
+        bool $guide = false,
     ): array {
         $http = new Client(['handler' => new MockHandler([function (RequestInterface $request) use (
             $redirect,
@@ -67,7 +72,7 @@ final class KlarnaManualCaptureTest extends TestCase
                 return $redirect ?? new Response(302, ['Location' => KlarnaProvider::MOCK]);
         }])]);
         return KlarnaManualCaptureCommand::run(
-            $this->options($case),
+            $this->options($case, $guide),
             $this->provider,
             $http,
             $ledgers,
@@ -194,6 +199,171 @@ final class KlarnaManualCaptureTest extends TestCase
         self::assertCount(1, $this->mutations('/pay'));
         self::assertSame([], $this->mutations('/cancel'));
         self::privateOutput($result);
+    }
+
+    #[DataProvider('cases')]
+    public function testExplicitGuideAmountBindsAllExactWireAndStateProofsBeforeAuthentication(string $case): void
+    {
+        $tool = hash_file('sha256', dirname(__DIR__, 4) . '/tools/klarna-manual-capture.php');
+        self::assertIsString($tool);
+        $this->provider->before = function (RequestInterface $request) use ($case, $tool): void {
+            if ($request->getUri()->getPath() === '/api/v1/authentication/login') {
+                $state = $this->journal();
+                self::assertIsArray($state['actions']);
+                $binding = ['case' => $case, 'amount' => '100.00', 'amount_choice' => 'guide',
+                    'tool_sha256' => $tool, 'api_version' => '2026-08-21'];
+                $action = $state['actions']['klarna_preflight'] ?? null;
+                self::assertIsArray($action);
+                self::assertSame(hash('sha256', json_encode($binding, JSON_THROW_ON_ERROR)), $action['body_hash']);
+            }
+        };
+        $result = $this->execute($case, guide: true);
+        self::assertSame('pass', $result['result']);
+        self::assertSame('guide', $result['amount_choice']);
+        self::assertFalse($result['reconciliation_required']);
+        $create = (string) $this->mutations('/create')[0]->getBody();
+        self::assertStringContainsString('"amount":100.00', $create);
+        self::assertStringContainsString('"unit_price":100.00', $create);
+        self::assertStringContainsString('"quantity":1', $create);
+        self::assertSame('100.00', $this->provider->intent['amount']);
+        if ($case === 'capture-refund') {
+            self::assertStringContainsString('"amount":100.00', (string) $this->mutations('/capture')[0]->getBody());
+            self::assertSame('100.00', $this->provider->refund['amount']);
+        } else {
+            self::assertSame([], $this->mutations('/capture'));
+            self::assertSame([], $this->provider->refund);
+        }
+        self::privateOutput($result);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function guideMoneyFailures(): iterable
+    {
+        yield 'initial amount' => ['initial'];
+        yield 'captured amount' => ['captured'];
+        yield 'refund amount' => ['refund'];
+    }
+
+    #[DataProvider('guideMoneyFailures')]
+    public function testGuideAmountCannotReuseDefaultAmountForAnyFinancialProof(string $phase): void
+    {
+        $this->provider->alter = function (
+            RequestInterface $request,
+            ResponseInterface $response
+        ) use (
+            $phase,
+        ): ResponseInterface {
+            if ($request->getMethod() !== 'GET') {
+                return $response;
+            }
+            $data = (new \Jojeringnax\Airwallex\Internal\Json\JsonCodec())->decodeObject(
+                (string) $response->getBody()
+            );
+            $response->getBody()->rewind();
+            $state = $data['status'] ?? null;
+            if (
+                ($phase === 'initial' && $state === 'REQUIRES_PAYMENT_METHOD')
+                || ($phase === 'captured' && $state === 'SUCCEEDED')
+                || ($phase === 'refund' && str_ends_with($request->getUri()->getPath(), '/refunds/PRIVATE_REFUND'))
+            ) {
+                $data[$phase === 'captured' ? 'captured_amount' : 'amount'] = '1.23';
+                return KlarnaProvider::response($data);
+            }
+            return $response;
+        };
+        $result = $this->execute(guide: true);
+        self::assertSame('fail', $result['result']);
+        self::assertTrue($result['reconciliation_required']);
+        self::assertSame([], $this->mutations('/cancel'));
+        self::assertCount($phase === 'initial' ? 0 : 1, $this->mutations('/capture'));
+        self::privateOutput($result);
+    }
+
+    public function testPassivePrimaryDiagnosticProjectionPreservesResponseAndDiscardsRawErrorValues(): void
+    {
+        $this->provider->alter = static function (
+            RequestInterface $request,
+            ResponseInterface $response,
+        ): ResponseInterface {
+            return str_ends_with($request->getUri()->getPath(), '/confirm') ? new Response(
+                400,
+                [],
+                '{"code":"provider_declined","source":"metadata.PRIVATE_FIELD",'
+                . '"message":"PCI DSS Native API not enabled amount currency PRIVATE_CONTACT"}'
+            ) : $response;
+        };
+        $result = $this->execute();
+        self::assertSame('fail', $result['result']);
+        self::assertSame('api_request_rejected', $result['reason']);
+        self::assertSame('default', $result['amount_choice']);
+        self::assertSame('unlisted', $result['public_code']); // The journey's legacy subset stays conservative.
+        $diagnostics = $result['diagnostics'] ?? null;
+        self::assertIsArray($diagnostics);
+        self::assertSame(0, $diagnostics['entries_dropped']);
+        $entries = $diagnostics['entries'];
+        self::assertIsArray($entries);
+        $confirm = null;
+        $count = 0;
+        foreach ($entries as $entry) {
+            if (is_array($entry) && ($entry['operation'] ?? null) === 'intent_confirm') {
+                $confirm = $entry;
+                ++$count;
+            }
+        }
+        self::assertSame(1, $count);
+        self::assertIsArray($confirm);
+        self::assertSame('provider_declined', $confirm['public_code']);
+        self::assertSame(['amount', 'currency'], $confirm['validation_fields']);
+        self::assertSame(['pci', 'native_api', 'not_enabled'], $confirm['public_condition_terms']);
+        self::assertCount(1, $this->mutations('/confirm'));
+        self::assertSame([], $this->mutations('/cancel'));
+        self::assertTrue($result['reconciliation_required']);
+        self::privateOutput($result);
+    }
+
+    /** @return iterable<string,array{mixed}> */
+    public static function invalidGuideFlags(): iterable
+    {
+        yield 'string' => ['true'];
+        yield 'integer' => [1];
+        yield 'array' => [[true]];
+    }
+
+    #[DataProvider('invalidGuideFlags')]
+    public function testGuideSelectionRequiresBooleanBeforeAnyAuthentication(mixed $flag): void
+    {
+        $options = $this->options();
+        $options['use-guide-amount'] = $flag;
+        $result = KlarnaManualCaptureCommand::run($options, $this->provider);
+        self::assertSame('configuration', $result['stage']);
+        self::assertSame('fail', $result['result']);
+        self::assertSame([], $this->provider->requests);
+        self::assertSame([], glob($this->directory . '/sdk-validation-*'));
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function invalidInternalAmounts(): iterable
+    {
+        foreach (['100', '1.2300', '100.01', 'NaN'] as $amount) {
+            yield $amount => [$amount];
+        }
+    }
+
+    #[DataProvider('invalidInternalAmounts')]
+    public function testInvalidInternalAmountIsRejectedBeforeAnyAuthentication(string $amount): void
+    {
+        $session = new SandboxSession(
+            Configuration::load('sandbox', $this->directory . '/credentials'),
+            'account',
+            $this->provider
+        );
+        $ledger = RunLedger::create($session->contextFingerprint(), $this->directory);
+        $this->expectException(RuntimeException::class);
+        try {
+            new KlarnaManualCapture($session, $ledger, amount: $amount);
+        } finally {
+            self::assertSame([], $this->provider->requests);
+        }
     }
 
     /** @return iterable<string,array{string,mixed}> */
@@ -528,6 +698,9 @@ final class KlarnaManualCaptureTest extends TestCase
         yield 'case missing' => [['--environment=sandbox', '--create-one-klarna'], []];
         yield 'double case' => [['--case=capture-refund', '--case=authorized-cancel'], []];
         yield 'root override' => [['--sdk-root=/PRIVATE'], []];
+        yield 'arbitrary amount' => [['--amount=100.00'], []];
+        yield 'guide flag value' => [['--use-guide-amount=true'], []];
+        yield 'duplicate guide flag' => [['--use-guide-amount', '--use-guide-amount'], []];
         yield 'URL override' => [['--url=https://PRIVATE.test'], []];
         yield 'disabled argv' => [['--environment=production'], ['-d', 'register_argc_argv=0']];
         yield 'stream unavailable' => [['--environment=sandbox', '--create-one-klarna', '--case=capture-refund',

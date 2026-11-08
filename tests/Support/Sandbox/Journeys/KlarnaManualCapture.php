@@ -39,9 +39,13 @@ final class KlarnaManualCapture
         private readonly ?ClientInterface $redirectHttp = null,
         ?Closure $sleep = null,
         private readonly int $readAttempts = 7,
+        private readonly string $amount = '1.23',
     ) {
-        if ($session->isOrganization() || $readAttempts < 1 || $readAttempts > 7) {
-            throw new RuntimeException('Klarna observations require account context and bounded reads.');
+        if (
+            !in_array($amount, ['1.23', '100.00'], true)
+            || $session->isOrganization() || $readAttempts < 1 || $readAttempts > 7
+        ) {
+            throw new RuntimeException('Klarna requires an approved fixed amount and bounded account reads.');
         }
         $this->sleep = $sleep ?? static function (int $seconds): void {
             sleep($seconds);
@@ -97,7 +101,8 @@ final class KlarnaManualCapture
             $this->ledger->recordObservation(
                 'klarna_authorized',
                 ['intent_id' => $id,
-                'status' => 'REQUIRES_CAPTURE', 'amount' => '1.23', 'currency' => 'EUR', 'captured_amount' => '0'],
+                'status' => 'REQUIRES_CAPTURE', 'amount' => $this->amount,
+                'currency' => 'EUR', 'captured_amount' => '0'],
                 $this->session->contextFingerprint()
             );
             $this->requireState('REQUIRES_CAPTURE', '0'); // Fresh proof immediately before disposition.
@@ -121,18 +126,18 @@ final class KlarnaManualCapture
                 $this->stage = 'capture';
                 $this->mutate(
                     'klarna_capture',
-                    ['amount' => '1.23'],
+                    ['amount' => $this->amount],
                     fn (array $body): array => $this->session->client->payments()
                         ->paymentIntents()->capture($id, $body),
                     $id
                 );
-                $this->safe['capture_verified'] = $this->poll('SUCCEEDED', '1.23');
+                $this->safe['capture_verified'] = $this->poll('SUCCEEDED', $this->amount);
                 if (!$this->safe['capture_verified']) {
                     $this->safe['reason'] = 'capture_pending';
                     return $this->finish();
                 }
                 $this->uncertain = false;
-                $this->requireState('SUCCEEDED', '1.23');
+                $this->requireState('SUCCEEDED', $this->amount);
                 $this->refund();
             }
         } catch (ApiException $error) {
@@ -153,12 +158,12 @@ final class KlarnaManualCapture
     private function create(): void
     {
         $this->stage = 'create';
-        $this->expected = ['amount' => '1.23', 'currency' => 'EUR',
+        $this->expected = ['amount' => $this->amount, 'currency' => 'EUR',
             'merchant_order_id' => substr($this->ledger->runId(), -36) . '-klarna',
             'metadata' => ['sdk_validation_run' => $this->ledger->runId()],
             'return_url' => 'https://example.invalid/sdk-sandbox-klarna-return',
             'order' => ['products' => [['name' => 'SDK sandbox test product',
-                'quantity' => 1, 'unit_price' => '1.23']]]];
+                'quantity' => 1, 'unit_price' => $this->amount]]]];
         $created = $this->mutate(
             'klarna_create',
             $this->expected,
@@ -242,7 +247,7 @@ final class KlarnaManualCapture
         $id = $this->ownId();
         $created = $this->mutate(
             'klarna_refund',
-            ['payment_intent_id' => $id, 'amount' => '1.23',
+            ['payment_intent_id' => $id, 'amount' => $this->amount,
             'reason' => 'SDK sandbox exact Klarna refund'],
             fn (array $body): array => $this->session->client->payments()->refunds()->create($body)
         );
@@ -251,7 +256,7 @@ final class KlarnaManualCapture
         for ($index = 0; $index < $this->readAttempts; ++$index) {
             $observed = $this->session->client->payments()->refunds()->retrieve($refund);
             self::same($observed, ['id' => $refund, 'payment_intent_id' => $id,
-                'amount' => '1.23', 'currency' => 'EUR']);
+                'amount' => $this->amount, 'currency' => 'EUR']);
             if (in_array($observed['status'] ?? null, ['ACCEPTED', 'SETTLED'], true)) {
                 $this->ledger->recordObservation('klarna_refund_accepted', ['refund_id' => $refund,
                     'intent_id' => $id, 'status' => $observed['status']], $this->session->contextFingerprint());
