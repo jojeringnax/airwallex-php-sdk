@@ -15,8 +15,8 @@ class PreflightFailure extends Error {
 }
 let startupPhase = 'configuration';
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false) {
-  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig);
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false) {
+  const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'airwallex-browser-preflight-'));
   await fs.chmod(directory, 0o700);
   let proxy;
@@ -25,6 +25,25 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   let mainPage;
   let publicClientPromise;
   let methodClientPromise;
+  const normalClientPromises = new Set();
+  let normalWindowTimer;
+  const normal = {};
+  for (const role of ['customer', 'consent_list', 'country', 'checkout_status']) {
+    normal['normal_' + role + '_sends'] = 0;
+    normal['normal_' + role + '_delivered'] = 0;
+    normal['normal_' + role + '_observation'] = 'not_observed';
+  }
+  const normalStep = async action => {
+    if (!observeNormal) return action();
+    const remaining = policy.normalWindowRemaining() - 500;
+    if (shuttingDown || remaining <= 0) throw new Error('The read-only observation window ended.');
+    let timer;
+    try {
+      return await Promise.race([action(), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('The read-only observation window ended.')), remaining);
+      })]);
+    } finally { clearTimeout(timer); }
+  };
   let boundFrame;
   let shuttingDown = false;
   let result;
@@ -142,7 +161,94 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         if (fromBoundFrame) methodHeaders = policy.claimMethodConfig(request.url(), request.method(),
           request.resourceType(), request.headers(), request.postData());
       }
-      if (methodHeaders !== null) {
+      let normalRead = null;
+      if (observeNormal && mainPage && ['xhr', 'fetch'].includes(request.resourceType())) {
+        let fromMain = false, fromBound = false;
+        try {
+          const frame = request.frame();
+          if (frame.isDetached() === false) {
+            fromMain = frame === mainPage.mainFrame() && policy.normalSourceMatches(frame.url(), true);
+            fromBound = frame === boundFrame && policy.normalSourceMatches(frame.url());
+          }
+        } catch { /* No unavailable or replacement document inherits a private read. */ }
+        normalRead = policy.claimNormalRead(request.url(), request.method(), request.resourceType(),
+          request.headers(), request.postData(), fromMain, fromBound);
+      }
+      if (normalRead !== null) {
+        const { role, headers: outbound } = normalRead;
+        const key = 'normal_' + role + '_';
+        const originalSource = () => {
+          try {
+            const frame = request.frame();
+            return frame.isDetached() === false && (role === 'checkout_status'
+              ? frame === mainPage.mainFrame() && policy.normalSourceMatches(frame.url(), true)
+              : frame === boundFrame && policy.normalSourceMatches(frame.url()));
+          } catch { return false; }
+        };
+        let delivered = false;
+        try {
+          if (shuttingDown || !policy.normalSendAllowed(role) || !originalSource()) {
+            throw new Error('The normal read scope ended.');
+          }
+          // One isolated storage context per send; no response cookie can cross polls or families.
+          const construction = step('normal_context', () => playwright.request.newContext({
+            ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
+          }));
+          normalClientPromises.add(construction); // Retain before await, including shutdown races.
+          const client = await construction;
+          const remaining = policy.normalWindowRemaining();
+          if (shuttingDown || remaining <= 0 || !policy.normalSendAllowed(role) || !originalSource()) {
+            throw new Error('The normal read scope ended.');
+          }
+          normal[key + 'sends']++;
+          const response = await step('normal_get', () => client.get(request.url(), {
+            headers: outbound, maxRedirects: 0, maxRetries: 0, timeout: Math.max(1, Math.min(10000, Math.floor(remaining))),
+          }));
+          try {
+            const status = await step('normal_status', () => response.status());
+            if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error('Invalid normal read status.');
+            normal[key + 'http_status'] = status;
+            normal[key + 'observation'] = status >= 300 && status < 400 ? 'redirect_rejected' : 'http_rejected';
+            if (status === 200) {
+              const fields = await step('normal_headers', () => response.headersArray());
+              const content = fields.filter(field => field.name.toLowerCase() === 'content-type');
+              const declared = fields.filter(field => field.name.toLowerCase() === 'content-length');
+              const headerBytes = fields.reduce((sum, field) => sum + Buffer.byteLength(field.name + field.value), 0);
+              if (headerBytes > 16384 || content.length !== 1
+                  || !/^application\/json(?:\s*;[^\r\n]*)?$/iu.test(content[0].value)
+                  || declared.length > 1 || (declared.length === 1
+                    && (!/^[0-9]+$/u.test(declared[0].value) || Number(declared[0].value) > 65536))) {
+                normal[key + 'observation'] = 'invalid_response';
+              } else {
+                // APIRequestContext already buffers; this is a post-buffer parse/delivery cap.
+                const body = await step('normal_body', () => response.body());
+                const observed = policy.observeNormalRead(role, body);
+                normal[key + 'observation'] = observed.matched ? 'matched' : 'invalid_response';
+                if (role === 'consent_list' && observed.matched) {
+                  for (const fact of ['items', 'pagination_known', 'has_more']) normal[key + fact] = observed[fact];
+                }
+                if (observed.matched && !shuttingDown && policy.normalSendAllowed(role) && originalSource()) {
+                  const headers = Object.fromEntries(fields.filter(field => field.name.toLowerCase() !== 'set-cookie')
+                    .map(field => [field.name, field.value]));
+                  await step('normal_fulfill', () => route.fulfill({ response, headers, body }));
+                  normal[key + 'delivered']++;
+                  delivered = true;
+                } else if (observed.matched) normal[key + 'observation'] = 'unavailable';
+              }
+            }
+          } finally { await step('normal_response_dispose', () => response.dispose()); }
+          if (delivered) policy.markNormalReadDelivered(role); // Release only after successful disposal.
+        } catch {
+          policy.failNormalRead(role);
+          normal[key + 'observation'] = 'unavailable';
+          throw new Error('The normal read did not complete safely.');
+        } finally {
+          if (!delivered) {
+            policy.failNormalRead(role);
+            await step('normal_abort', () => route.abort('blockedbyclient'));
+          }
+        }
+      } else if (methodHeaders !== null) {
         let delivered = false;
         try {
           if (shuttingDown) throw new Error('Browser preflight is shutting down.');
@@ -209,6 +315,13 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
               const body = await response.body();
               payer = { ...payer, ...policy.observePayer(body) };
               if (policy.mayDeliverPayer()) {
+                policy.startNormalWindow();
+                if (observeNormal) normalWindowTimer = setTimeout(() => {
+                  policy.closeNormalWindow();
+                  markFailure('normal_observation_deadline');
+                  shuttingDown = true;
+                  if (context) void track(() => context.close(), 'shutdown_browser_context');
+                }, policy.normalWindowRemaining());
                 await route.fulfill({ response, body });
                 policy.markPayerDelivered();
                 delivered = true;
@@ -310,7 +423,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       clearTimeout(timer);
       if (policy.bindingEvidence().payer_get_attempted) await observed;
     }
-    if (policy.bindingEvidence().payer_payload_delivered) await new Promise(resolve => setTimeout(resolve, 10000));
+    if (policy.bindingEvidence().payer_payload_delivered) {
+      const delay = observeNormal ? Math.max(0, policy.normalWindowRemaining() - 2500) : 10000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
     if (observeConfig) {
       readiness = { card_readiness_observed: false };
       if (boundFrame) {
@@ -336,13 +452,13 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             const field = boundFrame.locator(`input[name="${name}"]`);
             phase = `readiness_${name}_count`;
             countStarted = true;
-            const count = await field.count();
+            const count = await normalStep(() => field.count());
             if (detached('after_count')) { readiness = unavailable('after_count'); break; }
             observations[`${name}_unique`] = count === 1;
             phase = `readiness_${name}_visible`;
-            observations[`${name}_visible`] = count === 1 && await field.isVisible();
+            observations[`${name}_visible`] = count === 1 && await normalStep(() => field.isVisible());
             phase = `readiness_${name}_enabled`;
-            observations[`${name}_enabled`] = count === 1 && await field.isEnabled();
+            observations[`${name}_enabled`] = count === 1 && await normalStep(() => field.isEnabled());
             if (detached('after_count')) { readiness = unavailable('after_count'); break; }
           } catch {
             if (detached(countStarted ? 'after_count' : 'before_count')) {
@@ -358,6 +474,11 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         }
       }
     }
+    if (observeNormal) {
+      normal.normal_read_inspection_completed = readiness.card_readiness_observed === true
+        && policy.normalWindowRemaining() > 500;
+      policy.closeNormalWindow(); // Stop normal sends before any post-inspection code or shutdown awaits.
+    }
     const visible = await step('visible_label', () =>
       page.getByText(/^(test mode|sandbox)$/iu, { exact: true }).first().isVisible());
     if (exercise !== null) await exercise(page, context);
@@ -367,7 +488,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       navigation_passed: true, test_mode_visible: visible,
       sandbox_origin_verified: false, card_entry_enabled: false,
       ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
-      ...policy.bindingEvidence(), ...payer, ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
+      ...policy.bindingEvidence(), ...payer, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
       browser_version: /^[0-9]+(?:\.[0-9]+){1,3}$/u.test(browser.version()) ? browser.version() : 'unclassified',
       ...counts, proxy_rejections: proxy.counts.rejected,
       proxy_connections: proxy.counts.connected,
@@ -377,10 +498,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     markFailure('unclassified');
   } finally {
     shuttingDown = true;
+    policy.closeNormalWindow();
+    clearTimeout(normalWindowTimer);
     clearTimeout(watchdog);
     if (context) await track(() => context.close(), 'shutdown_browser_context');
     if (browser) await track(() => browser.close(), 'shutdown_browser');
-    for (const promise of [publicClientPromise, methodClientPromise]) if (promise) await track(async () => {
+    for (const promise of [publicClientPromise, methodClientPromise, ...normalClientPromises]) if (promise) await track(async () => {
       const client = await promise;
       await client.dispose();
     }, 'shutdown_request_context');
@@ -393,9 +516,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     browser_failure_phase: firstFailure ?? 'unclassified', ...counts,
     ...(policy.candidateOrigin() === null ? {} : { candidate_origin: policy.candidateOrigin() }),
     ...policy.bindingEvidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
+    ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}),
     ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
   });
-  return { ...result, ...counts, ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
@@ -411,18 +535,19 @@ async function main() {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url'].includes(Object.keys(input).sort().join(','))
+      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url'].includes(Object.keys(input).sort().join(','))
+      || (Object.hasOwn(input, 'observeNormal') && typeof input.observeNormal !== 'boolean')
       || (Object.hasOwn(input, 'observeConfig') && typeof input.observeConfig !== 'boolean')
       || (Object.hasOwn(input, 'render') && typeof input.render !== 'boolean') || typeof input.url !== 'string'
       || !input.expected || typeof input.expected !== 'object') {
     throw new Error('Invalid private browser input.');
   }
   // Reject non-provider input before requiring any browser module or launching Chrome.
-  new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false);
+  new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false);
   startupPhase = 'tooling_load';
   const playwright = require(process.argv[2]);
   startupPhase = 'browser_startup';
-  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false);
+  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 

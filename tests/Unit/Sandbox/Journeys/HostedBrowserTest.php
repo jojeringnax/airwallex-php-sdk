@@ -94,6 +94,63 @@ final class HostedBrowserTest extends TestCase
         serialize($bridge);
     }
 
+    /** @return array<string,mixed> */
+    private static function normalEvidence(): array
+    {
+        return ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'normal_reads_requested' => true, 'normal_read_window_closed' => true,
+            'normal_read_inspection_completed' => true, 'normal_checkout_status_poisoned' => false,
+            'normal_customer_attempts' => 1, 'normal_customer_sends' => 1, 'normal_customer_delivered' => 1,
+            'normal_customer_observation' => 'matched', 'normal_customer_http_status' => 200,
+            'normal_consent_list_attempts' => 1, 'normal_consent_list_sends' => 1,
+            'normal_consent_list_delivered' => 1, 'normal_consent_list_observation' => 'matched',
+            'normal_consent_list_http_status' => 200, 'normal_consent_list_items' => 0,
+            'normal_consent_list_pagination_known' => false, 'normal_consent_list_has_more' => false,
+            'candidate_origin' => 'sandbox', 'payer_payload_delivered' => true, 'payer_http_status' => 200,
+            'payer_observation' => 'matched', 'checkout_token_matches' => true,
+            'payer_request_scope_verified' => true, 'payer_get_attempted' => true,
+            'payer_response_observed' => true, 'payer_mode_matches' => true, 'payer_currency_matches' => true,
+            'bound_render_frames' => 1, 'card_readiness_observed' => true];
+    }
+
+    public function testNormalEvidenceKeepsOnlyClosedFactsAndDoesNotInventUnavailableCounts(): void
+    {
+        $data = self::normalEvidence() + ['normal_customer_url' => 'PRIVATE_URL', 'countryCode' => 'PRIVATE',
+            'normal_consent_list_payload' => 'PRIVATE_CONSENT', 'normal_unknown_observation' => 'PRIVATE'];
+        $safe = HostedBrowser::sanitize($data, true, true, true);
+        self::assertSame(1, $safe['normal_customer_delivered']);
+        self::assertFalse($safe['normal_consent_list_pagination_known']);
+        self::assertArrayNotHasKey('normal_country_sends', $safe);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true);
+    }
+
+    /** @return iterable<string,array{string,mixed}> */
+    public static function unsafeNormalFacts(): iterable
+    {
+        foreach (
+            ['normal_customer_attempts' => 2, 'normal_customer_sends' => 2,
+            'normal_customer_delivered' => 2, 'normal_customer_http_status' => 302,
+            'normal_customer_observation' => 'invalid_response', 'payer_payload_delivered' => false,
+            'bound_render_frames' => 0, 'normal_read_window_closed' => false,
+            'card_readiness_observed' => false] as $key => $value
+        ) {
+            yield $key => [$key, $value];
+        }
+        yield 'status fourth slot' => ['normal_checkout_status_attempts', 4];
+        yield 'unproved status send' => ['normal_checkout_status_sends', 1];
+    }
+
+    #[DataProvider('unsafeNormalFacts')]
+    public function testNormalEvidenceCannotClaimUnboundedOrUnownedDelivery(string $key, mixed $value): void
+    {
+        $data = self::normalEvidence();
+        $data[$key] = $value;
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($data, true, true, true);
+    }
+
     public function testMethodEvidenceSanitizerRequiresExplicitScopeAndKeepsOnlyFixedObservations(): void
     {
         $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',

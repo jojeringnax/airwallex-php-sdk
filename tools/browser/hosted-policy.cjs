@@ -145,6 +145,35 @@ function parse(value) {
   } catch { return null; }
 }
 
+function privateJson(body) {
+  if (!Buffer.isBuffer(body) || body.length > 65536) throw new Error('Invalid private read.');
+  const raw = new TextDecoder('utf-8', { fatal: true }).decode(body);
+  const data = JSON.parse(raw);
+  const bounded = (node, depth) => depth <= 32 && (node === null || typeof node !== 'object'
+    || Object.values(node).every(value => bounded(value, depth + 1)));
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !bounded(data, 0)) throw new Error('Invalid private read.');
+  const scopes = [];
+  for (let index = 0; index < raw.length; index++) {
+    const char = raw[index];
+    if (char === '{' || char === '[') scopes.push(char === '{' ? new Set() : null);
+    else if (char === '}' || char === ']') scopes.pop();
+    else if (char === '"') {
+      const expression = /"(?:[^"\\]|\\.)*"/gy;
+      expression.lastIndex = index;
+      const match = expression.exec(raw);
+      if (match === null) throw new Error('Invalid private read.');
+      index = expression.lastIndex - 1;
+      if (raw.slice(index + 1).trimStart()[0] === ':') {
+        const key = JSON.parse(match[0]);
+        const scope = scopes.at(-1);
+        if (!(scope instanceof Set) || scope.has(key)) throw new Error('Invalid private read.');
+        scope.add(key);
+      }
+    }
+  }
+  return data;
+}
+
 class HostedPolicy {
   #initial;
   #fixture;
@@ -158,20 +187,33 @@ class HostedPolicy {
   #payerDelivered = false;
   #frameClaimed = false;
   #frameReference = null;
+  #frameSource = null;
   #controllerAttempted = false;
   #observeConfig;
+  #observeNormal;
+  #normalClock;
+  #normalDeadline = 0;
+  #normalClosed = false;
+  #normalAttempts = { customer: 0, consent_list: 0, country: 0, checkout_status: 0 };
+  #statusBusy = false;
+  #statusPoisoned = false;
   #frameDelivered = false;
   #configAttempted = false;
   #configMatched = false;
   #deniedReads = Object.fromEntries(deniedReadNames.map(name => [name, 0]));
   #renderChecks = Object.fromEntries(renderCheckNames.map(name => [name, 0]));
-  constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false) {
+  constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false, observeNormal = false, clock = () => performance.now()) {
     if (typeof render !== 'boolean' || (render && expected === null)) {
       throw new Error('Invalid read-only render configuration.');
     }
     if (typeof observeConfig !== 'boolean' || (observeConfig && !render)) {
       throw new Error('Method observation requires explicit rendering.');
     }
+    if (typeof observeNormal !== 'boolean' || (observeNormal && !observeConfig) || typeof clock !== 'function') {
+      throw new Error('Normal reads require explicit method observation.');
+    }
+    this.#observeNormal = observeNormal;
+    this.#normalClock = clock;
     this.#observeConfig = observeConfig;
     this.#render = render;
     const url = parse(initial);
@@ -337,6 +379,7 @@ class HostedPolicy {
       if (options.customer_id !== this.#frameReference.customer) return this.noteRenderCheck('customer_mismatch');
       if ((options.intent_id ?? null) !== this.#frameReference.intent) return this.noteRenderCheck('intent_mismatch');
       this.#frameClaimed = true;
+      this.#frameSource = url.href;
       this.noteRenderCheck('qualified');
       return true;
     } catch { return this.noteRenderCheck('invalid_options'); }
@@ -405,6 +448,127 @@ class HostedPolicy {
 
   mayDeliverMethodConfig() {
     return this.#observeConfig && this.renderEnabled() && this.#frameDelivered && this.#configMatched;
+  }
+
+  normalSourceMatches(value, main = false) {
+    const url = parse(value);
+    return url !== null && value === url.href && this.renderEnabled()
+      && url.href === (main ? this.#initial : this.#frameSource);
+  }
+
+  normalSendAllowed(role) {
+    return this.#observeNormal && this.#payerDelivered && this.normalWindowRemaining() > 0
+      && Object.hasOwn(this.#normalAttempts, role) && this.#normalAttempts[role] > 0
+      && (role === 'checkout_status' ? !this.#statusPoisoned : this.#frameDelivered && this.#frameReference !== null);
+  }
+
+  startNormalWindow() {
+    if (this.#observeNormal && this.mayDeliverPayer() && this.#normalDeadline === 0) {
+      this.#normalDeadline = this.#normalClock() + 8000;
+    }
+  }
+
+  normalWindowRemaining() {
+    if (!this.#observeNormal || this.#normalClosed || !this.requestScopeVerified()) return 0;
+    const remaining = this.#normalDeadline - this.#normalClock();
+    return Number.isFinite(remaining) && remaining > 0 ? remaining : 0;
+  }
+
+  closeNormalWindow() { this.#normalClosed = true; }
+
+  #normalHeaders(headers, role) {
+    const common = ['accept', 'accept-language', 'accept-encoding', 'host', 'connection', 'priority',
+      'user-agent', 'origin', 'referer', 'cookie', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+      'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site'];
+    const pa = ['client-secret', 'content-type', 'awx-tracker', 'x-api-version', 'x-client-ip-source',
+      'x-device-type', 'x-cloud-trace-context'];
+    const allowed = [...common, ...(role === 'pa' ? pa : role === 'checkout_status' ? ['authorization'] : [])];
+    if (!headers || typeof headers !== 'object' || Object.keys(headers).some(key => !allowed.includes(key))
+        || (Object.hasOwn(headers, 'origin') && headers.origin !== new URL(this.#initial).origin)) return null;
+    if (role === 'pa') {
+      if (headers['client-secret'] !== this.#frameReference?.secret || headers['x-api-version'] !== '2024-06-14'
+          || headers['content-type'] !== 'application/json' || headers['x-client-ip-source'] !== 'awx-checkout'
+          || !/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')
+          || (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type']))
+          || (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'
+            || headers['awx-tracker'].length > 256 || /[^\x21-\x7e]/u.test(headers['awx-tracker'])))) return null;
+      const result = { accept: 'application/json, text/plain, */*', cookie: '', referer: '' };
+      for (const key of pa) if (Object.hasOwn(headers, key)) result[key] = headers[key];
+      return result;
+    }
+    if (role === 'checkout_status' && headers.authorization !== `Bearer ${this.#token}`) return null;
+    return { accept: role === 'country' ? '*/*' : 'application/json, text/plain, */*', cookie: '', referer: '',
+      ...(role === 'checkout_status' ? { authorization: headers.authorization } : {}),
+      ...(role === 'country' && Object.hasOwn(headers, 'origin') ? { origin: headers.origin } : {}) };
+  }
+
+  claimNormalRead(value, method, type, headers, body, fromMain, fromBound) {
+    const url = parse(value);
+    if (!this.#observeNormal || !this.#payerDelivered || this.normalWindowRemaining() <= 0 || !url
+        || method !== 'GET' || !['fetch', 'xhr'].includes(type) || body !== null || url.hash
+        || value !== url.origin + url.pathname + url.search) return null;
+    const origin = new URL(this.#initial).origin;
+    let role;
+    if (fromMain && url.origin === origin && url.pathname === '/billing/payer-web-api/checkout/status'
+        && !url.search) role = 'checkout_status';
+    else if (fromBound && this.#frameDelivered && this.#frameReference) {
+      const customer = this.#frameReference.customer;
+      if (!/^[A-Za-z0-9_-]{1,200}$/u.test(customer)) return null;
+      if (url.origin === origin && url.pathname === '/api/v1/pa/customers/' + customer && !url.search) role = 'customer';
+      else if (url.origin === origin && url.pathname === '/api/v1/pa/payment_consents'
+          && url.search.slice(1).split('&').sort().join('&')
+            === ['customer_id=' + customer, 'status=VERIFIED', 'page_size=100'].sort().join('&')) role = 'consent_list';
+      else if (url.origin === (this.#fixture ?? 'https://www.sandbox.airwallex.com')
+          && url.pathname === '/country' && !url.search) role = 'country';
+    }
+    if (!role || this.#normalAttempts[role] >= (role === 'checkout_status' ? 3 : 1)
+        || (role === 'checkout_status' && (this.#statusPoisoned || this.#statusBusy))) return null;
+    const outbound = this.#normalHeaders(headers, ['customer', 'consent_list'].includes(role) ? 'pa' : role);
+    if (outbound === null) return null;
+    this.#normalAttempts[role]++;
+    if (role === 'checkout_status') this.#statusBusy = true;
+    return { role, headers: outbound };
+  }
+
+  failNormalRead(role) {
+    if (role === 'checkout_status') this.#statusPoisoned = true;
+  }
+
+  observeNormalRead(role, body) {
+    try {
+      const data = privateJson(body);
+      if (role === 'customer') {
+        if (data.id !== this.#frameReference?.customer) throw new Error();
+      } else if (role === 'consent_list') {
+        if (!Array.isArray(data.items) || data.items.length > 100
+            || data.items.some(item => !item || typeof item !== 'object' || Array.isArray(item)
+              || typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(item.id)
+              || item.customer_id !== this.#frameReference?.customer || item.status !== 'VERIFIED')
+            || new Set(data.items.map(item => item.id)).size !== data.items.length
+            || (Object.hasOwn(data, 'has_more') && typeof data.has_more !== 'boolean')) throw new Error();
+        return { matched: true, items: data.items.length, pagination_known: typeof data.has_more === 'boolean',
+          has_more: data.has_more === true };
+      } else if (role === 'country') {
+        if (typeof data.countryCode !== 'string' || !/^[A-Z]{2}$/u.test(data.countryCode)) throw new Error();
+      } else if (role === 'checkout_status') {
+        if (data.status !== 'ACTIVE') throw new Error();
+      } else throw new Error();
+      return { matched: true };
+    } catch {
+      this.failNormalRead(role);
+      return { matched: false };
+    }
+  }
+
+  markNormalReadDelivered(role) {
+    if (role === 'checkout_status') this.#statusBusy = false;
+  }
+
+  normalEvidence() {
+    return this.#observeNormal ? { normal_reads_requested: true, normal_read_window_closed: this.#normalClosed,
+      normal_customer_attempts: this.#normalAttempts.customer, normal_consent_list_attempts: this.#normalAttempts.consent_list,
+      normal_country_attempts: this.#normalAttempts.country, normal_checkout_status_attempts: this.#normalAttempts.checkout_status,
+      normal_checkout_status_poisoned: this.#statusPoisoned } : {};
   }
 
   noteDeniedRead(value, method, type) {
@@ -507,7 +671,9 @@ class HostedPolicy {
     const url = parse(`https://${host}:${port}/`);
     if (!url || String(port) !== '443') return false;
     return url.origin === new URL(this.#initial).origin
-      || (this.renderEnabled() && url.origin === controllerAsset.origin);
+      || (this.renderEnabled() && url.origin === controllerAsset.origin)
+      || (this.#observeNormal && this.#payerDelivered && this.normalWindowRemaining() > 0
+        && url.origin === 'https://www.sandbox.airwallex.com');
   }
 
   allowsHttp(value) {

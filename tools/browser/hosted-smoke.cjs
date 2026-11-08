@@ -5,12 +5,13 @@ const path = require('node:path');
 const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
-  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0, method: 0 };
+  const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0, method: 0, customer: 0, consent: 0, country: 0, status: 0, reloadPages: 0 };
   let tamper = false;
   let payerReply = 'matched';
   let tamperController = false;
   let redirectController = false;
   let methodReply = 'matched';
+  let normalStatus = 200;
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
       case '/page':
@@ -24,6 +25,7 @@ async function smoke(playwright) {
           .end(tamper ? 'window.fixtureLoaded = "altered";' : 'window.fixtureLoaded = true;');
         break;
       case '/payer-page':
+        hits.reloadPages++;
         response.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'synthetic_cookie=PRIVATE_COOKIE; Path=/' });
         response.end(`<!doctype html><p>Fixture</p><script>
           const headers = { Authorization: 'Bearer ' + new URL(location.href).searchParams.get('s') };
@@ -40,6 +42,15 @@ async function smoke(playwright) {
           bootstrap.catch(() => {});
           fetch(getter, { headers }).then(r => r.json()).then(async data => {
             window.payerDelivered = true;
+            if (new URL(location.href).searchParams.has('poll')) {
+              window.pollsStarted = 0; window.firstPayerDelivery = performance.now();
+              setInterval(async () => {
+                window.pollsStarted++;
+                try { const status = await fetch('/billing/payer-web-api/checkout/status', { headers });
+                  if (!status.ok) throw new Error(); await status.json();
+                } catch { location.reload(); }
+              }, 5000);
+            }
             if (new URL(location.href).searchParams.get('render')) {
               await bootstrap;
               if (window.fixtureControllerReady !== true) throw new Error('Fixture bootstrap missing.');
@@ -47,6 +58,7 @@ async function smoke(playwright) {
                 customer_id: data.setupModeDetails.billingCustomerExternalId,
                 client_secret: data.setupModeDetails.externalCustomerClientSecret,
                 observeConfig: new URL(location.href).searchParams.has('config'),
+                observeNormal: new URL(location.href).searchParams.has('normal'),
                 detachFixture: new URL(location.href).searchParams.has('detach') };
               if (new URL(location.href).searchParams.get('wrongframe')) options.customer_id = 'PRIVATE_OTHER';
               const frame = document.createElement('iframe');
@@ -119,6 +131,15 @@ async function smoke(playwright) {
                 if (options.detachFixture) setTimeout(() => {
                   const old = window.frameElement; old.replaceWith(old.cloneNode(false));
                 }, 1000);
+                if (options.observeNormal) {
+                  return fetch('/api/v1/pa/customers/' + options.customer_id, { headers }).then(r => r.json())
+                    .then(data => { if (data.id !== options.customer_id) throw new Error();
+                      return fetch('/api/v1/pa/payment_consents?' + new URLSearchParams({
+                        customer_id: options.customer_id, status: 'VERIFIED', page_size: 100 }), { headers }); })
+                    .then(r => r.json()).then(data => { if (data.items.length !== 0) throw new Error();
+                      return fetch('/country'); }).then(r => r.json())
+                    .then(data => { window.normalDataMatched = data.countryCode === 'DE'; });
+                }
                 return Promise.all([target, '/country', '/api/v1/pa/customers/PRIVATE',
                   '/api/v1/pa/payment_consents', '/api/v1/pa/PRIVATE', '/billing/payer-web-api/checkout/status']
                   .map(url => fetch(url, { headers }).catch(() => {})));
@@ -142,6 +163,36 @@ async function smoke(playwright) {
             })); // Missing pagination is deliberately not converted into a complete-list claim.
         }
         break;
+      case '/api/v1/pa/customers/PRIVATE_EXTERNAL_CUSTOMER':
+      case '/api/v1/pa/payment_consents':
+      case '/country':
+      case '/billing/payer-web-api/checkout/status': {
+        const url = new URL(request.url, 'http://fixture.test');
+        const status = url.pathname.endsWith('/status');
+        const country = url.pathname === '/country';
+        const consent = url.pathname.endsWith('/payment_consents');
+        hits[status ? 'status' : country ? 'country' : consent ? 'consent' : 'customer']++;
+        const pa = !status && !country;
+        if (request.method !== 'GET' || request.headers.cookie || request.headers.referer
+            || (status ? request.headers.authorization !== 'Bearer ' + token : request.headers.authorization)
+            || (pa ? request.headers['client-secret'] !== 'PRIVATE_CLIENT_SECRET'
+              || request.headers['x-api-version'] !== '2024-06-14'
+              || request.headers['x-cloud-trace-context'] !== '0123456789abcdef0123456789abcdef'
+              : request.headers['client-secret'] || request.headers['x-api-version'])
+            || (consent ? url.search !== '?customer_id=PRIVATE_EXTERNAL_CUSTOMER&status=VERIFIED&page_size=100'
+              : url.search !== '')) {
+          hits.forbidden++; response.writeHead(500).end();
+        } else if (status && normalStatus !== 200) {
+          response.writeHead(normalStatus, { Location: '/forbidden?PRIVATE_NORMAL' }).end('PRIVATE_ERROR');
+        } else {
+          response.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*',
+            'Set-Cookie': 'synthetic_normal_' + (status ? 'status' : country ? 'country' : consent ? 'consent' : 'customer')
+              + '=PRIVATE_COOKIE; Path=/' });
+          response.end(JSON.stringify(status ? { status: 'ACTIVE' } : country ? { countryCode: 'DE' }
+            : consent ? { items: [] } : { id: 'PRIVATE_EXTERNAL_CUSTOMER' }));
+        }
+        break;
+      }
       case '/render-sdk.js':
         response.writeHead(200, { 'Content-Type': 'application/javascript' }).end('window.fixtureRendered = true;');
         break;
@@ -335,6 +386,51 @@ async function smoke(playwright) {
         || redirectedConfig.method_config_observation !== 'redirect_rejected'
         || redirectedConfig.method_config_payload_delivered || redirectedConfig.cardnumber_unique
         || hits.forbidden !== 0) throw new Error('Local method redirect escaped.');
+    methodReply = 'matched';
+    const normalBefore = { ...hits };
+    const ordinary = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&poll=1',
+      playwright, origin, async (page, context) => {
+        const frame = page.frames().find(candidate => candidate !== page.mainFrame());
+        if (!frame || frame.isDetached() || await frame.evaluate(() => window.normalDataMatched) !== true
+            || await page.evaluate(() => window.pollsStarted) !== 1
+            || await page.evaluate(() => performance.now() - window.firstPayerDelivery >= 10000)) {
+          throw new Error('Local normal reads did not finish before the later five-second poll.');
+        }
+        if ((await context.cookies()).some(cookie => cookie.name.startsWith('synthetic_normal_'))) {
+          throw new Error('Local normal read response cookie crossed into browser storage.');
+        }
+        await frame.evaluate(async () => {
+          await Promise.all(['/api/v1/pa/payment_consents/create', '/billing/payer-web-api/checkout/complete']
+            .map(url => fetch(url, { method: 'POST' }).catch(() => {})));
+        });
+      }, expected, true, true, true);
+    if (!ordinary.normal_read_inspection_completed || !ordinary.cardnumber_visible || !ordinary.expiry_enabled
+        || ordinary.cvc_enabled || !ordinary.normal_read_window_closed || ordinary.normal_checkout_status_poisoned
+        || ordinary.normal_checkout_status_attempts !== 1 || ordinary.normal_checkout_status_sends !== 1
+        || ordinary.normal_checkout_status_delivered !== 1 || ordinary.normal_consent_list_items !== 0
+        || ordinary.normal_consent_list_pagination_known || ordinary.normal_consent_list_has_more
+        || hits.reloadPages !== normalBefore.reloadPages + 1 || hits.status !== normalBefore.status + 1
+        || hits.customer !== normalBefore.customer + 1 || hits.consent !== normalBefore.consent + 1
+        || hits.country !== normalBefore.country + 1 || hits.forbidden !== 0 || ordinary.proxy_external_connections !== 0) {
+      throw new Error('Local once-only normal dependency or cookie boundary failed.');
+    }
+    // Same real five-second poll with the opt-in absent: its denied status read reloads and detaches the old frame.
+    const statusBefore = hits.status;
+    const missingReads = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&poll=1',
+      playwright, origin, null, expected, true, true);
+    if (hits.status !== statusBefore || missingReads.card_readiness_observed
+        || missingReads.card_readiness_unavailable_reason !== 'frame_detached') {
+      throw new Error('Local five-second denied status did not exercise the source reload boundary.');
+    }
+    normalStatus = 302;
+    const rejectedNormal = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&poll=1',
+      playwright, origin, null, expected, true, true, true);
+    if (rejectedNormal.normal_checkout_status_sends !== 1 || !rejectedNormal.normal_checkout_status_poisoned
+        || rejectedNormal.normal_checkout_status_delivered !== 0 || hits.status !== statusBefore + 1
+        || hits.forbidden !== 0 || rejectedNormal.proxy_external_connections !== 0) {
+      throw new Error('Local normal status redirect/retry poison boundary failed.');
+    }
+    normalStatus = 200;
     // Both failure probes keep the payer mismatched, so no private body or frame can be delivered.
     payerReply = 'wrong_mode'; tamperController = true;
     let controllerRejected = false;
@@ -353,7 +449,8 @@ async function smoke(playwright) {
       payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true,
       public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
       altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
-      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true };
+      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
+      normal_poll_window_verified: true, normal_status_poison_verified: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 
