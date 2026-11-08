@@ -6,11 +6,11 @@
 - Include connected-account support in the initial scope. Account context, credential isolation, webhook routing and sandbox validation must therefore be considered from the foundation onward.
 - Distribute and validate this SDK through Composer, including metadata, autoloading, dependency resolution and clean consumer installations.
 
-These choices were accepted by the maintainer during planning. They establish the package direction and initial account-mode requirement, rather than a commitment to all Airwallex product families or all connected-account onboarding operations.
+The initial scope is limited to the Billing and Payments capabilities below. Other Airwallex product families and connected-account onboarding operations require separate scope decisions.
 
 ## Initial Billing and Payments scope
 
-For [issue #1](https://github.com/jojeringnax/airwallex-php-sdk/issues/1), the maintainer confirmed that the initial release must cover both subscriptions and Payments. The intended consumer needs the complete subscription and payment journeys below; standalone payments must not be deferred merely because subscription billing is supported.
+The initial release covers both subscription billing and standalone Payments ([issue #1](https://github.com/jojeringnax/airwallex-php-sdk/issues/1)).
 
 - Subscription billing: customer creation, subscription checkout, recurring collection, plan and quantity changes, cancellation, invoice retrieval, and state synchronization through webhooks.
 - Standalone Payments: one-time payments, saving payment methods, subsequent charges using saved methods, authorization and capture, payment cancellation, payment status retrieval, and refunds.
@@ -34,7 +34,7 @@ This is accepted product scope, not a claim that every operation or combination 
 | Countries and currencies | No SDK-specific restrictions; expose provider-supported combinations for the applicable contract and account |
 | Payment methods | All provider-supported methods applicable to the accepted flows and account context |
 
-The maintainer selected broad geographic, currency and payment-method coverage to avoid an arbitrary SDK subset. This is a coverage requirement, not verified provider availability or a promise that every method supports recurring collection, saved-method charging, authorization/capture or connected-account use. Contract review must map supported combinations and identify unavailable or uncertain combinations before implementation; any proposed reduction in the accepted scope requires a maintainer decision.
+Broad geographic, currency and payment-method coverage avoids an arbitrary SDK subset. This is a coverage requirement, not verified provider availability or a promise that every method supports recurring collection, saved-method charging, authorization/capture or connected-account use. Contract review must map supported combinations and identify unavailable or uncertain combinations before implementation; any proposed reduction requires explicit approval before changing this scope.
 
 ## Implementation gates
 
