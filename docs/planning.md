@@ -34,19 +34,7 @@ This is accepted product scope, not a claim that every operation or combination 
 | Countries and currencies | No SDK-specific restrictions; expose provider-supported combinations for the applicable contract and account |
 | Payment methods | All provider-supported methods applicable to the accepted flows and account context |
 
-### Workflow review and follow-up evidence
-
-The accepted scope covers signup through customer creation and checkout, renewal through recurring collection, plan/quantity changes, cancellation, and invoice retrieval. Failed-payment and recovery behavior requires contract review; no retry schedule or automatic recovery policy has been approved.
-
-- [Contract inventory (#3)](https://github.com/jojeringnax/airwallex-php-sdk/issues/3): verify provider availability, endpoint coverage, versions, permission requirements, geographic/currency/payment-method restrictions, and failed-payment semantics for the accepted Billing and Payments scope.
-- [Connected-account contracts (#4)](https://github.com/jojeringnax/airwallex-php-sdk/issues/4): verify account eligibility, enablement, credentials and resource ownership for each selected family.
-- [Capability gaps (#5)](https://github.com/jojeringnax/airwallex-php-sdk/issues/5): resolve invoice documents, trials and self-service capabilities before promising them.
-- [Consumer examples (#6)](https://github.com/jojeringnax/airwallex-php-sdk/issues/6): review representative signup, renewal, change-plan, cancellation, failed-payment and invoice journeys against verified contracts before implementation.
-- [Sandbox validation (#42)](https://github.com/jojeringnax/airwallex-php-sdk/issues/42): establish account access and entitlements, and validate accepted journeys with sanitized evidence.
-
 The maintainer selected broad geographic, currency and payment-method coverage to avoid an arbitrary SDK subset. This is a coverage requirement, not verified provider availability or a promise that every method supports recurring collection, saved-method charging, authorization/capture or connected-account use. Contract review must map supported combinations and identify unavailable or uncertain combinations before implementation; any proposed reduction in the accepted scope requires a maintainer decision.
-
-The existing Billing-focused implementation plan must be reconciled with this Payments scope before implementation. Identify missing Payments work and its dependencies during contract review.
 
 ## Implementation gates
 
