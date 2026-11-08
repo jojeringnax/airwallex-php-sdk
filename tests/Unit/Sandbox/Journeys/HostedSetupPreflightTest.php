@@ -144,6 +144,7 @@ final class HostedSetupPreflightTest extends TestCase
                 bool $observeNormal,
                 bool $observeRisk,
                 ?HostedRiskJournal $riskJournal,
+                bool $observeParentCountry,
             ) use (
                 $fault,
                 $options
@@ -153,6 +154,7 @@ final class HostedSetupPreflightTest extends TestCase
                 self::assertSame(($options['observe-normal-reads'] ?? false) === true, $observeNormal);
                 self::assertSame(($options['observe-risk-bootstrap'] ?? false) === true, $observeRisk);
                 self::assertSame($observeRisk, $riskJournal !== null);
+                self::assertSame(($options['observe-parent-country'] ?? false) === true, $observeParentCountry);
                 self::assertSame([
                     'checkout_id' => 'fixture_checkout', 'mode' => 'SETUP', 'currency' => 'EUR',
                 ], $expected);
@@ -170,6 +172,16 @@ final class HostedSetupPreflightTest extends TestCase
                     self::assertSame(1, $riskJournal->bootstrap()['version']);
                 } else {
                     self::assertArrayNotHasKey('preflight_risk_bootstrap', $state['actions']);
+                }
+                if ($observeParentCountry) {
+                    self::assertIsArray($state['actions']['preflight_parent_country']);
+                    self::assertSame(hash('sha256', json_encode($expected + [
+                        'method' => 'GET', 'role' => 'parent_country',
+                        'scope' => 'original_sdk_correlated_main_document',
+                        'startup_window_max_ms' => 8000, 'normal_window_max_ms' => 8000, 'limit' => 1,
+                    ], JSON_THROW_ON_ERROR)), $state['actions']['preflight_parent_country']['body_hash']);
+                } else {
+                    self::assertArrayNotHasKey('preflight_parent_country', $state['actions']);
                 }
                 self::assertIsArray($state['actions']['preflight_payer_read']);
                 self::assertSame(hash('sha256', json_encode($expected + [
@@ -269,7 +281,8 @@ final class HostedSetupPreflightTest extends TestCase
             self::assertStringNotContainsString($private, $encoded);
         }
         self::assertIsArray($result['browser_tool_hashes']);
-        self::assertCount(9, $result['browser_tool_hashes']);
+        self::assertCount(10, $result['browser_tool_hashes']);
+        self::assertArrayHasKey('hosted-parent-country.cjs', $result['browser_tool_hashes']);
         foreach (['policy', 'journal', 'relay', 'observer'] as $helper) {
             self::assertArrayHasKey('hosted-risk-' . $helper . '.cjs', $result['browser_tool_hashes']);
         }
@@ -333,6 +346,41 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertSame(1, $this->cancels);
         self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
         self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testParentCountryHasItsOwnPrivateSlotBeforeBrowserHandoffAndNoFinancialPermission(): void
+    {
+        $options = $this->options();
+        foreach (
+            ['render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
+            'observe-parent-country'] as $flag
+        ) {
+            $options[$flag] = true;
+        }
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['parent_country_requested']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testParentCountryAndRiskKeepIndependentPrivateArgumentsAndDurableSlots(): void
+    {
+        $options = $this->options();
+        foreach (
+            ['render-owned-data', 'observe-one-method-config', 'observe-normal-reads',
+                'observe-risk-bootstrap', 'observe-parent-country'] as $flag
+        ) {
+            $options[$flag] = true;
+        }
+        $result = $this->execute(options: $options);
+        self::assertTrue($result['parent_country_requested']);
+        self::assertTrue($result['risk_bootstrap_requested']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        self::assertIsArray($result['browser']);
+        self::assertFalse($result['browser']['risk_financial_ready']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function testMethodReadIntentIsDurableBeforePrivateBrowserHandoff(): void
@@ -449,6 +497,8 @@ final class HostedSetupPreflightTest extends TestCase
         yield 'invalid method mode' => ['observe-one-method-config', 'PRIVATE_MODE'];
         yield 'normal without method' => ['observe-normal-reads', true];
         yield 'invalid normal flag' => ['observe-normal-reads', 'PRIVATE_MODE'];
+        yield 'parent without normal' => ['observe-parent-country', true];
+        yield 'parent invalid flag' => ['observe-parent-country', 'PRIVATE_MODE'];
         yield 'risk missing normal' => ['observe-risk-bootstrap', true];
         yield 'risk arbitrary value' => ['observe-risk-bootstrap', 'PRIVATE_MODE'];
     }

@@ -12,14 +12,14 @@ use SensitiveParameter;
 
 /**
  * One fresh organization-owned SETUP, private browser read only, then owned cancellation.
- * @phpstan-type Expectation array{checkout_id:string,mode:string,currency:string}
+ * @phpstan-type Scope array{checkout_id:string,mode:string,currency:string}
  */
 final class HostedSetupPreflight
 {
     /**
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
-     * @param (Closure(string,Expectation,bool,bool,bool,bool,?HostedRiskJournal):array<string,mixed>)|null $browser
+     * @param (Closure(string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
      */
@@ -33,7 +33,8 @@ final class HostedSetupPreflight
         try {
             $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin',
                 'playwright-module', 'create-one-hosted-setup', 'render-owned-data',
-                'observe-one-method-config', 'observe-normal-reads', 'observe-risk-bootstrap'];
+                'observe-one-method-config', 'observe-normal-reads', 'observe-risk-bootstrap',
+                'observe-parent-country'];
             if (array_diff(array_keys($options), $allowed) !== [] || ($options['environment'] ?? null) !== 'sandbox') {
                 throw new RuntimeException('Explicit sandbox preflight configuration is required.');
             }
@@ -67,6 +68,13 @@ final class HostedSetupPreflight
             }
             if ($observeRisk) {
                 $safe['risk_bootstrap_requested'] = true;
+            }
+            $observeParentCountry = $options['observe-parent-country'] ?? false;
+            if (!is_bool($observeParentCountry) || ($observeParentCountry && !$observeNormal)) {
+                throw new RuntimeException('Parent country requires explicit normal reads.');
+            }
+            if ($observeParentCountry) {
+                $safe['parent_country_requested'] = true;
             }
             $safe['render_requested'] = $render;
             $safe['method_config_requested'] = $observeConfig;
@@ -150,15 +158,32 @@ final class HostedSetupPreflight
                     ], $fingerprint);
                 }
             }
+            if ($observeParentCountry) {
+                // Generic local reservation; no provider request_id or future unknown wire data is claimed.
+                $ledger->requestId('preflight_parent_country', $browserExpected + [
+                    'method' => 'GET', 'role' => 'parent_country', 'scope' => 'original_sdk_correlated_main_document',
+                    'startup_window_max_ms' => 8000, 'normal_window_max_ms' => 8000, 'limit' => 1,
+                ], $fingerprint);
+            }
             $phase = 'browser_read_only';
             $riskJournal = $observeRisk
                 ? new HostedRiskJournal($ledger, $fingerprint, $browserExpected, $safe['browser_tool_hashes']) : null;
             $safe['browser'] = HostedBrowser::sanitize(
-                $browser($url, $browserExpected, $render, $observeConfig, $observeNormal, $observeRisk, $riskJournal),
+                $browser(
+                    $url,
+                    $browserExpected,
+                    $render,
+                    $observeConfig,
+                    $observeNormal,
+                    $observeRisk,
+                    $riskJournal,
+                    $observeParentCountry,
+                ),
                 $render,
                 $observeConfig,
                 $observeNormal,
                 $observeRisk,
+                $observeParentCountry,
             );
             $safe['result'] = $safe['browser']['result'];
             if ($safe['browser_tool_hashes'] !== HostedBrowser::sourceHashes()) {
