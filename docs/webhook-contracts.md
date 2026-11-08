@@ -80,7 +80,7 @@ Official [event list and Retrieve schema](https://www.airwallex.com/docs/api/bil
 | `billing_checkout.completed` | `COMPLETED`; inspect `mode`, `billing_customer_id`, `payment_source_id`, `subscription_id` for SUBSCRIPTION or `invoice_id` for PAYMENT, as applicable. Retrieve resulting resources independently. |
 | `billing_checkout.cancelled` | `CANCELLED`; inspect `cancelled_at`. This concerns the checkout, not cancellation of a subscription. |
 
-The status set is `ACTIVE`, `COMPLETED`, `CANCELLED`, `EXPIRED`. The Retrieve schema describes expiration after one hour without purchase; use returned `expires_at` and current status. No `billing_checkout.expired` event is listed. Poll/retrieve to discover expiry; a return/success redirect is not authoritative payment evidence. `SETUP` completion is instrument setup, not a paid invoice or active subscription. Completion does not authorize inferring a related resource's current financial state.
+The status set is `ACTIVE`, `COMPLETED`, `CANCELLED`, `EXPIRED`. The Retrieve schema describes expiration after one hour without purchase; the [Billing capability reference](billing-capabilities.md#checkout-ui-contracts) records a conflicting sandbox timestamp observation. Inspect returned `expires_at` and current status without deriving a guaranteed lifetime. No `billing_checkout.expired` event is listed. Poll/retrieve to discover expiry; a return/success redirect is not authoritative payment evidence. `SETUP` completion is instrument setup, not a paid invoice or active subscription. Completion does not authorize inferring a related resource's current financial state.
 
 ### Invoices
 
