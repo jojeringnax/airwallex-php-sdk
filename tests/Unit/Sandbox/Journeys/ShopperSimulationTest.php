@@ -112,7 +112,9 @@ final class ShopperSimulationTest extends TestCase
     {
         $login = new Response(201, [], '{"token":"synthetic-token","expires_at":"2100-01-01T00:00:00Z"}');
         [$session, $recording] = $this->session([
-            $login, new Response(401, [], '{"code":"unauthorized"}'), $login, new Response(200),
+            $login, new Response(401, [], '{"code":"unauthorized"}'),
+            new Response(201, [], '{"token":"synthetic-token","expires_at":"2100-01-01T00:00:00Z"}'),
+            new Response(200),
         ]);
         $url = 'https://api.sandbox.airwallex.com/pa/sandbox/sg/session';
         try {
