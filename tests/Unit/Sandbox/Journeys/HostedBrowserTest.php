@@ -229,6 +229,25 @@ final class HostedBrowserTest extends TestCase
         HostedBrowser::sanitize($evidence);
     }
 
+    public function testRenderDiagnosticsRetainOnlyFixedBoundedCountsWithoutPrivateKeysOrValues(): void
+    {
+        $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false, 'render_frame_checks' => [
+                'document_candidates' => 2, 'qualified' => 0, 'customer_mismatch' => 1,
+                'fulfilled' => 1000000, 'secret_mismatch' => 'PRIVATE_SECRET', 'intent_mismatch' => -1,
+                'build_mismatch' => 1000001, 'language_mismatch' => 1.0, 'PRIVATE_FIELD' => 1,
+            ]];
+        $safe = HostedBrowser::sanitize($data, true);
+        self::assertSame(['document_candidates' => 2, 'customer_mismatch' => 1, 'qualified' => 0,
+            'fulfilled' => 1000000], $safe['render_frame_checks']);
+        self::assertStringNotContainsString('PRIVATE_', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertArrayNotHasKey('render_frame_checks', HostedBrowser::sanitize($data));
+        foreach (['PRIVATE_BODY', null, 1, false] as $invalid) {
+            $data['render_frame_checks'] = $invalid;
+            self::assertArrayNotHasKey('render_frame_checks', HostedBrowser::sanitize($data, true));
+        }
+    }
+
     public function testRenderCliRejectsValueAndDuplicateFlagsBeforeAnyConfigurationRead(): void
     {
         foreach ([['--render-owned-data=false'], ['--render-owned-data', '--render-owned-data']] as $flags) {
