@@ -39,6 +39,7 @@
         "analyse": "phpstan analyse --no-progress --memory-limit=512M",
         "check": ["@test", "@style", "@analyse"],
         "check:consumer": "@php tools/check-consumer.php",
+        "check:artifact": "@php tools/check-artifact.php",
         "test:sandbox": "@php tools/sandbox.php"
     },
     "config": {
