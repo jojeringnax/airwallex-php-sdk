@@ -56,6 +56,6 @@ Live financial operations are outside development and release validation. Keep T
 
 ## Current evidence boundary
 
-At this policy's introduction, the repository contains documentation but no `composer.json`, SDK implementation or CI workflow. Metadata and CI alignment is therefore specified for #10 and rechecked in #44, not claimed as already validated. No package execution, dependency resolution or sandbox validation is claimed here.
+This policy was introduced during the repository's documentation-only phase. Current package commands and artifact checks are documented in [release preparation](release-preparation.md); [#44](https://github.com/jojeringnax/airwallex-php-sdk/issues/44) owns the evidence and remaining gaps for each candidate commit. Apply the gates above to each exact candidate revision, including its applicable Sandbox/provider evidence.
 
 Report ordinary defects through repository issues with sanitized diagnostics. Sensitive vulnerability reporting and the supported maintenance line are described in [SECURITY.md](../SECURITY.md).
