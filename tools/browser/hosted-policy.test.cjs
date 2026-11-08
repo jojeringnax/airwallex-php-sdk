@@ -9,7 +9,8 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { HostedPolicy, egressProxy } = require('./hosted-policy.cjs');
+const { HostedPolicy, egressProxy, staticAssets, assetMatches } = require('./hosted-policy.cjs');
+const { createHash } = require('node:crypto');
 const initial = 'https://checkout.airwallex.com/pay?s=SYNTHETIC_SECRET';
 
 test('candidate document is readable but grants no financial authority', () => {
@@ -34,13 +35,60 @@ test('production and unknown targets fail closed for every resource type', () =>
   }
 });
 
-test('only a fixed published static script is permitted', () => {
+test('only the three pinned scripts on the initial candidate origin are permitted', () => {
   const policy = new HostedPolicy(initial);
-  const asset = 'https://static.airwallex.com/components/sdk/v1/index.js';
-  assert.equal(policy.decide(asset, 'GET', 'script'), 'allow');
-  assert.equal(policy.decide(asset, 'POST', 'script'), 'block');
-  assert.equal(policy.decide(asset + '?SYNTHETIC_SECRET', 'GET', 'script'), 'block');
-  assert.equal(policy.decide('https://static.airwallex.com/unknown.js', 'GET', 'script'), 'block');
+  assert.equal(Object.keys(staticAssets).length, 3);
+  for (const [pathname, hash] of Object.entries(staticAssets)) {
+    const asset = 'https://checkout.airwallex.com' + pathname;
+    assert.equal(policy.decide(asset, 'GET', 'script'), 'allow');
+    assert.equal(policy.assetHash(asset, 'GET', 'script'), hash);
+    for (const type of ['document', 'fetch', 'worker', 'stylesheet']) {
+      assert.equal(policy.decide(asset, 'GET', type), 'block');
+    }
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      assert.equal(policy.decide(asset, method, 'script'), 'block');
+    }
+    for (const variant of [asset + '?', asset + '#', asset + '?private=value', asset + '#private',
+      asset.replace('v2.286.0', 'v2.287.0'), asset.replace('/js/', '/other/../js/'),
+      asset.replace('checkout.airwallex.com', 'checkout.sandbox.airwallex.com'),
+      asset.replace('checkout.airwallex.com', 'unknown.invalid')]) {
+      assert.equal(policy.decide(variant, 'GET', 'script'), 'block');
+    }
+    const sandbox = new HostedPolicy('https://checkout.sandbox.airwallex.com/pay?s=SYNTHETIC_SECRET');
+    assert.equal(sandbox.decide('https://checkout.sandbox.airwallex.com' + pathname, 'GET', 'script'), 'allow');
+  }
+  assert.equal(policy.decide('https://static.airwallex.com/components/sdk/v1/index.js', 'GET', 'script'), 'block');
+  assert.equal(policy.decide('https://checkout.airwallex.com/pay/static/v2.286.0/js/unknown.js', 'GET', 'script'), 'block');
+});
+
+test('script bytes must match the reviewed digest before fulfillment', () => {
+  const original = Buffer.from('synthetic script');
+  const expected = createHash('sha256').update(original).digest('hex');
+  assert.equal(assetMatches(original, expected), true);
+  assert.equal(assetMatches(Buffer.from('altered script'), expected), false);
+  assert.equal(assetMatches(original, '0'.repeat(64)), false);
+  assert.equal(assetMatches('synthetic script', expected), false);
+});
+
+test('candidate host category never implies financial sandbox verification', () => {
+  assert.equal(new HostedPolicy(initial).candidateOrigin(), 'shared');
+  assert.equal(new HostedPolicy('https://checkout.sandbox.airwallex.com/pay?s=x').candidateOrigin(), 'sandbox');
+  assert.equal(new HostedPolicy('http://127.0.0.1:12345/page', 'http://127.0.0.1:12345').candidateOrigin(), null);
+});
+
+test('all payer data and financial paths remain blocked even on the candidate origin', () => {
+  for (const origin of ['https://checkout.airwallex.com', 'https://checkout.sandbox.airwallex.com']) {
+    const policy = new HostedPolicy(origin + '/pay?s=x');
+    for (const pathname of ['/billing/payer-web-api/checkout', '/billing/payer-web-api/checkout/status',
+      '/billing/payer-web-api/checkout/collect', '/billing/payer-web-api/checkout/complete',
+      '/api/v1/pa/payment_intents/fixture/confirm', '/assets/elements.bundle.min.js']) {
+      for (const method of ['GET', 'POST']) {
+        for (const type of ['document', 'script', 'fetch']) {
+          assert.equal(policy.decide(origin + pathname, method, type), 'block');
+        }
+      }
+    }
+  }
 });
 
 test('return redirects are locally fulfilled even with private parameters', () => {
@@ -69,7 +117,7 @@ test('debug and serialization cannot expose the private session', () => {
 test('authority boundary rejects production, alternate ports and encoded lookalikes', () => {
   const policy = new HostedPolicy(initial);
   assert.equal(policy.allowsAuthority('checkout.airwallex.com', '443'), true);
-  assert.equal(policy.allowsAuthority('static.airwallex.com', '443'), true);
+  assert.equal(policy.allowsAuthority('static.airwallex.com', '443'), false);
   for (const host of ['api.airwallex.com', 'api.sandbox.airwallex.com', 'checkout.airwallex.com.evil.test',
     'checkout.airwallex.com@api.airwallex.com', '127.0.0.1', '[::1]']) {
     assert.equal(policy.allowsAuthority(host, '443'), false);
@@ -142,9 +190,11 @@ function fixtureModule(fault) {
         on(name, handler) { if (name === 'dialog') dialogHandler = handler; },
         getByText() { return { first() { return { async isVisible() { return false; } }; } }; },
         async goto(url) {
-          const target = fault === 'abort' ? 'https://unknown.invalid/SYNTHETIC_PRIVATE_URL' : url;
+          const target = fault === 'abort' ? 'https://unknown.invalid/SYNTHETIC_PRIVATE_URL'
+            : fault === 'asset_integrity' ? 'https://checkout.airwallex.com/pay/static/v2.286.0/js/main.ddc4fcf3b752ddbd5f14.js' : url;
           await routeHandler({
-            request() { return { url: () => target, method: () => 'GET', resourceType: () => 'document',
+            request() { return { url: () => target, method: () => 'GET',
+              resourceType: () => fault === 'asset_integrity' ? 'script' : 'document',
               headers: () => ({ referer: 'SYNTHETIC_PRIVATE_URL' }) }; },
             async abort() { if (fault === 'abort') fail(); },
             async fetch(options) {
@@ -177,7 +227,8 @@ function fixtureModule(fault) {
   `;
 }
 
-for (const fault of ['none', 'abort', 'fetch', 'fulfill', 'dispose', 'websocket', 'dialog', 'context_close', 'browser_close']) {
+for (const fault of ['none', 'abort', 'fetch', 'fulfill', 'dispose', 'websocket', 'dialog', 'context_close',
+  'browser_close', 'asset_integrity']) {
   test(`async actions and cleanup have a fixed private failure boundary: ${fault}`, () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-browser-module-fixture-'));
     try {

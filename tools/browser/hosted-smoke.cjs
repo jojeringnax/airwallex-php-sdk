@@ -6,6 +6,7 @@ const { inspect } = require('./hosted-browser.cjs');
 
 async function smoke(playwright) {
   const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0 };
+  let tamper = false;
   const server = http.createServer((request, response) => {
     switch (new URL(request.url, 'http://fixture.test').pathname) {
       case '/page':
@@ -15,7 +16,8 @@ async function smoke(playwright) {
         break;
       case '/asset.js':
         hits.asset++;
-        response.writeHead(200, { 'Content-Type': 'application/javascript' }).end('window.fixtureLoaded = true;');
+        response.writeHead(200, { 'Content-Type': 'application/javascript' })
+          .end(tamper ? 'window.fixtureLoaded = "altered";' : 'window.fixtureLoaded = true;');
         break;
       case '/frame':
         hits.frame++;
@@ -89,8 +91,20 @@ async function smoke(playwright) {
     if (!result.test_mode_visible || result.blocked_requests < 4 || result.blocked_websockets !== 2
         || result.returns_intercepted !== 1 || hits.page !== 1 || hits.asset !== 1 || hits.frame !== 1
         || hits.redirect !== 3 || hits.forbidden !== 0 || hits.websocket !== 0
-        || result.proxy_external_connections !== 0) throw new Error('Local smoke failed.');
-    return { ...result, deny_before_send: true, fixture_forbidden_hits: 0, fixture_websocket_hits: 0 };
+        || result.proxy_external_connections !== 0 || result.verified_static_assets !== 1) {
+      throw new Error('Local smoke failed.');
+    }
+    tamper = true;
+    let rejected = false;
+    let alteredExecuted = false;
+    try {
+      await inspect(origin + '/page?s=SYNTHETIC_SECRET', playwright, origin, async page => {
+        alteredExecuted = await page.evaluate(() => window.fixtureLoaded !== undefined);
+      });
+    } catch { rejected = true; }
+    if (!rejected || alteredExecuted || hits.forbidden !== 0) throw new Error('Local integrity guard failed.');
+    return { ...result, deny_before_send: true, fixture_forbidden_hits: 0, fixture_websocket_hits: 0,
+      altered_script_blocked: true };
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 
