@@ -83,6 +83,7 @@ final class BillingCheckoutMatrixTest extends TestCase
             if (str_ends_with($path, '/billing_checkouts/create')) {
                 $body = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
                 self::assertIsArray($body);
+                self::assertSame('EUR', $body['currency']);
                 if ($body['ui_mode'] === 'HOSTED') {
                     self::assertSame('https://example.com', $body['success_url']);
                     self::assertSame('https://example.com', $body['back_url']);
@@ -106,7 +107,7 @@ final class BillingCheckoutMatrixTest extends TestCase
     public static function semanticFaults(): iterable
     {
         foreach (
-            ['currency', 'secret', 'expiry', 'relative_time', 'invalid_date',
+            ['currency', 'secret', 'relative_time', 'invalid_date',
             'quantity', 'metadata', 'cancelled_url'] as $fault
         ) {
             yield $fault => [$fault];
@@ -135,6 +136,20 @@ final class BillingCheckoutMatrixTest extends TestCase
     {
         [$result] = $this->runScenario('basic_offset');
         self::assertSame('pass', $result['result']);
+    }
+
+    public function testExpiryDiscrepancyDoesNotSkipIndependentMetadataAndCancellationChecks(): void
+    {
+        [$result, $fixture] = $this->runScenario('expiry');
+        self::assertSame('fail', $result['result']);
+        self::assertSame('checkout_expiration', $result['contract_discrepancy']);
+        self::assertIsArray($result['steps']);
+        self::assertSame(array_fill(0, 9, 'pass'), array_values($result['steps']));
+        self::assertIsArray($result['observations']);
+        self::assertSame([
+            'expiry_interval_seconds' => 7200, 'documented_hour_matches' => false,
+        ], $result['observations']['setup_hosted']);
+        self::assertCount(9, $fixture->cancels);
     }
 
     public function testSetupRejectionDoesNotSkipIndependentPaymentAndSubscriptionModes(): void

@@ -27,6 +27,7 @@ final class BillingCheckoutMatrix
         $billing = $session->client->billing();
         $result = ['scenario' => 'billing-checkouts', 'api_version' => '2026-08-21', 'result' => 'pass'];
         $steps = [];
+        $observations = [];
         $cancelAttempted = [];
         try {
             $body = [
@@ -64,15 +65,14 @@ final class BillingCheckoutMatrix
                             'metadata' => ['sdk_validation_run' => $ledger->runId()],
                         ];
                         $body = $expected;
+                        $body['currency'] = 'EUR';
                         if ($ui === 'HOSTED') {
                             $body['success_url'] = 'https://example.com';
                             $body['back_url'] = 'https://example.com';
                         } else {
                             $body['return_url'] = 'https://example.com';
                         }
-                        if ($mode === 'SETUP') {
-                            $body['currency'] = 'EUR';
-                        } else {
+                        if ($mode !== 'SETUP') {
                             $body['line_items'] = [['price_id' => $prices[$mode], 'quantity' => 1]];
                         }
                         $body['request_id'] = $ledger->requestId('checkout_' . $key, $body, $fingerprint);
@@ -80,7 +80,15 @@ final class BillingCheckoutMatrix
                         $ledger->recordCreated('checkouts', $id);
                         $observed = $billing->checkouts()->retrieve($id);
                         self::matches($observed, ['id' => $id, 'status' => 'ACTIVE', 'currency' => 'EUR'] + $expected);
-                        self::activePresentation($observed, $ui);
+                        $interval = self::activePresentation($observed, $ui);
+                        $documentedHour = $interval >= 3599 && $interval <= 3601;
+                        $observations[$key] = [
+                            'expiry_interval_seconds' => $interval, 'documented_hour_matches' => $documentedHour,
+                        ];
+                        if (!$documentedHour) {
+                            $result['result'] = 'fail';
+                            $result['contract_discrepancy'] = 'checkout_expiration';
+                        }
                         if ($mode !== 'SETUP') {
                             $items = $observed['line_items'] ?? null;
                             $item = is_array($items) && array_is_list($items) ? ($items[0] ?? null) : null;
@@ -131,7 +139,8 @@ final class BillingCheckoutMatrix
             }
         }
         return $result + [
-            'steps' => $steps, 'cleanup' => $cleanup, 'created_counts' => $ledger->counts(),
+            'steps' => $steps, 'observations' => $observations,
+            'cleanup' => $cleanup, 'created_counts' => $ledger->counts(),
             'run_id' => $ledger->runId(),
             'retained' => 'Customer and archived catalogue history remain; no checkout was completed.',
         ] + $ledger->evidence();
@@ -182,7 +191,7 @@ final class BillingCheckoutMatrix
     }
 
     /** @param array<array-key,mixed> $data */
-    private static function activePresentation(#[SensitiveParameter] array $data, string $ui): void
+    private static function activePresentation(#[SensitiveParameter] array $data, string $ui): int
     {
         $secret = $data['client_secret'] ?? null;
         if (($ui === 'HOSTED' && $secret !== null) || ($ui !== 'HOSTED' && (!is_string($secret) || $secret === ''))) {
@@ -195,9 +204,7 @@ final class BillingCheckoutMatrix
             throw new ProtocolException('Checkout expiration evidence is missing.');
         }
         $interval = self::timestamp($data['expires_at']) - self::timestamp($data['created_at']);
-        if ($interval < 3599 || $interval > 3601) {
-            throw new ProtocolException('Checkout expiry differs from the documented one-hour interval.');
-        }
+        return $interval;
     }
 
     private static function timestamp(string $value): int
