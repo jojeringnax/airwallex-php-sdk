@@ -469,4 +469,36 @@ final class AlipayConsentReconciliationTest extends HistoricalAlipayTestCase
         self::assertCount(3, $f['provider']->requests);
         self::assertStringNotContainsString('PRIVATE', json_encode($r, JSON_THROW_ON_ERROR));
     }
+
+    public function testCleanupSeamReusesOriginalProofButSeparatesContextAndKeepsStablePrivateClaimNamespace(): void
+    {
+        $f = self::fixture();
+        $this->bases[] = $f['base'];
+        $configuration = \Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration::load('sandbox', $f['credentials']);
+        $session = new \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession(
+            $configuration,
+            'account',
+            $f['provider']
+        );
+        $prior = AlipayConsentReconciliation::load($f['prior'], $f['state'], $session);
+        $context = $prior->cleanupContext(str_repeat('a', 64));
+        self::assertNotSame($session->contextFingerprint(), $context);
+        self::assertNotSame($prior->cleanupContext(str_repeat('b', 64)), $context);
+        $path = $prior->cleanupClaimPath();
+        self::assertSame($f['state'], dirname($path));
+        self::assertMatchesRegularExpression('/^\.consent-disable-[a-f0-9]{64}\.claim$/D', basename($path));
+        $ledger = \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger::createConsentCleanup(
+            $context,
+            $f['state']
+        );
+        $claim = $prior->cleanupClaim($ledger, str_repeat('a', 64));
+        self::assertSame($ledger->runId(), $claim['run_id']);
+        self::assertArrayNotHasKey('request_id', $claim);
+        self::assertSame($path, $prior->cleanupClaimPath());
+        self::assertSame([], $ledger->counts());
+        self::assertStringNotContainsString($f['customer'], json_encode($claim, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString($f['consent'], json_encode($claim, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString($f['customer'], print_r($prior, true));
+        self::assertSame([], $f['provider']->requests);
+    }
 }

@@ -66,6 +66,7 @@ try {
             'https://github.com/jojeringnax/airwallex-php-sdk/issues/95',
             'https://github.com/jojeringnax/airwallex-php-sdk/issues/104',
             'https://github.com/jojeringnax/airwallex-php-sdk/issues/127',
+            'https://github.com/jojeringnax/airwallex-php-sdk/issues/130',
         ],
         'contents' => $contents,
     ];

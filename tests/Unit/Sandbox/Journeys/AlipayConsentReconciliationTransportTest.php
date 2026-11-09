@@ -13,6 +13,9 @@ use GuzzleHttp\Psr7\StreamDecoratorTrait;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\Utils;
 use GuzzleHttp\Promise\PromiseInterface;
+use GuzzleHttp\Promise\FulfilledPromise;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SourceEvidence;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Tests\Support\HistoricalAlipayTestCase;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
@@ -52,8 +55,11 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         AlipayConsentReconciliationTest::remove($this->fixture['base']);
     }
 
-    /** @param (Closure():float)|null $clock
+    /**
+     * @param (Closure():float)|null $clock
+     *
      * @param (Closure():void)|null $gate
+     *
      * @param (Closure(resource):bool)|null $synchronize
      */
     private function transport(
@@ -119,7 +125,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         }
     }
 
-    /** @return iterable<string,array{string}> */
+    /**
+     * @return iterable<string,array{string}> */
     public static function deniedRoutes(): iterable
     {
         foreach (
@@ -153,7 +160,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         }
     }
 
-    /** @return iterable<string,array{string,string}> */
+    /**
+     * @return iterable<string,array{string,string}> */
     public static function badHeaders(): iterable
     {
         yield 'Host' => ['Host', 'wrong.invalid'];
@@ -180,7 +188,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         }
     }
 
-    /** @return iterable<string,array{string,array<string,list<string>>,bool,int}> */
+    /**
+     * @return iterable<string,array{string,array<string,list<string>>,bool,int}> */
     public static function responseHeaderBlocks(): iterable
     {
         $cases = [
@@ -202,7 +211,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         }
     }
 
-    /** @param array<string,list<string>> $headers */
+    /**
+     * @param array<string,list<string>> $headers */
     #[DataProvider('responseHeaderBlocks')]
     public function testEveryRepresentedResponseHeaderLineAndValueIsBoundedBeforeBodyOrDelivery(
         string $role,
@@ -264,7 +274,9 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         self::assertSame(1, $t->report()['http_invocations']);
     }
 
-    /** @param Closure():void $read
+    /**
+     * @param Closure():void $read
+     *
      * @param Closure():void $close
      */
     private static function countedBody(string $raw, Closure $read, Closure $close): StreamInterface
@@ -288,7 +300,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         };
     }
 
-    /** @return iterable<string,array{string,bool}> */
+    /**
+     * @return iterable<string,array{string,bool}> */
     public static function failedHeaderRoles(): iterable
     {
         foreach (['login', 'customer'] as $role) {
@@ -350,7 +363,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         self::assertStringNotContainsString('consent_reconciliation_customer_owned', $journal);
     }
 
-    /** @return iterable<string,array{int,string,array<string,string>}> */
+    /**
+     * @return iterable<string,array{int,string,array<string,string>}> */
     public static function responseFailures(): iterable
     {
         yield 'redirect' => [302, '{}', ['Location' => 'https://PRIVATE']];
@@ -371,13 +385,15 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         yield 'missing auth' => [401, '{"message":"PRIVATE"}', []];
     }
 
-    /** @param array<string,string> $headers */
+    /**
+     * @param array<string,string> $headers */
     #[DataProvider('responseFailures')]
     public function testBoundedResponseFailurePoisonsInsteadOfRetrying(int $status, string $body, array $headers): void
     {
         $client = new class ($status, $body, $headers) implements ClientInterface {
             public int $calls = 0;
-            /** @param array<string,string> $headers */
+            /**
+     * @param array<string,string> $headers */
             public function __construct(private int $status, private string $body, private array $headers)
             {
             }
@@ -404,7 +420,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         }
     }
 
-    /** @return iterable<string,array{string}> */
+    /**
+     * @return iterable<string,array{string}> */
     public static function streamFaults(): iterable
     {
         yield 'no progress' => ['no_progress'];
@@ -459,7 +476,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         }
     }
 
-    /** @return iterable<string,array{int,string}> */
+    /**
+     * @return iterable<string,array{int,string}> */
     public static function invalidLogin(): iterable
     {
         yield 'wrong status' => [200, '{"token":"PRIVATE","expires_at":"2099-01-01T00:00:00Z"}'];
@@ -525,7 +543,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         self::assertArrayNotHasKey('private_json', $t->report());
     }
 
-    /** @return iterable<string,array{float}> */
+    /**
+     * @return iterable<string,array{float}> */
     public static function lateClose(): iterable
     {
         yield 'original read window' => [11.0];
@@ -614,7 +633,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         self::assertSame('Bearer PRIVATE', $sent->getHeaderLine('Authorization'));
     }
 
-    /** @return iterable<string,array{float}> */
+    /**
+     * @return iterable<string,array{float}> */
     public static function finalClockCrossing(): iterable
     {
         yield 'exact deadline' => [120.0];
@@ -768,7 +788,8 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         }
     }
 
-    /** @return array{resource,resource,resource} */
+    /**
+     * @return array{resource,resource,resource} */
     private static function processPipes(mixed $pipes): array
     {
         self::assertIsArray($pipes);
@@ -803,5 +824,299 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         self::assertFalse($client->getConfig('allow_redirects'));
         self::assertFalse($client->getConfig('decode_content'));
         self::assertSame('', $client->getConfig('proxy'));
+    }
+
+    /**
+     * @param (Closure(resource):bool)|null $sync
+     * @param (Closure():float)|null $clock
+     *
+     * @param (Closure():int)|null $unixClock
+     * @return array{AlipayConsentReconciliationTransport,RunLedger,string}
+     */
+    private function cleanupTransport(
+        ?Closure $sync = null,
+        ?Closure $clock = null,
+        ?Closure $unixClock = null
+    ): array {
+        $configuration = Configuration::load('sandbox', $this->fixture['credentials']);
+        $intake = new SandboxSession($configuration, 'account', $this->fixture['provider']);
+        $prior = AlipayConsentReconciliation::load($this->fixture['prior'], $this->fixture['state'], $intake);
+        $context = $prior->cleanupContext(str_repeat('a', 64));
+        $ledger = RunLedger::createConsentCleanup($context, $this->fixture['state'], synchronize: $sync);
+        $transport = AlipayConsentReconciliationTransport::forCleanup(
+            $configuration,
+            $prior,
+            $this->fixture['provider'],
+            $clock,
+            unixClock: $unixClock
+        );
+        $source = SourceEvidence::capture();
+        $prior->bindCleanupTransport($transport, $ledger, $context, static function () use (
+            $prior,
+            $intake,
+            $source
+): void {
+            $prior->assertCleanupOriginal($intake);
+            if (SourceEvidence::capture() !== $source) {
+                throw new \RuntimeException('Source changed.');
+            }
+        });
+        $session = new SandboxSession($configuration, 'account', $transport);
+        $prior->readCleanupCustomer($session);
+        $prior->readCleanupConsent($session);
+        $prior->readCleanupCustomer($session);
+        $prior->readCleanupConsent($session);
+        $uuid = $ledger->requestId('consent_disable_cleanup', ['test' => 'private-packet'], $context);
+        $transport->armCleanupDisable($uuid);
+        return [$transport, $ledger, $uuid];
+    }
+
+    /**
+     * @return iterable<string,array{string,string}> */
+    public static function cleanupPacketMutations(): iterable
+    {
+        foreach (['prepared', 'possible_invocation'] as $boundary) {
+            $mutations = [
+                'body', 'method', 'uri', 'headers', 'protocol', 'source', 'clock', 'prior', 'context', 'token',
+            ];
+            foreach ($mutations as $mutation) {
+                yield $boundary . '/' . $mutation => [$boundary, $mutation];
+            }
+        }
+    }
+
+    /** @return array{request:RequestInterface,mutate:Closure():void} */
+    private static function mutableCleanupRequest(string $consent, string $raw, string $mutation): array
+    {
+        $request = new class ($consent, $raw, $mutation) extends Request {
+            public bool $changed = false;
+            public function __construct(string $consent, string $raw, private readonly string $mutation)
+            {
+                parent::__construct(
+                    'POST',
+                    'https://api.sandbox.airwallex.com/api/v1/pa/payment_consents/'
+                    . $consent . '/disable',
+                    ['Accept' => 'application/json', 'x-api-version' => '2026-08-21',
+                        'Content-Type' => 'application/json', 'Authorization' => 'Bearer synthetic-cleanup-token'],
+                    $raw
+                );
+            }
+            public function getMethod(): string
+            {
+                return $this->changed && $this->mutation === 'method' ? 'DELETE' : parent::getMethod();
+            }
+            public function getUri(): UriInterface
+            {
+                return $this->changed && $this->mutation === 'uri'
+                    ? new Uri('https://foreign.invalid/PRIVATE') : parent::getUri();
+            }
+            public function getHeaders(): array
+            {
+                return $this->changed && $this->mutation === 'headers'
+                    ? ['X-Unsafe' => ['PRIVATE']] : parent::getHeaders();
+            }
+            public function getProtocolVersion(): string
+            {
+                return $this->changed && $this->mutation === 'protocol' ? '2.0' : parent::getProtocolVersion();
+            }
+        };
+        $mutate = static function () use ($request, $mutation): void {
+            $request->changed = true;
+            if ($mutation === 'body') {
+                $request->getBody()->write('MUTATED');
+                $request->getBody()->seek(4);
+            }
+        };
+        return ['request' => $request, 'mutate' => $mutate];
+    }
+
+    #[DataProvider('cleanupPacketMutations')]
+    public function testPrivateDisableSnapshotAndFinalProofSurviveDurability(
+        string $boundary,
+        string $mutation
+    ): void {
+        $replacement = AlipayConsentDisableCleanupTest::fixture();
+        AlipayConsentReconciliationTest::remove($this->fixture['base']);
+        $this->fixture = $replacement;
+        $state = new class {
+            public ?Closure $mutate = null;
+            public bool $fired = false;
+            public float $now = 0.0;
+            public int $unix = 0;
+            public ?RunLedger $ledger = null;
+        };
+        $state->unix = time();
+        $priorPath = $this->fixture['prior'];
+        $priorBytes = file_get_contents($priorPath);
+        self::assertIsString($priorBytes);
+        $sourcePath = self::sdkRoot() . '/tests/Support/Sandbox/Journeys/AlipayConsentReconciliation.php';
+        $source = file_get_contents($sourcePath);
+        self::assertIsString($source);
+        $sync = static function ($stream) use (
+            $state,
+            $mutation,
+            $boundary,
+            $sourcePath,
+            $source,
+            $priorPath
+): bool {
+            self::assertIsResource($stream);
+            $uri = self::streamPath(stream_get_meta_data($stream));
+            if (!$state->fired && $state->mutate !== null && str_ends_with($uri, '.writing')) {
+                $raw = file_get_contents($uri);
+                if (is_string($raw) && str_contains($raw, 'consent_cleanup_disable_' . $boundary)) {
+                    $state->fired = true;
+                    ($state->mutate)();
+                    if ($mutation === 'source') {
+                        file_put_contents($sourcePath, $source . "\n// synthetic source mutation\n");
+                    } elseif ($mutation === 'clock') {
+                        $state->now = 120.0;
+                    } elseif ($mutation === 'prior') {
+                        file_put_contents($priorPath, '{}');
+                    } elseif ($mutation === 'token') {
+                        $state->unix = 4102444801;
+                    } elseif ($mutation === 'context') {
+                        self::assertNotNull($state->ledger);
+                        $property = new \ReflectionProperty(RunLedger::class, 'state');
+                        $image = $property->getValue($state->ledger);
+                        self::assertIsArray($image);
+                        $image['context_fingerprint'] = str_repeat('f', 64);
+                        $property->setValue($state->ledger, $image);
+                    }
+                }
+            }
+            return fsync($stream);
+        };
+        try {
+            [$t, $ledger, $uuid] = $this->cleanupTransport(
+                $sync,
+                static function () use ($state): float {
+                    return $state->now;
+                },
+                static fn (): int => $state->unix
+            );
+            $state->ledger = $ledger;
+            $raw = '{"request_id":"' . $uuid . '"}';
+            $packet = self::mutableCleanupRequest($this->fixture['consent'], $raw, $mutation);
+            $request = $packet['request'];
+            $state->mutate = $packet['mutate'];
+            try {
+                $t->sendRequest($request);
+                self::assertNotContains($mutation, ['source', 'clock', 'prior', 'context', 'token']);
+                $sent = $this->fixture['provider']->requests[5];
+                self::assertSame('POST', $sent->getMethod());
+                self::assertSame('api.sandbox.airwallex.com', $sent->getUri()->getHost());
+                self::assertSame('1.1', $sent->getProtocolVersion());
+                self::assertSame($raw, (string) $sent->getBody());
+                self::assertSame(['Bearer synthetic-cleanup-token'], $sent->getHeader('Authorization'));
+                $file = $this->fixture['state'] . '/' . $ledger->runId() . '/ledger.json';
+                $image = json_decode((string) file_get_contents($file), true, flags: JSON_THROW_ON_ERROR);
+                self::assertIsArray($image);
+                self::assertIsArray($image['observations']);
+                $prepared = $image['observations']['consent_cleanup_disable_prepared'];
+                self::assertIsArray($prepared);
+                self::assertSame(hash('sha256', $raw), $prepared['body_sha256']);
+                self::assertSame(
+                    hash('sha256', json_encode($sent->getHeaders(), JSON_THROW_ON_ERROR)),
+                    $prepared['prepared_headers_sha256']
+                );
+                self::assertSame($prepared, $image['observations']['consent_cleanup_disable_possible_invocation']);
+            } catch (ProtocolException) {
+                self::assertContains($mutation, ['source', 'clock', 'prior', 'context', 'token']);
+                self::assertSame(5, $t->report()['http_invocations']);
+                self::assertSame(0, $t->cleanupReport()['disable_invocations']);
+                self::assertTrue($t->cleanupReport()['disable_possible']);
+            }
+            self::assertTrue($state->fired);
+        } finally {
+            file_put_contents($sourcePath, $source);
+            file_put_contents($priorPath, $priorBytes);
+        }
+    }
+
+    public function testLegacyReadOnlyTransportStillDeniesTheNewExactDisableRouteBeforeAnyInvocation(): void
+    {
+        $t = $this->transport();
+        $request = $this->request('consent')->withMethod('POST')->withUri(new Uri(
+            'https://api.sandbox.airwallex.com/api/v1/pa/payment_consents/' . $this->fixture['consent'] . '/disable'
+        ))->withHeader('Content-Type', 'application/json')->withBody(Utils::streamFor(
+            '{"request_id":"00000000-0000-4000-8000-000000000001"}'
+        ));
+        try {
+            $t->sendRequest($request);
+            self::fail('The legacy constructor acquired the cleanup write role.');
+        } catch (ProtocolException) {
+            self::assertSame([], $this->fixture['provider']->requests);
+            self::assertSame(0, $t->report()['http_invocations']);
+            self::assertTrue($t->report()['transport_poisoned']);
+        }
+    }
+
+    public function testCleanupFactoryAndBindingCannotSubstituteAccountContextOrOriginalTargets(): void
+    {
+        $configuration = Configuration::load('sandbox', $this->fixture['credentials']);
+        $session = new SandboxSession($configuration, 'account', $this->fixture['provider']);
+        $prior = AlipayConsentReconciliation::load($this->fixture['prior'], $this->fixture['state'], $session);
+        $context = $prior->cleanupContext(str_repeat('a', 64));
+        $ledger = RunLedger::createConsentCleanup($context, $this->fixture['state']);
+        $t = AlipayConsentReconciliationTransport::forCleanup($configuration, $prior, $this->fixture['provider']);
+        try {
+            $t->bind(
+                'FOREIGN_CUSTOMER',
+                $this->fixture['consent'],
+                $ledger,
+                $context,
+                static function (): void {
+                },
+                $prior
+            );
+            self::fail('A naked target replaced the validated original target.');
+        } catch (\RuntimeException $error) {
+            if ($error instanceof \PHPUnit\Framework\AssertionFailedError) {
+                throw $error;
+            }
+            self::assertSame(0, $t->report()['http_invocations']);
+        }
+        file_put_contents(
+            $this->fixture['credentials'],
+            "AIRWALLEX_CLIENT_ID=OTHER\nAIRWALLEX_SANDBOX_API_KEY_MASTER=OTHER\nAIRWALLEX_ACCOUNT_ID=OTHER\n"
+        );
+        $other = Configuration::load('sandbox', $this->fixture['credentials']);
+        try {
+            AlipayConsentReconciliationTransport::forCleanup($other, $prior, $this->fixture['provider']);
+            self::fail('A different auth context acquired the original proof.');
+        } catch (\RuntimeException $error) {
+            if ($error instanceof \PHPUnit\Framework\AssertionFailedError) {
+                throw $error;
+            }
+            self::assertSame([], $this->fixture['provider']->requests);
+        }
+    }
+    private static function streamPath(mixed $metadata): string
+    {
+        self::assertIsArray($metadata);
+        $uri = $metadata['uri'] ?? null;
+        self::assertIsString($uri);
+        return $uri;
+    }
+
+    public function testStreamPathWitnessRequiresNativeStringMetadata(): void
+    {
+        $stream = fopen('php://temp', 'w+');
+        self::assertIsResource($stream);
+        try {
+            self::assertSame('php://temp', self::streamPath(stream_get_meta_data($stream)));
+        } finally {
+            fclose($stream);
+        }
+        foreach ([null, false, [], ['uri' => null], ['uri' => 1], ['uri' => []]] as $bad) {
+            $rejected = false;
+            try {
+                self::streamPath($bad);
+            } catch (\PHPUnit\Framework\AssertionFailedError) {
+                $rejected = true;
+            }
+            self::assertTrue($rejected, 'A fixture stream path requires a native string.');
+        }
     }
 }
