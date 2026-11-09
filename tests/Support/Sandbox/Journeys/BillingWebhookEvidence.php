@@ -211,7 +211,7 @@ final class BillingWebhookEvidence
                         ? 'owner_matching_created_count' : 'owner_matching_cancelled_count'];
                 }
                 if (
-                    $owner && $version === 'match' && $shape === 'generic'
+                    $owner && $version === 'match'
                     && is_string($literal->created_at ?? null) && $literal->created_at !== ''
                 ) {
                     ++$this->counts[$kind === 'created'

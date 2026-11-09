@@ -104,4 +104,17 @@ try {
 } catch (WebhookVerificationException) {
     // Expected failure after changing the exact signed body.
 }
+$directBody = '{"id":"event_example","name":"billing_checkout.created","version":"2026-08-21",'
+    . '"org_id":"org_example","created_at":"2026-11-09T00:00:00Z","data":{'
+    . '"id":"checkout_example","status":"ACTIVE","line_items":[{"quantity":2,"rate_card_version":7}],'
+    . '"amount":19.900000000000000001,"extra":9223372036854775808}}';
+$verifier->verify($directBody, $timestamp, hash_hmac('sha256', $timestamp . $directBody, 'synthetic-webhook-secret'));
+$direct = WebhookEvent::fromJson($directBody)->toArray();
+$expectConsumer(
+    is_array($direct['data']) && !array_key_exists('object', $direct['data'])
+        && $direct['data']['line_items'] === [['quantity' => 2, 'rate_card_version' => 7]]
+        && $direct['data']['amount'] === '19.900000000000000001'
+        && $direct['data']['extra'] === '9223372036854775808',
+    'Installed direct Checkout shape or numeric representation changed.'
+);
 echo "Clean consumer Billing, Payments, precision, paging, token reuse and webhooks passed.\n";

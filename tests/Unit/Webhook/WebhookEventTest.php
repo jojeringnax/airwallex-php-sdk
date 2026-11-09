@@ -171,6 +171,171 @@ final class WebhookEventTest extends TestCase
         WebhookEvent::fromJson($raw);
     }
 
+    /** @return iterable<string,array{string,string,bool,bool}> */
+    public static function checkoutRepresentations(): iterable
+    {
+        foreach (['created', 'completed', 'cancelled'] as $event) {
+            foreach (['ACTIVE', 'COMPLETED', 'CANCELLED', 'EXPIRED'] as $status) {
+                foreach ([false, true] as $generic) {
+                    foreach ([false, true] as $subscription) {
+                        yield implode('-', [$event, $status, (int) $generic, (int) $subscription])
+                            => [$event, $status, $generic, $subscription];
+                    }
+                }
+            }
+        }
+    }
+
+    #[DataProvider('checkoutRepresentations')]
+    public function testCheckoutNumbersKeepTheirOriginalDirectOrGenericShape(
+        string $event,
+        string $status,
+        bool $generic,
+        bool $subscription,
+    ): void {
+        $timing = $subscription
+            ? '"subscription_data":{"days_until_due":4,"duration":{"period":6},"recurring":{"period":1}}'
+            : '"invoice_data":{"days_until_due":3}';
+        $resource = '{"id":"checkout_example","status":"' . $status . '","mode":"'
+            . ($subscription ? 'SUBSCRIPTION' : 'PAYMENT') . '","line_items":['
+            . '{"quantity":2,"rate_card_version":7,"amount":12.340000000000000001},'
+            . '{"quantity":5,"rate_card_version":9}],"unknown_count":11,' . $timing . '}';
+        $decoded = WebhookEvent::fromJson(self::checkoutRaw($resource, $generic, $event))->toArray();
+        self::assertIsArray($decoded['data']);
+        self::assertSame($generic, array_key_exists('object', $decoded['data']));
+        $object = $generic ? $decoded['data']['object'] : $decoded['data'];
+        self::assertIsArray($object);
+        self::assertSame($status, $object['status']);
+        self::assertSame('11', $object['unknown_count']);
+        self::assertSame([
+            ['quantity' => 2, 'rate_card_version' => 7, 'amount' => '12.340000000000000001'],
+            ['quantity' => 5, 'rate_card_version' => 9],
+        ], $object['line_items']);
+        self::assertSame(
+            $subscription ? ['days_until_due' => 4, 'duration' => ['period' => 6], 'recurring' => ['period' => 1]]
+                : ['days_until_due' => 3],
+            $object[$subscription ? 'subscription_data' : 'invoice_data']
+        );
+    }
+
+    /** @return iterable<string,array{string,int|string}> */
+    public static function checkoutIntegerTokens(): iterable
+    {
+        yield 'zero' => ['0', 0];
+        yield 'negative' => ['-7', -7];
+        yield 'maximum' => ['9223372036854775807', PHP_INT_MAX];
+        yield 'minimum' => ['-9223372036854775808', PHP_INT_MIN];
+        yield 'positive overflow' => ['9223372036854775808', '9223372036854775808'];
+        yield 'negative overflow' => ['-9223372036854775809', '-9223372036854775809'];
+        yield 'decimal form' => ['1.00', '1.00'];
+        yield 'exponent form' => ['1e2', '1e2'];
+        yield 'quoted identifier-like value' => ['"0007"', '0007'];
+    }
+
+    #[DataProvider('checkoutIntegerTokens')]
+    public function testDirectAndGenericCheckoutKeepExactIntegerBoundaryRules(string $token, int|string $expected): void
+    {
+        foreach ([false, true] as $generic) {
+            $raw = self::checkoutRaw('{"status":"ACTIVE","line_items":[{"quantity":' . $token . '}]}', $generic);
+            $decoded = WebhookEvent::fromJson($raw)->toArray();
+            self::assertIsArray($decoded['data']);
+            $resource = $generic ? $decoded['data']['object'] : $decoded['data'];
+            self::assertIsArray($resource);
+            self::assertSame([['quantity' => $expected]], $resource['line_items']);
+        }
+    }
+
+    public function testExistingGenericSelectionWinsAndEveryCompetingObjectPreventsDirectFallback(): void
+    {
+        $object = '{"status":"ACTIVE","line_items":[{"quantity":3}]}';
+        foreach (['null', 'false', '2', '[]', '{}', $object] as $candidate) {
+            $raw = self::checkoutRaw('{"id":"wrapper","status":"ACTIVE","line_items":[{"quantity":2}],'
+                . '"object":' . $candidate . ',"extra":19.9000}');
+            $decoded = WebhookEvent::fromJson($raw)->toArray();
+            self::assertIsArray($decoded['data']);
+            self::assertSame([['quantity' => '2']], $decoded['data']['line_items']);
+            self::assertSame('19.9000', $decoded['data']['extra']);
+            if ($candidate === $object) {
+                self::assertIsArray($decoded['data']['object']);
+                self::assertSame([['quantity' => 3]], $decoded['data']['object']['line_items']);
+            }
+        }
+        $raw = self::checkoutRaw('{"status":"ACTIVE","line_items":[{"quantity":2}],"\\u006fbject":null}');
+        $decoded = WebhookEvent::fromJson($raw)->toArray();
+        self::assertIsArray($decoded['data']);
+        self::assertSame([['quantity' => '2']], $decoded['data']['line_items']);
+    }
+
+    public function testDirectCheckoutRetainsExistingDecodedIdentityAndLastWinsSemantics(): void
+    {
+        $raw = self::checkoutRaw('{"status":"ACTIVE","line_items":[{"quantity":1,"quantity":2}]}');
+        $raw = str_replace('"id":"evt_example"', '"id":123', $raw);
+        $raw = str_replace('"org_id":"org_example"', '"org_id":456', $raw);
+        $decoded = WebhookEvent::fromJson($raw)->toArray();
+        self::assertSame('123', $decoded['id']);
+        self::assertSame('456', $decoded['org_id']);
+        self::assertIsArray($decoded['data']);
+        self::assertSame([['quantity' => 2]], $decoded['data']['line_items']);
+    }
+
+    public function testUnselectedDirectEnvelopesKeepQuantityAsText(): void
+    {
+        $base = self::checkoutRaw('{"status":"ACTIVE","line_items":[{"quantity":2}]}');
+        foreach (['id', 'name', 'created_at', 'version', 'org_id'] as $field) {
+            $decoded = json_decode($base, true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($decoded);
+            unset($decoded[$field]);
+            $event = WebhookEvent::fromJson(json_encode($decoded, JSON_THROW_ON_ERROR))->toArray();
+            self::assertIsArray($event['data']);
+            self::assertSame([['quantity' => '2']], $event['data']['line_items']);
+        }
+        foreach (
+            [
+            ['2026-08-21', '2025-01-01'], ['billing_checkout.created', 'billing_checkout.future'],
+            ['billing_checkout.created', 'subscription.created'], ['billing_checkout.created', 'invoice.created'],
+            ['"ACTIVE"', '"FUTURE"'], ['"org_example"', '""'],
+            ['"org_id":"org_example"', '"org_id":"org_example","account_id":"conflict"'],
+            ['"org_id":"org_example"', '"org_id":"org_example","accountId":"conflict"'],
+            ] as [$from, $to]
+        ) {
+            $event = WebhookEvent::fromJson(str_replace($from, $to, $base))->toArray();
+            self::assertIsArray($event['data']);
+            self::assertSame([['quantity' => '2']], $event['data']['line_items']);
+        }
+        foreach (['null', 'false', '[]', '{}', '[{"status":"ACTIVE","quantity":2}]'] as $data) {
+            $event = WebhookEvent::fromJson(self::checkoutRaw($data))->toArray();
+            self::assertArrayHasKey('data', $event);
+        }
+    }
+
+    public function testOtherDirectFamiliesKeepTheirOwnKnownIntegerPositionsAsText(): void
+    {
+        foreach (
+            [
+            ['subscription.created', '"org_id":"org_example"',
+                '{"status":"ACTIVE","recurring":{"period":2},"days_until_due":3}',
+                ['status' => 'ACTIVE', 'recurring' => ['period' => '2'], 'days_until_due' => '3']],
+            ['invoice.created', '"org_id":"org_example"',
+                '{"status":"DRAFT","days_until_due":3,"past_payment_attempt_count":2}',
+                ['status' => 'DRAFT', 'days_until_due' => '3', 'past_payment_attempt_count' => '2']],
+            ['payment_intent.created', '"account_id":"account_example"',
+                '{"status":"REQUIRES_PAYMENT_METHOD","order":{"products":[{"quantity":3}]}}',
+                ['status' => 'REQUIRES_PAYMENT_METHOD', 'order' => ['products' => [['quantity' => '3']]]]],
+            ] as [$name, $owner, $data, $expected]
+        ) {
+            $raw = '{"id":"event_example","created_at":"2026-11-09T00:00:00Z","version":"2026-08-21",'
+                . '"name":"' . $name . '",' . $owner . ',"data":' . $data . '}';
+            self::assertSame($expected, WebhookEvent::fromJson($raw)->toArray()['data']);
+        }
+    }
+
+    private static function checkoutRaw(string $resource, bool $generic = false, string $event = 'created'): string
+    {
+        return '{"id":"evt_example","name":"billing_checkout.' . $event . '","version":"2026-08-21",'
+            . '"org_id":"org_example","created_at":"2026-11-09T00:00:00Z","data":'
+            . ($generic ? '{"object":' . $resource . '}' : $resource) . '}';
+    }
+
     /**
      * @param array<array-key, mixed> $envelope
      * @return array<array-key, mixed>
