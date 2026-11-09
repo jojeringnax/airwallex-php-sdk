@@ -129,6 +129,9 @@ abstract class HistoricalAlipayTestCase extends TestCase
                 'GIT_CONFIG_NOSYSTEM' => '1', 'GIT_CONFIG_GLOBAL' => '/dev/null']
         );
         self::assertIsResource($process);
+        if (!is_array($pipes)) {
+            throw new RuntimeException('Historical SDK source pipes are unavailable.');
+        }
         $output = $pipes[1] ?? null;
         self::assertIsResource($output);
         $result = stream_get_contents($output);
