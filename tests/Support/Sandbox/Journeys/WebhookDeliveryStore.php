@@ -69,7 +69,8 @@ final class WebhookDeliveryStore
     {
         if (
             !in_array($name, ['cloudflared.yml', 'registration.json', 'destination.json', 'receiver-config.json',
-                'billing-active.json', 'billing-cancelled.json'], true)
+                'billing-active.json', 'billing-cancelled.json',
+                'subscription-pending.json', 'subscription-cancelled.json'], true)
             || strlen($bytes) > 65536
         ) {
             throw new RuntimeException('Private delivery retention is outside its bounded contract.');
@@ -112,7 +113,7 @@ final class WebhookDeliveryStore
         if (
             preg_match(
                 '/^(?:registration\.json|billing-(?:active|cancelled)\.json|receiver-stats\.json'
-                    . '|capture-\d{6}\.(?:body|json))$/D',
+                    . '|subscription-(?:pending|cancelled)\.json|capture-\d{6}\.(?:body|json))$/D',
                 $name
             ) !== 1
             || $limit < 1 || $limit > 65536

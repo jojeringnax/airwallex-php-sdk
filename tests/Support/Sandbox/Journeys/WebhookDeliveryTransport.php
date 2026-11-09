@@ -27,6 +27,7 @@ final class WebhookDeliveryTransport implements ClientInterface
     /** @var Closure():float */
     private readonly Closure $clock;
     private readonly float $overallDeadline;
+    private readonly ?float $subscriptionStarted;
 
     /**
      * @param ClientInterface|null $http Fixture or already-streaming seam; an arbitrary client may prebuffer.
@@ -39,9 +40,23 @@ final class WebhookDeliveryTransport implements ClientInterface
         ?float $overallDeadline = null,
         private readonly bool $managementOnly = false,
         private readonly WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
+        private readonly ?WebhookDeliveryEvents $eventPair = null,
+        ?float $subscriptionStarted = null,
     ) {
         if ($managementProfile === WebhookManagementProfile::DefaultLogin && !$managementOnly) {
             throw new ProtocolException('Default management cannot grant producer authority.');
+        }
+        if (
+            $eventPair === WebhookDeliveryEvents::Subscription
+            && (!$managementOnly || $managementProfile !== WebhookManagementProfile::DefaultLogin)
+        ) {
+            throw new ProtocolException('Subscription delivery requires its isolated DEFAULT management pair.');
+        }
+        if (
+            $managementProfile === WebhookManagementProfile::DefaultLogin
+            && $eventPair === WebhookDeliveryEvents::Payments
+        ) {
+            throw new ProtocolException('Default management cannot select the Payments producer pair.');
         }
         $this->http = $http ?? new Client([
             'handler' => new StreamHandler(), 'stream' => true, 'read_timeout' => 5,
@@ -49,9 +64,22 @@ final class WebhookDeliveryTransport implements ClientInterface
             'allow_redirects' => false, 'http_errors' => false, 'cookies' => false,
         ]);
         $this->clock = $clock ?? static fn (): float => hrtime(true) / 1_000_000_000;
-        $this->overallDeadline = $overallDeadline ?? ($this->clock)() + 300;
-        if (!is_finite($this->overallDeadline)) {
-            throw new ProtocolException('The delivery probe requires a finite elapsed deadline.');
+        if ($eventPair === WebhookDeliveryEvents::Subscription) {
+            if ($overallDeadline !== null && $subscriptionStarted === null) {
+                throw new ProtocolException('An explicit Subscription window requires its original clock sample.');
+            }
+            $this->subscriptionStarted = $subscriptionStarted ?? ($this->clock)();
+            $this->overallDeadline = SubscriptionWebhookTransport::caseDeadline(
+                $this->subscriptionStarted,
+                $overallDeadline
+            );
+        } else {
+            // Preserve all legacy clock observations and window construction exactly.
+            $this->subscriptionStarted = null;
+            $this->overallDeadline = $overallDeadline ?? ($this->clock)() + 300;
+            if (!is_finite($this->overallDeadline)) {
+                throw new ProtocolException('The delivery probe requires a finite elapsed deadline.');
+            }
         }
     }
 
@@ -59,6 +87,16 @@ final class WebhookDeliveryTransport implements ClientInterface
     {
         if ($profile !== $this->managementProfile) {
             throw new ProtocolException('Webhook management profile does not match its isolated transport.');
+        }
+    }
+
+    public function assertEventPair(WebhookDeliveryEvents $events): void
+    {
+        if (
+            ($this->eventPair !== null && $events !== $this->eventPair)
+            || ($events === WebhookDeliveryEvents::Subscription && $this->eventPair !== $events)
+        ) {
+            throw new ProtocolException('Webhook event pair does not match its isolated transport.');
         }
     }
 
@@ -135,11 +173,17 @@ final class WebhookDeliveryTransport implements ClientInterface
         }
         $key = $method . ' ' . $path;
         $limit = $login ? 2 : ($read ? ($path === $this->webhookPath ? 3 : 12) : 1);
-        if (($this->counts[$key] ?? 0) >= $limit || array_sum($this->counts) >= 24) {
+        if (
+            ($this->counts[$key] ?? 0) >= $limit
+            || array_sum($this->counts) >= ($this->eventPair === WebhookDeliveryEvents::Subscription ? 7 : 24)
+        ) {
             throw new ProtocolException('Webhook delivery operation budget is exhausted.');
         }
         $now = ($this->clock)();
-        if (!is_finite($now) || $now + 45 > $this->overallDeadline) {
+        if (
+            !is_finite($now) || $now + 45 > $this->overallDeadline
+            || ($this->subscriptionStarted !== null && $now < $this->subscriptionStarted)
+        ) {
             throw new ProtocolException('The delivery probe has insufficient bounded request time.');
         }
         $this->counts[$key] = ($this->counts[$key] ?? 0) + 1; // Latch before a possibly effective send.
@@ -152,6 +196,17 @@ final class WebhookDeliveryTransport implements ClientInterface
             $stream = $response->getBody();
             try {
                 $started = ($this->clock)();
+                if ($this->eventPair === WebhookDeliveryEvents::Subscription) {
+                    $bytes = 2;
+                    foreach ($response->getHeaders() as $name => $values) {
+                        foreach ($values as $value) {
+                            $bytes += strlen($name) + 2 + strlen($value) + 2;
+                        }
+                    }
+                    if ($bytes > 16384) {
+                        throw new ProtocolException('Subscription management headers exceeded their parsed cap.');
+                    }
+                }
                 $body = '';
                 while (strlen($body) <= 65536) {
                     $this->deadline($started);
@@ -236,6 +291,9 @@ final class WebhookDeliveryTransport implements ClientInterface
             throw new ProtocolException('The fresh registration requires a bounded seekable body.');
         }
         $position = $stream->tell();
+        if ($this->eventPair === WebhookDeliveryEvents::Subscription && $position !== 0) {
+            throw new ProtocolException('Subscription registration body must start at its prepared cursor.');
+        }
         try {
             $stream->rewind();
             $raw = $stream->read($size + 1);
@@ -256,7 +314,7 @@ final class WebhookDeliveryTransport implements ClientInterface
             throw new ProtocolException('Default management requires the selected Billing event pair.');
         }
         sort($events, SORT_STRING);
-        $expected = WebhookDeliveryEvents::BillingCheckout->names();
+        $expected = ($this->eventPair ?? WebhookDeliveryEvents::BillingCheckout)->names();
         sort($expected, SORT_STRING);
         if (
             $keys !== ['events', 'request_id', 'url', 'version'] || $events !== $expected

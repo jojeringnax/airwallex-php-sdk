@@ -10,6 +10,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookDeliveryTransport;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookDeliveryEvents;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookManagementProfile;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\DataProviderExternal;
@@ -374,6 +375,391 @@ final class WebhookDeliveryTransportTest extends TestCase
             self::assertLessThanOrEqual(65537, $stream->bytesRead);
             self::assertCount(1, $client->requests);
             self::assertTrue($transport->sent('create_webhook'));
+        }
+    }
+    public function testSubscriptionPairRequiresExplicitDefaultManagementAndRejectsCrossedApiBinding(): void
+    {
+        $pair = WebhookDeliveryEvents::Subscription;
+        foreach ([false, true] as $managementOnly) {
+            try {
+                new WebhookDeliveryTransport('fixture', managementOnly: $managementOnly, eventPair: $pair);
+                self::fail('An ACCOUNT profile granted Subscription management.');
+            } catch (ProtocolException $error) {
+                self::assertNull($error->getPrevious());
+            }
+        }
+        $bound = new WebhookDeliveryTransport(
+            'fixture',
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::DefaultLogin,
+            eventPair: $pair
+        );
+        $bound->assertEventPair($pair);
+        try {
+            $bound->assertEventPair(WebhookDeliveryEvents::BillingCheckout);
+            self::fail('Crossed explicit pair accepted.');
+        } catch (ProtocolException $error) {
+            self::assertNull($error->getPrevious());
+        }
+        $old = new WebhookDeliveryTransport(
+            'fixture',
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::DefaultLogin
+        );
+        $old->assertEventPair(WebhookDeliveryEvents::BillingCheckout);
+        $this->expectException(ProtocolException::class);
+        $old->assertEventPair($pair);
+    }
+
+    public function testNewDefaultPairCannotUseOldCheckoutBodyAndOldDefaultCannotUseSubscriptionBody(): void
+    {
+        $pairs = WebhookDeliveryEvents::cases();
+        foreach ($pairs as $selected) {
+            if ($selected === WebhookDeliveryEvents::Payments) {
+                continue;
+            }
+            $other = $selected === WebhookDeliveryEvents::Subscription
+                ? WebhookDeliveryEvents::BillingCheckout
+                : WebhookDeliveryEvents::Subscription;
+            $http = new WebhookConfigFixtureClient([]);
+            $transport = new WebhookDeliveryTransport(
+                'fixture',
+                $http,
+                managementOnly: true,
+                managementProfile: WebhookManagementProfile::DefaultLogin,
+                eventPair: $selected
+            );
+            $body = self::defaultBody();
+            $body['events'] = $other->names();
+            try {
+                $transport->sendRequest(new Request(
+                    'POST',
+                    self::HOST . '/api/v1/webhooks/create',
+                    self::defaultHeaders(),
+                    json_encode($body, JSON_THROW_ON_ERROR)
+                ));
+                self::fail('Wrong event pair reached delegate.');
+            } catch (ProtocolException) {
+                self::assertSame([], $http->requests);
+            }
+        }
+    }
+
+    public function testSubscriptionOnlyManagementHeaderCapDoesNotRetroactivelyChangeOldDefault(): void
+    {
+        foreach ([false, true] as $subscription) {
+            $stream = new WebhookConfigFixtureStream('{"token":"private","expires_at":"2099-01-01T00:00:00Z"}');
+            $http = new WebhookConfigFixtureClient([new Response(201, ['X' => str_repeat('v', 16378)], $stream)]);
+            $transport = new WebhookDeliveryTransport(
+                'fixture',
+                $http,
+                managementOnly: true,
+                managementProfile: WebhookManagementProfile::DefaultLogin,
+                eventPair: $subscription ? WebhookDeliveryEvents::Subscription : null
+            );
+            try {
+                $transport->sendRequest(new Request(
+                    'POST',
+                    self::HOST . '/api/v1/authentication/login',
+                    self::defaultHeaders(true)
+                ));
+                self::assertFalse($subscription);
+                self::assertGreaterThan(0, $stream->bytesRead);
+            } catch (ProtocolException) {
+                self::assertTrue($subscription);
+                self::assertSame(0, $stream->bytesRead);
+            }
+            self::assertTrue($stream->closed);
+        }
+    }
+    public function testAnExplicitPairCannotBroadenDefaultManagementToPayments(): void
+    {
+        $this->expectException(ProtocolException::class);
+        new WebhookDeliveryTransport(
+            'fixture',
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::DefaultLogin,
+            eventPair: WebhookDeliveryEvents::Payments
+        );
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function subscriptionOriginStages(): iterable
+    {
+        foreach (
+            ['equal', 'rollback', 'reserve_exact', 'reserve_late', 'native_expiry',
+            'read_expiry', 'close_expiry', 'read_ten_seconds', 'close_ten_seconds'] as $stage
+        ) {
+            yield $stage => [$stage];
+        }
+    }
+
+    #[DataProvider('subscriptionOriginStages')]
+    public function testSubscriptionManagementRetainsTheActualFractionalOriginAndItsBounds(string $stage): void
+    {
+        $start = 100.1;
+        $now = $start;
+        $body = '{"token":"SYNTHETIC_TOKEN","expires_at":"2099-01-01T00:00:00Z"}';
+        $stream = new SimulationProbeStream(
+            $body,
+            afterRead: static function () use (&$now, $stage, $start): void {
+                if ($stage === 'read_expiry') {
+                    $now = 400.0;
+                }
+                if ($stage === 'read_ten_seconds') {
+                    $now = $start + 10.0;
+                }
+            },
+            afterClose: static function () use (&$now, $stage, $start): void {
+                if ($stage === 'close_expiry') {
+                    $now = 400.0;
+                }
+                if ($stage === 'close_ten_seconds') {
+                    $now = $start + 10.0;
+                }
+            }
+        );
+        $http = new WebhookConfigFixtureClient([new Response(201, [], $stream)]);
+        $http->intercept = static function () use (&$now, $stage): void {
+            if ($stage === 'native_expiry') {
+                $now = 400.0;
+            }
+        };
+        $reads = 0;
+        $transport = new WebhookDeliveryTransport(
+            'fixture',
+            $http,
+            static function () use (&$reads, &$now): float {
+                ++$reads;
+                return $now;
+            },
+            400.0,
+            true,
+            WebhookManagementProfile::DefaultLogin,
+            WebhookDeliveryEvents::Subscription,
+            subscriptionStarted: $start
+        );
+        self::assertSame(0, $reads);
+        self::assertSame($start, (new ReflectionProperty($transport, 'subscriptionStarted'))->getValue($transport));
+        $now = match ($stage) {
+            'rollback' => 100.05, 'reserve_exact' => 355.0,
+            'reserve_late' => 355.000001, default => $start
+        };
+        $error = null;
+        try {
+            $transport->sendRequest(new Request(
+                'POST',
+                self::HOST . '/api/v1/authentication/login',
+                self::defaultHeaders(true)
+            ));
+        } catch (ProtocolException $caught) {
+            $error = $caught;
+        }
+        if (in_array($stage, ['equal', 'reserve_exact'], true)) {
+            self::assertNull($error);
+        } else {
+            self::assertInstanceOf(ProtocolException::class, $error);
+        }
+        $sent = !in_array($stage, ['rollback', 'reserve_late'], true);
+        self::assertCount($sent ? 1 : 0, $http->requests);
+        self::assertSame($sent, $stream->closed);
+    }
+
+    public function testSubscriptionManagementCapturesItsOwnOriginOrRequiresAnExplicitOriginal(): void
+    {
+        $reads = 0;
+        $clock = static function () use (&$reads): float {
+            ++$reads;
+            return 100.1;
+        };
+        $http = new WebhookConfigFixtureClient([]);
+        $transport = new WebhookDeliveryTransport(
+            'fixture',
+            $http,
+            $clock,
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::DefaultLogin,
+            eventPair: WebhookDeliveryEvents::Subscription
+        );
+        self::assertSame(1, $reads);
+        self::assertSame(100.1, (new ReflectionProperty($transport, 'subscriptionStarted'))->getValue($transport));
+        self::assertSame(400.0, (new ReflectionProperty($transport, 'overallDeadline'))->getValue($transport));
+        $this->expectException(ProtocolException::class);
+        try {
+            new WebhookDeliveryTransport(
+                'fixture',
+                $http,
+                $clock,
+                400.0,
+                true,
+                WebhookManagementProfile::DefaultLogin,
+                WebhookDeliveryEvents::Subscription
+            );
+        } finally {
+            self::assertSame(1, $reads);
+            self::assertSame([], $http->requests);
+        }
+    }
+
+    /** @return iterable<string,array{bool,bool}> */
+    public static function legacyClockProfiles(): iterable
+    {
+        foreach ([false, true] as $default) {
+            foreach ([false, true] as $explicit) {
+                yield ($default ? 'DEFAULT Checkout' : 'ACCOUNT Payments') . ($explicit ? ' explicit' : ' own')
+                    => [$default, $explicit];
+            }
+        }
+    }
+
+    #[DataProvider('legacyClockProfiles')]
+    public function testLegacyNonSubscriptionClockRequestResponseAndFailureTracesMatchImmutableSource(
+        bool $default,
+        bool $explicit
+    ): void {
+        $read = proc_open(
+            ['git', 'show',
+            '8f89d082217eda4a52e6cf33515be9a3a7748af1:tests/Support/Sandbox/Journeys/WebhookDeliveryTransport.php'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            env_vars: ['PATH' => getenv('PATH') ?: '/usr/bin:/bin', 'GIT_NO_LAZY_FETCH' => '1',
+            'GIT_ALLOW_PROTOCOL' => '',
+            'GIT_NO_REPLACE_OBJECTS' => '1']
+        );
+        self::assertIsResource($read);
+        try {
+            [$input, $output, $errorOutput] = self::legacyPipes($pipes);
+            fclose($input);
+            $raw = stream_get_contents($output, 65537);
+            self::assertIsString($raw);
+            self::assertLessThanOrEqual(65536, strlen($raw));
+            self::assertSame('', stream_get_contents($errorOutput, 4097));
+            self::assertSame(0, proc_close($read));
+        } finally {
+            self::closeLegacyPipes($pipes);
+            if (is_resource($read)) {
+                proc_terminate($read);
+                proc_close($read);
+            }
+        }
+        $name = __NAMESPACE__ . '\\SubscriptionR3LegacyTransportOracle';
+        if (!class_exists($name, false)) {
+            $source = str_replace(
+                'namespace Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys;',
+                'namespace ' . __NAMESPACE__ . ';',
+                $raw
+            );
+            $source = str_replace(
+                'final class WebhookDeliveryTransport',
+                'final class SubscriptionR3LegacyTransportOracle',
+                $source
+            );
+            // Keep the original support namespace resolution for unqualified sibling types.
+            $source = str_replace('use Closure;', 'use Closure;'
+                . '\nuse Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\WebhookManagementProfile;'
+                . '\nuse Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\WebhookDeliveryEvents;'
+                . '\nuse Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\WebhookDeliveryApi;', $source);
+            eval(substr(str_replace('\\nuse ', "\nuse ", $source), 5));
+        }
+        $factory = eval('return static fn (array $arguments): object => new \\' . $name . '(...$arguments);');
+        self::assertInstanceOf(\Closure::class, $factory);
+        $traces = [];
+        foreach (['old', 'new'] as $which) {
+            $samples = [];
+            $http = new WebhookConfigFixtureClient([new Response(200, [], '{"id":"own"}'),
+                new RuntimeException('SYNTHETIC_PRIVATE_FAILURE')]);
+            $clock = static function () use (&$samples): float {
+                $samples[] = 100.1;
+                return 100.1;
+            };
+            $profile = $default ? WebhookManagementProfile::DefaultLogin : WebhookManagementProfile::Account;
+            $pair = $default ? WebhookDeliveryEvents::BillingCheckout : WebhookDeliveryEvents::Payments;
+            $transport = $which === 'old' ? $factory([
+                'fixture', $http, $clock, $explicit ? 400.0 : null, $default, $profile, $pair,
+            ])
+                : new WebhookDeliveryTransport(
+                    'fixture',
+                    $http,
+                    $clock,
+                    $explicit ? 400.0 : null,
+                    $default,
+                    $profile,
+                    $pair
+                );
+            self::assertInstanceOf(\Psr\Http\Client\ClientInterface::class, $transport);
+            $kind = new \ReflectionObject($transport);
+            $kind->getMethod('allowWebhook')->invoke($transport, 'own');
+            $request = new Request('GET', self::HOST . '/api/v1/webhooks/own', self::defaultHeaders());
+            $response = $transport->sendRequest($request);
+            $responseBytes = (string) $response->getBody();
+            $failure = null;
+            try {
+                $transport->sendRequest($request);
+            } catch (\Throwable $caught) {
+                if ($caught instanceof \PHPUnit\Framework\AssertionFailedError) {
+                    throw $caught;
+                }
+                $failure = [get_class($caught), $caught->getMessage()];
+            }
+            $traces[$which] = ['clock_samples' => $samples, 'status' => $response->getStatusCode(),
+                'body' => $responseBytes, 'failure' => $failure, 'requests' => array_map(
+                    static fn (RequestInterface $r): array => [$r->getMethod(), (string) $r->getUri(),
+                    $r->getHeaders(),
+                    (string) $r->getBody(),
+                    $r->getProtocolVersion()],
+                    $http->requests
+                )];
+        }
+        self::assertSame($traces['old'], $traces['new']);
+    }
+
+    /** @return array{resource,resource,resource} */
+    private static function legacyPipes(mixed $pipes): array
+    {
+        if (
+            !is_array($pipes) || !is_resource($pipes[0] ?? null)
+            || !is_resource($pipes[1] ?? null) || !is_resource($pipes[2] ?? null)
+        ) {
+            throw new RuntimeException('The local legacy comparison requires three owned streams.');
+        }
+        return [$pipes[0], $pipes[1], $pipes[2]];
+    }
+
+    private static function closeLegacyPipes(mixed $pipes): void
+    {
+        if (is_array($pipes)) {
+            foreach ($pipes as $pipe) {
+                if (is_resource($pipe)) {
+                    fclose($pipe);
+                }
+            }
+        }
+    }
+
+    public function testLegacyComparisonPipeWitnessRejectsMissingWrongAndClosedHandles(): void
+    {
+        $a = fopen('php://temp', 'w+b');
+        $b = fopen('php://temp', 'w+b');
+        $c = fopen('php://temp', 'w+b');
+        self::assertIsResource($a);
+        self::assertIsResource($b);
+        self::assertIsResource($c);
+        try {
+            self::assertSame([$a, $b, $c], self::legacyPipes([$a, $b, $c]));
+            foreach ([null, [], [$a, $b], [$a, false, $c]] as $bad) {
+                $error = null;
+                try {
+                    self::legacyPipes($bad);
+                } catch (RuntimeException $caught) {
+                    $error = $caught;
+                }
+                self::assertInstanceOf(RuntimeException::class, $error);
+            }
+            fclose($b);
+            $this->expectException(RuntimeException::class);
+            self::legacyPipes([$a, $b, $c]);
+        } finally {
+            self::closeLegacyPipes([$a, $b, $c]);
         }
     }
 }

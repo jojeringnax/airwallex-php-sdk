@@ -9,6 +9,7 @@ enum WebhookDeliveryEvents
 {
     case Payments;
     case BillingCheckout;
+    case Subscription;
 
     /** @return list<string> */
     public function names(): array
@@ -16,6 +17,7 @@ enum WebhookDeliveryEvents
         return match ($this) {
             self::Payments => ['payment_intent.created', 'payment_intent.cancelled'],
             self::BillingCheckout => ['billing_checkout.created', 'billing_checkout.cancelled'],
+            self::Subscription => ['subscription.created', 'subscription.cancelled'],
         };
     }
 }
