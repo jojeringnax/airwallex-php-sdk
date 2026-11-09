@@ -120,6 +120,60 @@ final class HostedBrowserTest extends TestCase
         }
     }
 
+    public function testNativeRetentionFactsRequireTheSeparateSelectionAndRemainClosed(): void
+    {
+        $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false];
+        $facts = ['security_same_document_requested' => true, 'security_same_document_retained' => true,
+            'security_same_document_reason' => 'retained_once'];
+        $safe = HostedBrowser::sanitize(
+            $base + $facts + ['native_packet' => 'PRIVATE_URL'],
+            true,
+            true,
+            true,
+            true,
+            mode: HostedSecurityMode::InstrumentSecurity,
+            retainSameDocument: true
+        );
+        foreach ($facts as $key => $value) {
+            self::assertSame($value, $safe[$key]);
+            self::assertArrayNotHasKey($key, HostedBrowser::sanitize(
+                $base + $facts,
+                true,
+                true,
+                true,
+                true,
+                mode: HostedSecurityMode::InstrumentSecurity
+            ));
+        }
+        self::assertSame('fail', $safe['result']);
+        self::assertFalse($safe['financial_permission']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        foreach (
+            [['security_same_document_requested', false], ['security_same_document_retained', 1],
+            ['security_same_document_reason', 'PRIVATE_ERROR'],
+            ['security_same_document_retained', false]] as [$key, $bad]
+        ) {
+            try {
+                HostedBrowser::sanitize(
+                    $base + array_replace($facts, [$key => $bad]),
+                    true,
+                    true,
+                    true,
+                    true,
+                    mode: HostedSecurityMode::InstrumentSecurity,
+                    retainSameDocument: true
+                );
+                self::fail('Invalid native evidence accepted.');
+            } catch (RuntimeException $error) {
+                self::assertSame('Invalid native navigation evidence.', $error->getMessage());
+            }
+        }
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($base + $facts, true, true, true, true, retainSameDocument: true);
+    }
+
     public function testPassiveBoundDocumentFactsAreNativeClosedAndAbsentFromLegacyOutput(): void
     {
         $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,

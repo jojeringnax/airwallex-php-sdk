@@ -170,11 +170,155 @@ class BoundDocumentObservations {
     this.#sealed = true;
   }
   evidence() { return { ...this.#safe }; }
+  retentionReference(frame, generation) {
+    return !this.#closed && !this.#sealed && !this.#stopped && frame === this.#frame
+      && this.#baseline === 'ready' && this.#captureSettled && this.#handle !== undefined
+      && this.#bindingGeneration === generation && this.#baselineGeneration === generation
+      && this.#generation() === generation && this.#clock() < this.#deadline
+      && this.#original !== null && this.#source(frame) === this.#original && this.#previous === this.#original;
+  }
   toJSON() { throw new Error('Private document observations cannot be serialized.'); }
 }
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false, observeCurrencySettings = false, selectCard = false, cardRuntime = null, instrumentSecurity = false) {
+const navigationRuntimeProofs = new WeakSet();
+async function verifyNavigationRuntime(modulePath, playwright) {
+  try {
+    if (typeof modulePath !== 'string' || !path.isAbsolute(modulePath) || require(modulePath) !== playwright) return null;
+    await verifyCardRuntime(modulePath); // Same reviewed full bundle, version and loaded-export identity.
+    const proof = Object.freeze({}); navigationRuntimeProofs.add(proof); return proof;
+  } catch { return null; }
+}
+
+// Decision120: only one synchronous native packet can change the original invalidation condition.
+class SameDocumentRetention {
+  #runtime; #proof; #documents; #generation; #frame; #main; #source; #session; #boundGeneration;
+  #emitter; #listener; #remove; #packet; #disabled = false; #used = false; #closed = false;
+  #observing = false; #consuming = false;
+  #safe = { security_same_document_requested: true, security_same_document_retained: false,
+    security_same_document_reason: 'not_observed' };
+  constructor(runtime, proof, documents, generation) {
+    this.#runtime = navigationRuntimeProofs.has(runtime); this.#proof = proof;
+    this.#documents = documents; this.#generation = generation;
+    if (!this.#runtime) this.#disable('runtime_unverified');
+  }
+  #disable(reason) { this.#disabled = true; this.#packet = undefined; this.#safe.security_same_document_reason = reason; }
+  static #data(object, key) {
+    const value = Object.getOwnPropertyDescriptor(object, key);
+    if (!value || !Object.hasOwn(value, 'value')) throw new Error('Unsupported native shape.');
+    return value.value;
+  }
+  bind(frame, main, source) {
+    if (this.#closed || this.#disabled || this.#frame !== undefined) return;
+    try {
+      if (!frame || frame === main || frame.parentFrame() !== main || frame.page().mainFrame() !== main
+          || frame.isDetached() !== false || main.isDetached() !== false) {
+        this.#disable('binding_unavailable'); return;
+      }
+      const proto = Object.getPrototypeOf(frame);
+      if (SameDocumentRetention.#data(SameDocumentRetention.#data(proto, 'constructor'), 'name') !== '_Frame'
+          || typeof Object.getOwnPropertyDescriptor(proto, 'url')?.value !== 'function'
+          || typeof Object.getOwnPropertyDescriptor(proto, 'parentFrame')?.value !== 'function') {
+        this.#disable('shape_unavailable'); return;
+      }
+      const emitter = SameDocumentRetention.#data(frame, '_eventEmitter');
+      const ep = Object.getPrototypeOf(emitter);
+      if (SameDocumentRetention.#data(SameDocumentRetention.#data(ep, 'constructor'), 'name') !== 'EventEmitter2'
+          || typeof Object.getOwnPropertyDescriptor(ep, 'emit')?.value !== 'function'
+          || typeof SameDocumentRetention.#data(emitter, 'on') !== 'function'
+          || typeof SameDocumentRetention.#data(emitter, 'off') !== 'function') {
+        this.#disable('shape_unavailable'); return;
+      }
+      const url = new URL(source), options = JSON.parse(new URLSearchParams(
+        url.hash.slice('#/elements/dropin?'.length)).get('options') ?? '');
+      if (url.href !== source || !url.hash.startsWith('#/elements/dropin?')
+          || typeof options?.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(options.sessionId)) {
+        this.#disable('binding_unavailable'); return;
+      }
+      this.#frame = frame; this.#main = main; this.#source = source; this.#session = options.sessionId;
+      this.#boundGeneration = this.#generation(); this.#emitter = emitter;
+      this.#remove = SameDocumentRetention.#data(emitter, 'off');
+      // Never return a Promise or leak an own listener error into Playwright's synchronous public emit.
+      this.#listener = packet => {
+        try {
+          if (this.#observing || this.#consuming) { this.#disable('packet_unavailable'); return; }
+          this.#observing = true; this.#observe(packet);
+        } catch { this.#disable('listener_failed'); }
+        finally { this.#observing = false; }
+      };
+      Reflect.apply(SameDocumentRetention.#data(emitter, 'on'), emitter, ['navigated', this.#listener]);
+    } catch { this.#disable('listener_failed'); }
+  }
+  #observe(packet) {
+    if (this.#closed || this.#disabled) return;
+    if (this.#packet !== undefined) { this.#disable('packet_unavailable'); return; }
+    if (packet === null || typeof packet !== 'object' || Object.getPrototypeOf(packet) !== Object.prototype) {
+      this.#disable('shape_unavailable'); return;
+    }
+    const keys = Reflect.ownKeys(packet);
+    if (keys.some(key => !['url', 'name', 'newDocument', 'error'].includes(key))) {
+      this.#disable('shape_unavailable'); return;
+    }
+    const url = SameDocumentRetention.#data(packet, 'url'), name = SameDocumentRetention.#data(packet, 'name');
+    if (typeof url !== 'string' || url.length > 20000 || typeof name !== 'string' || name.length > 256) {
+      this.#disable('shape_unavailable'); return;
+    }
+    const error = Object.hasOwn(packet, 'error') ? SameDocumentRetention.#data(packet, 'error') : undefined;
+    const document = Object.hasOwn(packet, 'newDocument') ? SameDocumentRetention.#data(packet, 'newDocument') : undefined;
+    if (error !== undefined || (document !== undefined && (document === null || typeof document !== 'object'))) {
+      this.#disable('shape_unavailable'); return;
+    }
+    if (this.#disabled || this.#closed) return;
+    const token = { url, same: document === undefined, generation: this.#generation() };
+    this.#packet = token;
+    queueMicrotask(() => { if (this.#packet === token) this.#packet = undefined; }); // Expiry only, never permission.
+  }
+  retain(frame) {
+    try {
+      if (this.#observing || this.#consuming) { this.#disable('packet_unavailable'); return false; }
+      this.#consuming = true;
+      const packet = this.#packet; this.#packet = undefined;
+      if (this.#closed || this.#disabled) return false;
+      const reject = reason => { this.#safe.security_same_document_reason = reason; return false; };
+      if (this.#used) return reject('already_used');
+      if (!packet || frame !== this.#frame || frame.parentFrame() !== this.#main
+          || frame.page().mainFrame() !== this.#main) return reject('packet_unavailable');
+      if (!packet.same) return reject('new_document');
+      if (packet.url !== this.#source || frame.url() !== this.#source) return reject('url_changed');
+      if (packet.generation !== this.#boundGeneration || this.#generation() !== this.#boundGeneration) {
+        return reject('generation_changed');
+      }
+      if (!this.#documents.retentionReference(frame, this.#boundGeneration)) return reject('reference_unavailable');
+      if (this.#proof(frame, this.#main, this.#session) !== true || this.#disabled) return reject('scope_unavailable');
+      this.#used = true; this.#safe.security_same_document_retained = true;
+      this.#safe.security_same_document_reason = 'retained_once';
+      return true;
+    } catch { this.#disable('listener_failed'); return false; }
+    finally { this.#consuming = false; }
+  }
+  close() {
+    if (this.#closed) return;
+    this.#closed = true; this.#packet = undefined;
+    try { if (this.#listener) Reflect.apply(this.#remove, this.#emitter, ['navigated', this.#listener]); } catch { this.#disable('listener_failed'); }
+  }
+  evidence() { return { ...this.#safe }; }
+  toJSON() { throw new Error('Private native navigation adapter cannot be serialized.'); }
+}
+
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false, observeCurrencySettings = false, selectCard = false, cardRuntime = null, instrumentSecurity = false, retainSameDocument = false, runtimeModule = null) {
   const instrumentCaseDeadline = performance.now() + 40000;
+  if (typeof retainSameDocument !== 'boolean' || (retainSameDocument && !instrumentSecurity)) throw new Error('Invalid navigation profile.');
+  let navigationRuntime = null;
+  if (retainSameDocument) {
+    let timer;
+    try { navigationRuntime = await Promise.race([verifyNavigationRuntime(runtimeModule, playwright),
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), Math.max(1, instrumentCaseDeadline - performance.now())); })]);
+    } finally { clearTimeout(timer); }
+    if (performance.now() >= instrumentCaseDeadline) {
+      // No operation was admitted: close the fresh FD client synchronously, without a new teardown wait.
+      try { void Promise.resolve(riskJournal?.close()).catch(() => {}); } catch { /* Fixed startup failure below. */ }
+      throw new Error('Security case ended during runtime proof.');
+    }
+  }
   if (typeof instrumentSecurity !== 'boolean' || (instrumentSecurity
       && (!render || !observeConfig || !observeNormal || riskJournal === null || selectCard))) {
     throw new Error('Invalid fixed security profile.');
@@ -298,6 +442,18 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   const pendingLoader = instrumentSecurity ? new PendingLoader(risk, security) : null;
   let sourceGeneration = 0;
   const documents = instrumentSecurity ? new BoundDocumentObservations(caseDeadline, () => sourceGeneration) : null;
+  const sameDocument = retainSameDocument ? new SameDocumentRetention(navigationRuntime, (frame, main, session) => {
+    const facts = risk.evidence();
+    return !shuttingDown && !normalAdmissionClosed && sourceGeneration === 0
+      && frame === boundFrame && main === mainPage.mainFrame() && main.isDetached() === false
+      && frame.isDetached() === false && policy.normalSourceMatches(main.url(), true)
+      && policy.normalSourceMatches(frame.url()) && policy.riskSessionMatches(session)
+      && policy.normalWindowRemaining() > 2500
+      && security.firstStop() === 'not_observed' && security.admissionRemaining() > 0
+      && security.normalWindowRemaining() > 0 && performance.now() < caseDeadline
+      && facts.risk_journal_closed === false && facts.risk_journal_poisoned === false
+      && facts.risk_telemetry_poisoned === false;
+  }, documents, () => sourceGeneration) : null;
   let instrumentMainDocumentSeen = false;
   const securityClosed = () => shuttingDown || (security !== null && security.admissionRemaining() <= 0);
   const watchdog = setTimeout(() => {
@@ -758,6 +914,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
               policy.markRenderFrameDelivered();
               boundFrame = request.frame();
               documents?.bind(boundFrame, renderFrameSource, sourceGeneration);
+              sameDocument?.bind(boundFrame, mainPage.mainFrame(), renderFrameSource);
             }
             if (response.status() === 200 && request.resourceType() === 'document'
                 && request.url() === initial && request.frame() === mainPage.mainFrame()) policy.startParentCountryWindow();
@@ -799,8 +956,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         if (frame === page.mainFrame() && ++mainNavigations > 1) {
           sourceGeneration++; security.close('main_navigated'); pendingLoader.close();
         } else if (frame === boundFrame && (frameNavigations.get(frame) ?? 0) > 0) {
-          sourceGeneration++; security.close('bound_navigated'); pendingLoader.close();
-          stoppedBound = true;
+          if (!sameDocument?.retain(frame)) {
+            sourceGeneration++; security.close('bound_navigated'); pendingLoader.close();
+            stoppedBound = true;
+          }
         }
         if (frame === page.mainFrame() || frame === boundFrame) {
           frameNavigations.set(frame, (frameNavigations.get(frame) ?? 0) + 1);
@@ -825,6 +984,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       await new Promise(resolve => setTimeout(resolve, delay));
     }
     cardChoice.capture(); // Fixed snapshot: cancel actions without waiting for a new field state.
+    sameDocument?.close(); // The exception ends at this original capture, before field inspection.
     if (observeConfig) {
       readiness = { card_readiness_observed: false };
       if (boundFrame) {
@@ -912,6 +1072,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     shuttingDown = true;
     security?.close(); pendingLoader?.close();
     documents?.close();
+    sameDocument?.close();
     policy.closeNormalWindow();
     clearTimeout(normalWindowTimer);
     clearTimeout(watchdog);
@@ -943,8 +1104,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
     ...risk.evidence(), ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}),
     ...(documents?.evidence() ?? {}),
+    ...(sameDocument?.evidence() ?? {}),
   });
-  return { ...result, ...counts, ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}), ...(documents?.evidence() ?? {}), ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}), ...(sameDocument?.evidence() ?? {}), ...(documents?.evidence() ?? {}), ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
@@ -960,7 +1122,8 @@ async function main(instrumentSecurity = false) {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)
-      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url', 'expected,observeConfig,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,render,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url'].includes(Object.keys(input).filter(key => key !== 'selectCard').sort().join(','))
+      || !['expected,url', 'expected,render,url', 'expected,observeConfig,render,url', 'expected,observeConfig,observeNormal,render,url', 'expected,observeConfig,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,render,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeParentCountry,render,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeRisk,render,riskJournal,url', 'expected,observeConfig,observeCurrencySettings,observeNormal,observeParentCountry,observeRisk,render,riskJournal,url'].includes(Object.keys(input).filter(key => key !== 'selectCard' && key !== 'retainSameDocument').sort().join(','))
+      || (Object.hasOwn(input, 'retainSameDocument') && (!instrumentSecurity || input.retainSameDocument !== true))
       || (Object.hasOwn(input, 'selectCard') && (input.selectCard !== true || input.observeNormal !== true))
       || (Object.hasOwn(input, 'observeRisk') && input.observeRisk !== true)
       || (input.observeRisk === true && input.observeNormal !== true)
@@ -982,7 +1145,7 @@ async function main(instrumentSecurity = false) {
   const cardRuntime = input.selectCard === true ? await verifyCardRuntime(process.argv[2]) : null;
   startupPhase = 'browser_startup';
   const journal = input.observeRisk === true ? RiskJournalClient.fromDescriptors(input.riskJournal) : null;
-  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal, null, input.observeParentCountry ?? false, input.observeCurrencySettings ?? false, input.selectCard ?? false, cardRuntime, instrumentSecurity);
+  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal, null, input.observeParentCountry ?? false, input.observeCurrencySettings ?? false, input.selectCard ?? false, cardRuntime, instrumentSecurity, input.retainSameDocument ?? false, process.argv[2]);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
@@ -994,7 +1157,7 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { inspect, BoundDocumentObservations, instrumentMain: async () => {
+module.exports = { inspect, BoundDocumentObservations, SameDocumentRetention, verifyNavigationRuntime, instrumentMain: async () => {
   try { await main(true); } catch (error) {
     const safe = error instanceof PreflightFailure ? error.evidence() : { result: 'fail',
       reason: 'browser_preflight_failed', card_entry_enabled: false, browser_failure_phase: startupPhase };

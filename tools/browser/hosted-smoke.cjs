@@ -319,7 +319,8 @@ async function smoke(playwright, instrumentOnly = false) {
       }
       return { security_shared_runner_verified: true, security_normal_window_unchanged: true,
         security_financial_permission: false, security_external_connections: 0,
-        ...await instrumentSecuritySmoke(playwright), ...await boundDocumentSmoke(playwright) };
+        ...await instrumentSecuritySmoke(playwright), ...await boundDocumentSmoke(playwright),
+        ...await sameDocumentRetentionSmoke(playwright) };
     }
     const result = await inspect(origin + '/page?s=SYNTHETIC_SECRET', playwright, origin, async (page, context) => {
       if (await page.evaluate(() => window.fixtureLoaded) !== true) throw new Error('Local smoke failed.');
@@ -942,7 +943,7 @@ async function instrumentSecuritySmoke(playwright) {
 // Fixture-only extraction keeps the changed production wiring executable without replacing its calls.
 function boundDocumentWorkerFixture(page, deadline, options = {}) {
   const fs = require('node:fs');
-  const { BoundDocumentObservations } = require('./hosted-browser.cjs');
+  const { BoundDocumentObservations, SameDocumentRetention } = require('./hosted-browser.cjs');
   const { InstrumentSecurityScope, PendingLoader } = require('./hosted-pending-loader.cjs');
   const source = options.source ?? fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
   const section = (start, end) => {
@@ -956,15 +957,16 @@ function boundDocumentWorkerFixture(page, deadline, options = {}) {
   const events = section('      let mainNavigations = 0;', '    page.setDefaultTimeout').replace(/\n    \}\n$/u, '');
   const teardown = section('    cardChoice.capture();\n    if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads()',
     '  if (failed || result === undefined)').replace(/\n  \}\n$/u, '');
+  const capture = section('    cardChoice.capture(); // Fixed snapshot', '    if (observeConfig)');
   const outputs = section('  if (failed || result === undefined)', '\n}\n\nasync function main');
   const trace = options.trace ?? [], clock = options.clock ?? (() => performance.now());
   class Observer extends BoundDocumentObservations {
     constructor(originalDeadline, generation) { super(originalDeadline, generation, clock); }
   }
   const factory = new Function('page', 'caseDeadline', 'BoundDocumentObservations', 'InstrumentSecurityScope',
-    'PendingLoader', 'trace', 'context', `
-    const instrumentSecurity = true, observeNormal = true, observeConfig = true;
-    let boundFrame, shuttingDown = false, failed = false, firstFailure, normalAdmissionClosed = false;
+    'PendingLoader', 'trace', 'context', 'SameDocumentRetention', 'retainSameDocument', 'navigationRuntime', 'initial', 'journalFacts', 'normalRemaining', `
+    const instrumentSecurity = true, observeNormal = true, observeConfig = true; const mainPage = page;
+    let boundFrame, shuttingDown = false, failed = false, firstFailure, normalAdmissionClosed = false, fixtureBoundSource;
     let browserContextCloseStarted = false, browserContextClosed = false;
     const result = { result: 'blocked', reason: 'financial_sandbox_boundary_unverified', card_entry_enabled: false };
     const counts = {}, payer = {}, normal = {}, method = {}, readiness = {}, readinessAttachment = {};
@@ -978,11 +980,13 @@ function boundDocumentWorkerFixture(page, deadline, options = {}) {
     const cardChoice = { capture: () => trace.push('capture_fields'), evidence: empty };
     const policy = { markRenderFrameDelivered: () => trace.push('render_delivered'), candidateOrigin: () => null,
       closeNormalWindow: () => trace.push('normal_close'), bindingEvidence: empty,
-      renderEvidence: empty, methodEvidence: empty, normalEvidence: empty };
+      renderEvidence: empty, methodEvidence: empty, normalEvidence: empty, normalWindowRemaining: () => normalRemaining, normalSourceMatches: (value, main) => !retainSameDocument
+        || value === (main ? initial : fixtureBoundSource),
+      riskSessionMatches: session => session === 'SYNTHETIC_SESSION' };
     const security = new InstrumentSecurityScope(policy, caseDeadline);
     const originalClose = security.close.bind(security);
     security.close = reason => { trace.push('security_close:' + (reason ?? 'teardown')); originalClose(reason); };
-    const risk = { close: async () => true, evidence: empty };
+    const risk = { close: async () => true, evidence: () => ({ ...journalFacts }) };
     const pendingLoader = new PendingLoader(risk, security), originalPendingClose = pendingLoader.close.bind(pendingLoader);
     pendingLoader.close = () => { trace.push('pending_close'); originalPendingClose(); };
     const proxy = { counts: { rejected: 0, connected: 0, externalConnected: 0 }, close: async () => {} };
@@ -993,22 +997,25 @@ function boundDocumentWorkerFixture(page, deadline, options = {}) {
     const install = () => { if (instrumentSecurity) { ${events} } };
     install();
     return {
-      bind(request, renderFrameSource) { const renderFrame = true; ${binding} },
+      bind(request, renderFrameSource) { const renderFrame = true; fixtureBoundSource = renderFrameSource; ${binding} },
       async finish() { ${teardown} },
       output(forceFailure = false) { failed = forceFailure; try { ${outputs} }
         catch (error) { if (error instanceof PreflightFailure) return error.evidence(); throw error; } },
-      generation: () => sourceGeneration,
+      generation: () => sourceGeneration, snapshot() { ${capture} },
     };`);
-  return factory(page, deadline, Observer, InstrumentSecurityScope, PendingLoader, trace, options.context ?? null);
+  return factory(page, deadline, Observer, InstrumentSecurityScope, PendingLoader, trace, options.context ?? null,
+    options.retentionClass ?? SameDocumentRetention, options.retainSameDocument ?? false, options.navigationRuntime ?? null,
+    options.initial ?? null, options.journalFacts ?? { risk_journal_closed: false,
+      risk_journal_poisoned: false, risk_telemetry_poisoned: false }, options.normalRemaining ?? 8000);
 }
 
-function sanitizeBoundDocumentFixture(evidence) {
+function sanitizeBoundDocumentFixture(evidence, retain = false) {
   const { spawnSync } = require('node:child_process');
   const script = 'require $argv[1]; $data=json_decode(stream_get_contents(STDIN),true,512,JSON_THROW_ON_ERROR);'
     + '$safe=\\Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\HostedBrowser::sanitize('
-    + '$data,true,true,true,true,mode:\\Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\HostedSecurityMode::InstrumentSecurity);'
+    + '$data,true,true,true,true,mode:\\Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\HostedSecurityMode::InstrumentSecurity,retainSameDocument:(\"true\"===($argv[2]??null)));'
     + 'echo json_encode($safe,JSON_THROW_ON_ERROR);';
-  const child = spawnSync('php', ['-r', script, path.join(__dirname, '../../vendor/autoload.php')], {
+  const child = spawnSync('php', ['-r', script, path.join(__dirname, '../../vendor/autoload.php'), String(retain)], {
     input: JSON.stringify(evidence), encoding: 'utf8', timeout: 5000,
     env: { PATH: process.env.PATH ?? '', LANG: 'C' },
   });
@@ -1114,6 +1121,127 @@ async function boundDocumentSmoke(playwright) {
   }
 }
 
+async function sameDocumentRetentionSmoke(playwright) {
+  const { verifyNavigationRuntime } = require('./hosted-browser.cjs');
+  const runtimeEntry = Object.values(require.cache).find(entry => entry.exports === playwright
+    && path.basename(entry.filename) === 'index.js')?.filename;
+  const navigationRuntime = await verifyNavigationRuntime(runtimeEntry, playwright);
+  if (!navigationRuntime) throw new Error('Pinned native navigation runtime unavailable.');
+  const proxy = await require('./hosted-policy.cjs').egressProxy({ allowsAuthority: () => false, allowsHttp: () => false });
+  let browser, context, fixture;
+  let forbidden = 0, ws = 0, oopifVerified = false, phase = 'browser_launch';
+  const origin = 'http://127.0.0.1:9999', source = origin + '/document#/elements/dropin?options='
+    + encodeURIComponent(JSON.stringify({ sessionId: 'SYNTHETIC_SESSION' }));
+  const wait = async predicate => {
+    const until = performance.now() + 2000;
+    while (!predicate()) {
+      if (performance.now() >= until) throw new Error('Pinned native navigation observation unavailable.');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  };
+  try {
+    browser = await playwright.chromium.launch({ channel: 'chrome', headless: true,
+      proxy: { server: proxy.server, bypass: '' }, args: ['--proxy-bypass-list=<-loopback>', '--disable-quic', '--site-per-process'],
+      env: { PATH: process.env.PATH ?? '', LANG: 'C' } });
+    for (const kind of ['history', 'reload', 'hash', 'startup', 'detach', 'main_reload', 'document_open', 'process_swap', 'back_navigation', 'runtime_withheld', 'listener_fault', 'snapshot']) {
+      phase = kind + '_context';
+      context = await browser.newContext({ ignoreHTTPSErrors: false, serviceWorkers: 'block' });
+      let bound;
+      await context.route('**/*', async route => {
+        const request = route.request(), url = new URL(request.url());
+        if (request.method() !== 'GET' || request.resourceType() !== 'document'
+            || (url.origin !== origin && !(kind === 'process_swap' && url.origin === 'http://localhost:9999'))
+            || !['/page', '/document'].includes(url.pathname)) {
+          forbidden++; await route.abort('blockedbyclient'); return;
+        }
+        if (url.pathname === '/page') {
+          await route.fulfill({ contentType: 'text/html', body: '<!doctype html><iframe src="' + source + '"></iframe>' });
+          return;
+        }
+        if (!bound) { bound = request.frame(); fixture.bind(request, source); }
+        await route.fulfill({ contentType: 'text/html', body: '<!doctype html><p>Synthetic native document</p>'
+          + (kind === 'startup' ? '<script>history.replaceState({idx:0},"\");</script>' : '') });
+      });
+      await context.routeWebSocket(/.*/, socket => { ws++; return socket.close(); });
+      const page = await context.newPage();
+      fixture = boundDocumentWorkerFixture(page, performance.now() + 40000,
+        { context, retainSameDocument: true, navigationRuntime: kind === 'runtime_withheld' ? null : navigationRuntime,
+          initial: origin + '/page' });
+      phase = kind + '_navigation';
+      await page.goto(origin + '/page', { waitUntil: 'load', timeout: 5000 });
+      phase = kind + '_action';
+      if (kind === 'startup') {
+        await wait(() => fixture.generation() === 1);
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 75)); // Synthetic page settling only, not a production delay.
+        if (kind === 'history') {
+          await bound.evaluate(() => history.replaceState({idx:1}, ''));
+          await wait(() => fixture.output().security_same_document_retained === true);
+          if (fixture.generation() !== 0) throw new Error('Retained native event closed the source.');
+          // A second identical repeat must take the unmodified close, with no second grant.
+          await bound.evaluate(() => history.replaceState({idx:2}, ''));
+        } else if (kind === 'snapshot') {
+          fixture.snapshot();
+          await bound.evaluate(() => history.replaceState({idx:1}, ''));
+        } else if (kind === 'runtime_withheld') {
+          await bound.evaluate(() => history.replaceState({idx:1}, ''));
+        } else if (kind === 'listener_fault') {
+          const packet = new Proxy({ url: source, name: '' }, {
+            getOwnPropertyDescriptor() { throw new Error('Fixed injected own-listener fault.'); },
+          });
+          bound._channel.emit('navigated', packet); // Negative host fixture, after real original acquisition.
+        } else if (kind === 'process_swap') {
+          await bound.goto('http://localhost:9999/document', { waitUntil: 'load' });
+          try { const session = await context.newCDPSession(bound); await session.detach(); oopifVerified = true; }
+          catch { /* Unsupported mapping grants nothing; the original scope must already be closed. */ }
+        } else if (kind === 'back_navigation') {
+          await page.goto(origin + '/page?second=1', { waitUntil: 'load' });
+          await page.goBack({ waitUntil: 'load' });
+        } else if (kind === 'reload') {
+          await Promise.all([bound.waitForNavigation({ waitUntil: 'load' }), bound.evaluate(() => location.reload())]);
+        } else if (kind === 'hash') await bound.evaluate(() => { location.hash = 'changed'; });
+        else if (kind === 'detach') await page.evaluate(() => document.querySelector('iframe').remove());
+        else if (kind === 'main_reload') await page.reload({ waitUntil: 'load' });
+        else {
+          await bound.evaluate(() => { document.open(); document.write('<p>same native Document</p>'); document.close(); });
+          await bound.evaluate(() => history.replaceState({idx:1}, ''));
+          await wait(() => fixture.output().security_same_document_retained === true);
+          await bound.evaluate(() => history.replaceState({idx:2}, ''));
+        }
+        await wait(() => fixture.generation() > 0);
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+      phase = kind + '_finish';
+      await fixture.finish(); context = null;
+      phase = kind + '_projection';
+      for (const value of [fixture.output(), fixture.output(true)]) {
+        const facts = sanitizeBoundDocumentFixture(value, true);
+        const retained = ['history', 'document_open'].includes(kind);
+        if (facts.security_same_document_retained !== retained || facts.financial_permission !== false
+            || /SYNTHETIC|127\.0\.0\.1/u.test(JSON.stringify(facts))) {
+          throw new Error('Native retention or privacy boundary changed.');
+        }
+        if (kind === 'reload' && facts.security_same_document_reason !== 'new_document') {
+          throw new Error('Identical-URL reload was not classified as new Document.');
+        }
+      }
+    }
+    if (forbidden || ws || proxy.counts.externalConnected) throw new Error('Native fixture crossed its boundary.');
+    return { security_same_document_native_once_verified: true, security_native_new_document_withheld: true,
+      security_native_initial_order_verified: true, security_native_main_detach_withheld: true,
+      security_native_cross_origin_back_withheld: true, security_native_oopif_fixture_verified: oopifVerified, security_native_listener_failure_public_guard_verified: true,
+      security_native_runtime_withheld: true, security_native_snapshot_withheld: true,
+      security_native_document_open_identity_limit_observed: true, security_native_php_projection_verified: true,
+      security_native_fixture_forbidden_hits: 0, security_native_fixture_websocket_hits: 0, security_native_fixture_external_connections: 0 };
+  } catch {
+    const failure = new Error('Fixed local native fixture failure.');
+    failure.nativeFixturePhase = phase;
+    failure.nativeFixtureReason = fixture?.output()?.security_same_document_reason ?? 'not_observed'; throw failure;
+  } finally {
+    if (context) await context.close(); if (browser) await browser.close(); await proxy.close();
+  }
+}
+
 if (require.main === module) {
   (async () => {
     if (process.argv.length !== 3 || !path.isAbsolute(process.argv[2])) throw new Error('Local smoke failed.');
@@ -1125,4 +1253,4 @@ if (require.main === module) {
   });
 }
 module.exports = { smoke, riskSmoke, instrumentSecuritySmoke, boundDocumentSmoke,
-  boundDocumentWorkerFixture, sanitizeBoundDocumentFixture };
+  boundDocumentWorkerFixture, sanitizeBoundDocumentFixture, sameDocumentRetentionSmoke };
