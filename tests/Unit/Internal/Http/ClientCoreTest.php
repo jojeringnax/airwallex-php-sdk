@@ -173,11 +173,66 @@ final class ClientCoreTest extends HttpTestCase
         self::assertSame('Bearer test-token-only', $http->requests[4]->getHeaderLine('Authorization'));
     }
 
+    #[DataProvider('mutationFailures')]
+    public function testDefaultClientDoesNotRetryReadFailures(int $status): void
+    {
+        $http = $this->scenario([[201, self::LOGIN], [$status, '{}']]);
+        $client = new Client(
+            environment: Environment::Sandbox,
+            credentials: new Credentials('test_client_id', 'test_api_key'),
+            httpClient: $http->client,
+            requestFactory: $http->requestFactory,
+            streamFactory: $http->streamFactory,
+            clock: static fn (): int => 100,
+        );
+        try {
+            $this->send($client);
+            self::fail('Expected the first read failure.');
+        } catch (ApiException $error) {
+            self::assertSame($status, $error->httpStatus());
+            self::assertCount(2, $http->requests);
+        }
+    }
+
+    public function testDefaultPolicyDoesNotWaitOrRetryTransportFailure(): void
+    {
+        $failure = new class ('SENSITIVE transport') extends RuntimeException implements ClientExceptionInterface {
+        };
+        $http = $this->scenario([[201, self::LOGIN], $failure]);
+        $policy = new RetryPolicy(
+            sleeper: static fn (): never => self::fail('Default policy must not sleep.'),
+            randomInt: static fn (): never => self::fail('Default policy must not calculate a retry delay.'),
+        );
+        try {
+            $this->send($this->client($http, retryPolicy: $policy));
+            self::fail('Expected the first transport failure.');
+        } catch (TransportException) {
+            self::assertCount(2, $http->requests);
+        }
+    }
+
+    public function testDefaultReadRejectionInvalidatesTokenForNextDeliberateOperation(): void
+    {
+        $http = $this->scenario([[201, self::LOGIN], [401, '{}'], [201, self::LOGIN], [200, '{}']]);
+        $client = $this->client($http, retryPolicy: new RetryPolicy());
+        try {
+            $this->send($client);
+            self::fail('Expected the rejected read without replay.');
+        } catch (ApiException $error) {
+            self::assertSame(401, $error->httpStatus());
+            self::assertCount(2, $http->requests);
+        }
+        $this->send($client);
+        self::assertCount(4, $http->requests);
+        self::assertStringEndsWith('/authentication/login', (string) $http->requests[2]->getUri());
+        self::assertSame('GET', $http->requests[3]->getMethod());
+    }
+
     public function testReadRetriesAreBoundedWithDeterministicJitter(): void
     {
         $delays = [];
         $http = $this->scenario([[201, self::LOGIN], [429, '{}'], [503, '{}'], [200, '{"ok":true}']]);
-        $policy = new RetryPolicy(sleeper: static function (int $delay) use (&$delays): void {
+        $policy = new RetryPolicy(maxAttempts: 3, sleeper: static function (int $delay) use (&$delays): void {
             $delays[] = $delay;
         }, randomInt: static fn (int $min, int $max): int => $max);
         $result = $this->send($this->client($http, retryPolicy: $policy));
@@ -195,7 +250,7 @@ final class ClientCoreTest extends HttpTestCase
         $http = $this->scenario([[201, self::LOGIN], [401, '{}'], [201, self::LOGIN], [401, '{}']]);
         $this->expectException(ApiException::class);
         try {
-            $this->send($this->client($http, retryPolicy: new RetryPolicy()));
+            $this->send($this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3)));
         } finally {
             self::assertCount(4, $http->requests);
         }
@@ -511,7 +566,7 @@ final class ClientCoreTest extends HttpTestCase
     {
         $http = $this->scenario([[201, self::LOGIN], [$status, '{}']]);
         try {
-            $this->send($this->client($http, retryPolicy: new RetryPolicy()));
+            $this->send($this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3)));
             self::fail('Expected API failure.');
         } catch (ApiException $error) {
             self::assertSame($status, $error->httpStatus());
@@ -519,7 +574,7 @@ final class ClientCoreTest extends HttpTestCase
         }
         $login = $this->scenario([[$status, '{}']]);
         try {
-            $this->send($this->client($login, retryPolicy: new RetryPolicy()));
+            $this->send($this->client($login, retryPolicy: new RetryPolicy(maxAttempts: 3)));
             self::fail('Expected login failure.');
         } catch (ApiException $error) {
             self::assertSame($status, $error->httpStatus());
@@ -553,7 +608,7 @@ final class ClientCoreTest extends HttpTestCase
     public function testMutationRejectionInvalidatesTokenForNextDeliberateOperation(): void
     {
         $http = $this->scenario([[201, self::LOGIN], [401, '{}'], [201, self::LOGIN], [200, '{}']]);
-        $client = $this->client($http, retryPolicy: new RetryPolicy());
+        $client = $this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3));
         try {
             $this->send(
                 $client,
@@ -655,7 +710,7 @@ final class ClientCoreTest extends HttpTestCase
         $cache->method('delete')->willReturn(false);
         $http = $this->scenario([[401, '{}']]);
         try {
-            $this->send($this->client($http, cache: $cache, retryPolicy: new RetryPolicy()));
+            $this->send($this->client($http, cache: $cache, retryPolicy: new RetryPolicy(maxAttempts: 3)));
             self::fail('Failed cache invalidation was ignored.');
         } catch (ConfigurationException $error) {
             self::assertCount(1, $http->requests);
@@ -706,9 +761,15 @@ final class ClientCoreTest extends HttpTestCase
     {
         foreach (
             [
-            new RetryPolicy(randomInt: static fn (): int => -1),
-            new RetryPolicy(randomInt: static fn (): never => throw new RuntimeException('SENSITIVE random state')),
-            new RetryPolicy(sleeper: static fn (): never => throw new RuntimeException('SENSITIVE sleeper state')),
+            new RetryPolicy(maxAttempts: 3, randomInt: static fn (): int => -1),
+            new RetryPolicy(
+                maxAttempts: 3,
+                randomInt: static fn (): never => throw new RuntimeException('SENSITIVE random state'),
+            ),
+            new RetryPolicy(
+                maxAttempts: 3,
+                sleeper: static fn (): never => throw new RuntimeException('SENSITIVE sleeper state'),
+            ),
             ] as $policy
         ) {
             $http = $this->scenario([[201, self::LOGIN], [429, '{}']]);

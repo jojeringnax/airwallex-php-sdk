@@ -35,7 +35,7 @@ Billing item and line-item read capabilities are accepted. Their concrete signat
 
 The parent resource ID is explicit in every subordinate call. The coordinator selected these method shapes to preserve native routes without introducing another resource hierarchy; they are not described as human-approved. The review issue records compatibility implications and reversal options. For implemented Billing operations, schema provenance and remaining provider evidence, see [Billing resources](billing-resources.md).
 
-For implemented environment, token, transport, retry and diagnostic behavior, see [client configuration](client-configuration.md). Its optional clock and retry configuration remain a delegated provisional decision under [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60).
+For implemented environment, token, transport, retry and diagnostic behavior, see [client configuration](client-configuration.md), which owns the accepted optional clock and opt-in read-retry behavior for [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60).
 
 ## Workflow references
 
