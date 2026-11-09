@@ -197,6 +197,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await context.route('**/*', route => track(async () => {
       if (shuttingDown) throw new Error('Browser preflight is shutting down.');
       const request = route.request();
+      const denial = policy.readDenial(request.url(), request.method(), request.resourceType());
       if (instrumentSecurity && request.resourceType() === 'document') {
         let frame;
         try { frame = request.frame(); } catch { /* Unavailable navigation is withheld. */ }
@@ -221,9 +222,11 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         policy.noteCurrencyMainDocument(request.url());
       }
       if (normalAdmissionClosed && !instrumentSecurity) {
+        denial?.worker('admission_closed');
         counts.blocked_requests++;
         policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
         await route.abort('blockedbyclient');
+        denial?.commit();
         return;
       }
       if (await parentCountry.handle(route, mainPage?.mainFrame(), () => shuttingDown, () => normalAdmissionClosed)) return;
@@ -233,7 +236,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       if (await risk.handle(route, context, mainPage?.mainFrame(), boundFrame,
         () => shuttingDown, instrumentSecurity ? securityClosed : () => normalAdmissionClosed)) return;
       if (instrumentSecurity && securityClosed()) {
-        counts.blocked_requests++; await route.abort('blockedbyclient'); return;
+        denial?.worker('admission_closed');
+        counts.blocked_requests++; await route.abort('blockedbyclient'); denial?.commit(); return;
       }
       // Script admission and integrity share one immutable, non-null expected hash.
       const script = request.resourceType() === 'script';
@@ -286,22 +290,35 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       let methodHeaders = null;
       if (!normalAdmissionClosed && observeConfig && boundFrame && ['xhr', 'fetch'].includes(request.resourceType())) {
         let fromBoundFrame = false;
-        try { fromBoundFrame = request.frame() === boundFrame; } catch { /* Deny detached or unavailable frames. */ }
+        try { fromBoundFrame = request.frame() === boundFrame; }
+        catch { denial?.fail('method_config', 'initiator_unavailable'); }
         if (fromBoundFrame) methodHeaders = policy.claimMethodConfig(request.url(), request.method(),
-          request.resourceType(), request.headers(), request.postData());
+          request.resourceType(), request.headers(), request.postData(), denial);
+        else denial?.fail('method_config', 'initiator_not_bound');
+      } else if (denial?.roleIs('method_config')) {
+        if (normalAdmissionClosed) denial.worker('admission_closed');
+        else if (observeConfig && !boundFrame) denial.worker('bound_frame_unavailable');
       }
       let normalRead = null;
       if (!normalAdmissionClosed && observeNormal && mainPage && ['xhr', 'fetch'].includes(request.resourceType())) {
         let fromMain = false, fromBound = false;
         try {
           const frame = request.frame();
-          if (frame.isDetached() === false) {
+          const detached = frame.isDetached();
+          if (detached === false) {
             fromMain = frame === mainPage.mainFrame() && policy.normalSourceMatches(frame.url(), true);
-            fromBound = frame === boundFrame && policy.normalSourceMatches(frame.url());
-          }
-        } catch { /* No unavailable or replacement document inherits a private read. */ }
+            const isBound = frame === boundFrame;
+            fromBound = isBound && policy.normalSourceMatches(frame.url());
+            if (!isBound) denial?.caller('initiator_not_bound');
+            else if (!fromBound) denial?.caller('initiator_document_mismatch');
+          } else denial?.caller(detached === true ? 'initiator_detached' : 'initiator_unavailable');
+        } catch { denial?.caller('initiator_unavailable'); }
         normalRead = policy.claimNormalRead(request.url(), request.method(), request.resourceType(),
-          request.headers(), request.postData(), fromMain, fromBound);
+          request.headers(), request.postData(), fromMain, fromBound, denial);
+      } else if (denial && !denial.roleIs('method_config')) {
+        if (normalAdmissionClosed) denial.worker('admission_closed');
+        else if (!observeNormal) denial.worker('observation_disabled');
+        else if (!mainPage) denial.worker('initiator_unavailable');
       }
       if (normalRead !== null) {
         const { role, headers: outbound } = normalRead;
@@ -602,6 +619,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
         risk.noteDenied(request.url());
         await route.abort('blockedbyclient');
+        denial?.commit();
       }
     }));
     await context.routeWebSocket(/.*/, socket => {

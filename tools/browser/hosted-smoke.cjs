@@ -12,6 +12,7 @@ async function smoke(playwright, instrumentOnly = false) {
   let tamperController = false;
   let redirectController = false;
   let methodReply = 'matched';
+  let rejectMethodHeader = false;
   let normalStatus = 200;
   let normalStatusDelay = 0;
   let lateFields = false;
@@ -167,7 +168,7 @@ async function smoke(playwright, instrumentOnly = false) {
                 'x-cloud-trace-context': '0123456789abcdef0123456789abcdef' } }).catch(() => {});
             } else if (options.observeConfig) {
               const headers = { 'client-secret': options.client_secret, 'content-type': 'application/json',
-                'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout', 'awx-tracker': 'SYNTHETIC_TRACKER',
+                'x-api-version': '${rejectMethodHeader ? 'PRIVATE_WRONG_VERSION' : '2024-06-14'}', 'x-client-ip-source': 'awx-checkout', 'awx-tracker': 'SYNTHETIC_TRACKER',
                 'x-cloud-trace-context': '0123456789abcdef0123456789abcdef' };
               const target = '/api/v1/pa/config/payment_method_types?' + new URLSearchParams({ page_num: 0,
                 page_size: 200, active: true, transaction_currency: options.currency, __verification_methods: true });
@@ -456,6 +457,16 @@ async function smoke(playwright, instrumentOnly = false) {
         || Object.values(configured.denied_read_families).some(count => count !== 1)) {
       throw new Error('Local bound method-config/readiness boundary failed.');
     }
+    rejectMethodHeader = true;
+    const deniedMethodBefore = hits.method;
+    const locallyDeniedMethod = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1',
+      playwright, origin, null, expected, true, true);
+    rejectMethodHeader = false;
+    if (hits.method !== deniedMethodBefore || locallyDeniedMethod.method_config_get_attempted
+        || locallyDeniedMethod.read_denial_reasons?.method_config?.header_api_version !== 1
+        || JSON.stringify(locallyDeniedMethod).includes('PRIVATE_WRONG_VERSION') || hits.forbidden !== 0) {
+      throw new Error('Local closed method rejection diagnostics changed a request or exposed a value.');
+    }
     const detached = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&detach=1',
       playwright, origin, null, expected, true, true);
     if (detached.method_config_observation !== 'matched' || detached.method_config_http_status !== 200
@@ -581,7 +592,9 @@ async function smoke(playwright, instrumentOnly = false) {
         || !parentRead.parent_country_window_closed || parentRead.normal_country_sends !== 1
         || parentRead.normal_country_delivered !== 1 || hits.country !== parentBefore + 2
         || parentRead.parent_country_request_timeout_ms > 8000 || hits.forbidden !== 0
-        || parentRead.proxy_external_connections !== 0) throw new Error('Local distinct country slots failed.');
+        || parentRead.proxy_external_connections !== 0 || parentRead.read_denial_reasons?.country !== undefined) {
+      throw new Error('Local distinct country slots or non-attribution failed.');
+    }
     const deniedParentBefore = hits.country;
     const deniedParent = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1&parent=1',
       playwright, origin, async page => {
@@ -681,7 +694,7 @@ async function smoke(playwright, instrumentOnly = false) {
       payer_cookie_forwarding_blocked: true, bound_render_fixture_passed: true, mismatched_render_frame_blocked: true, fixed_render_diagnostics_verified: true,
       public_controller_verified: true, controller_cookie_suppressed: true, controller_redirect_blocked: true,
       altered_controller_blocked: true, production_preload_denied: true, method_config_verified: true,
-      method_config_cookie_suppressed: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
+      method_config_cookie_suppressed: true, read_denial_local_guard_verified: true, read_denial_parent_nonattribution_verified: true, method_config_redirect_blocked: true, structural_card_readiness_verified: true, detached_frame_unavailability_verified: true, normal_reads_verified: true, normal_cookie_isolation_verified: true,
       normal_poll_window_verified: true, normal_status_poison_verified: true, normal_failure_diagnostics_verified: true,
       normal_inflight_drain_verified: true, parent_country_pre_payer_verified: true,
       native_card_choice_verified: true, native_card_counts_verified: true,
