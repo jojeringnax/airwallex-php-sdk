@@ -133,6 +133,14 @@ final class WebhookSchema
         }
         $data = $envelope['data'] ?? null;
         $resource = is_array($data) ? ($data['object'] ?? null) : null;
+        $prefix = '/data/object';
+        if (
+            $family === 'billing_checkout' && is_array($data) && !array_is_list($data)
+            && !array_key_exists('object', $data)
+        ) {
+            $resource = $data;
+            $prefix = '/data';
+        }
         if (!is_array($resource) || !in_array($resource['status'] ?? null, self::STATUSES[$family], true)) {
             return [];
         }
@@ -152,6 +160,6 @@ final class WebhookSchema
             return [];
         }
 
-        return array_map(static fn (string $path): string => '/data/object' . $path, self::INTEGER_PATHS[$family]);
+        return array_map(static fn (string $path): string => $prefix . $path, self::INTEGER_PATHS[$family]);
     }
 }

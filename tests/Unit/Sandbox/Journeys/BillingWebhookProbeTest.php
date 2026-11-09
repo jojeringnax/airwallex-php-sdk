@@ -634,7 +634,7 @@ final class BillingWebhookProbeTest extends TestCase
         self::assertTrue($safe['sdk_cancelled_verified']);
     }
 
-    public function testDirectShapeStillCannotClaimGenericEnvelopeAgreementWithMatchingOwner(): void
+    public function testDirectShapeVerifiesScopedEnvelopeAgreementWithMatchingOwner(): void
     {
         file_put_contents(
             $this->directory . '/credentials',
@@ -654,10 +654,14 @@ final class BillingWebhookProbeTest extends TestCase
             };
         };
         $safe = $this->observe();
-        self::assertSame('pending', $safe['result']);
+        self::assertSame('pass', $safe['result']);
         self::assertTrue($safe['typed_owner_verified']);
         self::assertTrue($safe['version_pair_verified']);
-        self::assertFalse($safe['selected_envelope_pair_verified']);
+        self::assertTrue($safe['selected_envelope_pair_verified']);
+        self::assertTrue($safe['signed_resource_pair_observed']);
+        self::assertTrue($safe['sdk_cancelled_verified']);
+        self::assertFalse($safe['organization_manager_verified']);
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
     }
 
     public function testMalformedOptionalOrganizationReferenceStopsBeforeAuthentication(): void

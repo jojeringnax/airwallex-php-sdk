@@ -236,6 +236,145 @@ final class BillingWebhookEvidenceTest extends TestCase
         self::assertSame(1, $safe['unrecognized_or_foreign_count']);
         self::assertSame(0, $safe['matching_created_count']);
     }
+    /** @return iterable<string,array{bool,string}> */
+    public static function contractShapes(): iterable
+    {
+        foreach ([false, true] as $direct) {
+            foreach (
+                [
+                'valid', 'version', 'missing_version', 'time_type', 'owner', 'numeric_owner',
+                'other_owner', 'resource', 'numeric_resource', 'marker', 'state', 'ambiguous',
+                'duplicate_key', 'signature', 'cancelled_url',
+                ] as $fault
+            ) {
+                yield ($direct ? 'direct-' : 'generic-') . $fault => [$direct, $fault];
+            }
+        }
+    }
+
+    #[DataProvider('contractShapes')]
+    public function testVerifiedDirectAndGenericContractCountersRetainEveryAcceptanceGate(
+        bool $direct,
+        string $fault,
+    ): void {
+        $organization = $fault === 'numeric_owner' ? '123' : 'SYNTHETIC_PRIVATE_ORG';
+        $evidence = new BillingWebhookEvidence(
+            $this->store,
+            'SYNTHETIC_PRIVATE_SECRET',
+            hash('sha256', 'registration'),
+            hash('sha256', 'synthetic'),
+            hash('sha256', 'source'),
+            'SYNTHETIC_PRIVATE_ACCOUNT',
+            'SYNTHETIC_PRIVATE_COLLECTOR',
+            $this->projection,
+            WebhookDeliveryFixtureRuntime::NOW,
+            static fn (): int => WebhookDeliveryFixtureRuntime::NOW,
+            $organization,
+        );
+        $this->runtime->eventFilter = static function (array $event) use ($direct, $fault, $organization): array {
+            unset($event['account_id']);
+            $event['org_id'] = $organization;
+            self::assertIsArray($event['data']);
+            $resource = $event['data']['object'];
+            self::assertIsArray($resource);
+            if (($resource['status'] ?? null) === 'CANCELLED') {
+                unset($resource['url']);
+                if ($fault === 'cancelled_url') {
+                    $resource['url'] = 'SYNTHETIC_PRIVATE_STALE_CAPABILITY';
+                }
+            }
+            switch ($fault) {
+                case 'version':
+                    $event['version'] = '2099-01-01';
+                    break;
+                case 'missing_version':
+                    unset($event['version']);
+                    break;
+                case 'time_type':
+                    $event['created_at'] = 123;
+                    break;
+                case 'owner':
+                    $event['org_id'] = 'SYNTHETIC_PRIVATE_FOREIGN_ORG';
+                    break;
+                case 'numeric_owner':
+                    $event['org_id'] = 123;
+                    break;
+                case 'other_owner':
+                    $event['accountId'] = 'SYNTHETIC_PRIVATE_ACCOUNT';
+                    break;
+                case 'resource':
+                    $resource['id'] = 'SYNTHETIC_PRIVATE_FOREIGN_CHECKOUT';
+                    break;
+                case 'numeric_resource':
+                    $resource['id'] = 123;
+                    break;
+                case 'marker':
+                    $resource['metadata'] = ['sdk_validation_run' => 'SYNTHETIC_PRIVATE_FOREIGN_MARKER'];
+                    break;
+                case 'state':
+                    $resource['status'] = 'FUTURE';
+                    break;
+            }
+            $event['data'] = $direct ? $resource : ['object' => $resource];
+            if ($fault === 'ambiguous') {
+                if ($direct) {
+                    $event['data']['object'] = $resource;
+                } else {
+                    $event['data']['id'] = $resource['id'];
+                }
+            }
+            return $event;
+        };
+        if ($fault === 'duplicate_key') {
+            $this->runtime->bodyFilter = static fn (string $raw): string => str_replace(
+                '"version":"2026-08-21"',
+                '"version":"2026-08-21","versi\\u006fn":"2026-08-21"',
+                $raw
+            );
+        }
+        if ($fault === 'signature') {
+            $this->runtime->metadataFilter = self::invalidSignature(...);
+        }
+        // Delivery order does not authorize a state transition; each snapshot has its own status proof.
+        $this->capture(true);
+        $this->capture();
+        $before = [];
+        foreach (glob($this->store->folder() . '/capture-*') ?: [] as $file) {
+            $before[$file] = hash_file('sha256', $file);
+        }
+        $safe = $evidence->collect();
+        self::assertSame($fault === 'signature' ? 0 : 2, $safe['mac_verified_count']);
+        self::assertSame(
+            $fault === 'valid' || $fault === 'cancelled_url' ? 1 : 0,
+            $safe['contract_matching_created_count']
+        );
+        self::assertSame($fault === 'valid' ? 1 : 0, $safe['contract_matching_cancelled_count']);
+        self::assertSame(0, $safe['conflicting_event_count']);
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        foreach ($before as $file => $hash) {
+            self::assertSame($hash, hash_file('sha256', $file));
+        }
+        if ($fault === 'valid') {
+            self::assertTrue($safe['typed_owner_verified']);
+            self::assertIsArray($safe['events']);
+            self::assertCount(2, $safe['events']);
+            foreach ($safe['events'] as $event) {
+                self::assertIsArray($event);
+                self::assertSame($direct ? 'direct' : 'generic', $event['shape']);
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private static function invalidSignature(array $metadata): array
+    {
+        $metadata['signature'] = str_repeat('0', 64);
+        return $metadata;
+    }
+
     /** @return iterable<string,array{string|int,bool}> */
     public static function literalCreationTimes(): iterable
     {
