@@ -49,7 +49,7 @@ Permission labels come from the [API-key scope catalogue](https://www.airwallex.
 | --- | --- | --- | --- |
 | Billing Customers | Create, retrieve, list, update | [API](https://www.airwallex.com/docs/api/billing/billing_customers) | [Customers](https://www.airwallex.com/docs/billing/billing-components/customers) |
 | Products | Create, retrieve, list, update | [API](https://www.airwallex.com/docs/api/billing/products) | [Products](https://www.airwallex.com/docs/billing/billing-components/products) |
-| Prices | Create, retrieve, list, update; flat/per-unit recurring prices | [API](https://www.airwallex.com/docs/api/billing/prices) | [Prices](https://www.airwallex.com/docs/billing/billing-components/prices) |
+| Prices | Create, retrieve, list, update; nonmetered flat/per-unit/volume/graduated prices | [API](https://www.airwallex.com/docs/api/billing/prices) | [Prices](https://www.airwallex.com/docs/billing/billing-components/prices) |
 | Payment Sources | Create, retrieve, list | [API](https://www.airwallex.com/docs/api/billing/payment_sources) | [Payment sources](https://www.airwallex.com/docs/billing/billing-components/payment-sources) |
 | Billing Checkouts | Create, retrieve, update, cancel; PAYMENT, SUBSCRIPTION, SETUP | [API](https://www.airwallex.com/docs/api/billing/billing_checkouts) | [Hosted checkout](https://www.airwallex.com/docs/billing/billing-components/checkout/hosted-billing-checkout) |
 | Subscriptions | Create, retrieve, list, item reads, update, cancel | [API](https://www.airwallex.com/docs/api/billing/subscriptions) | [Subscriptions via API](https://www.airwallex.com/docs/billing/subscriptions/subscriptions-via-api) |
