@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Jojeringnax\Airwallex\Tests\Unit\Sandbox\Journeys;
 
+use Jojeringnax\Airwallex\Tests\Support\HistoricalAlipayTestCase;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliationCommand;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
 use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
-final class AlipayConsentReconciliationCommandTest extends TestCase
+#[RunTestsInSeparateProcesses]
+#[PreserveGlobalState(false)]
+final class AlipayConsentReconciliationCommandTest extends HistoricalAlipayTestCase
 {
     /** @var list<string> */
     private array $bases = [];
@@ -159,8 +163,8 @@ final class AlipayConsentReconciliationCommandTest extends TestCase
     ): void {
         $f = AlipayConsentReconciliationTest::fixture();
         $this->bases[] = $f['base'];
-        $tool = dirname(__DIR__, 4) . '/tools/alipay-consent-reconciliation.php';
-        $support = dirname(__DIR__, 3) . '/Support/Sandbox/Journeys/AlipayConsentReconciliation.php';
+        $tool = self::sdkRoot() . '/tools/alipay-consent-reconciliation.php';
+        $support = self::sdkRoot() . '/tests/Support/Sandbox/Journeys/AlipayConsentReconciliation.php';
         $supportBytes = file_get_contents($support);
         self::assertIsString($supportBytes);
         $toolBytes = file_get_contents($tool);
@@ -261,7 +265,7 @@ final class AlipayConsentReconciliationCommandTest extends TestCase
     #[DataProvider('cliNegatives')]
     public function testRealCliAlwaysFailsClosedAndKeepsRawStderrEmpty(array $args, bool $disabled): void
     {
-        $tool = dirname(__DIR__, 4) . '/tools/alipay-consent-reconciliation.php';
+        $tool = self::sdkRoot() . '/tools/alipay-consent-reconciliation.php';
         $process = proc_open(
             [PHP_BINARY, ...($disabled ? ['-d', 'register_argc_argv=0'] : []), $tool, ...$args],
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],

@@ -7,14 +7,14 @@ namespace Jojeringnax\Airwallex;
 use Closure;
 use Jojeringnax\Airwallex\Exception\ConfigurationException;
 
-/** Read retries only. Public configuration is provisional; see docs/client-configuration.md. */
+/** Opt-in read retries; see docs/client-configuration.md. */
 final readonly class RetryPolicy
 {
     private Closure $sleeper;
     private Closure $randomInt;
 
     public function __construct(
-        public int $maxAttempts = 3,
+        public int $maxAttempts = 1,
         public int $baseDelayMilliseconds = 1000,
         public int $maxDelayMilliseconds = 16000,
         ?Closure $sleeper = null,
