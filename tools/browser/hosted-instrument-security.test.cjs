@@ -36,7 +36,7 @@ test('new profile has independent immutable 40/30/38/15 bounds and permanent clo
   f.clock(27000); assert.equal(f.scope.normalWindowRemaining(), 0);
   f.scope.close(); f.clock(0); assert.equal(f.scope.admissionRemaining(), 0);
   assert.deepEqual(f.scope.evidence(), { instrument_security_requested: true, instrument_ready: false,
-    financial_permission: false, security_graph_complete: false });
+    financial_permission: false, security_graph_complete: false, security_source_first_stop: 'release_loader_window_elapsed' });
   assert.throws(() => JSON.stringify(f.scope));
   assert.doesNotMatch(util.inspect(f.scope), /PRIVATE_SESSION|PRIVATE_DOCUMENT/u);
 });
@@ -128,3 +128,563 @@ test('admission closes at 30 seconds while retained responses remain bounded by 
   f.clock(38000); assert.equal(f.scope.normalWindowRemaining(), 0);
   f.clock(40000); assert.equal(f.scope.normalWindowRemaining(), 0);
 });
+
+// Verbatim guard references from immutable 15eeb7b21bf204c6bd6ac2a36b5fd1d4b03aa5e5; no provider source executes.
+const referenceLive = String.raw`  live() {
+    return this.#enabled && !this.#poisoned && this.#parent.renderEnabled()
+      && this.#parent.bindingEvidence().payer_payload_delivered
+      && this.#parent.normalEvidence().normal_reads_requested === true
+      && this.#parent.normalWindowRemaining() > 0;
+  }
+
+`;
+const referenceVerify = String.raw`  verifyLoader(body) {
+    if (!this.#loader || !this.live() || !Buffer.isBuffer(body) || body.length > 262144
+        || digest(body) !== this.#loader.expectedHash) { this.poison('loader_integrity'); return false; }
+    this.#verified = true;
+    return true;
+  }
+
+`;
+const referenceOriginal = String.raw`  #original(frame, main, bound) {
+    try {
+      return performance.now() < this.#caseDeadline && frame.isDetached() === false
+        && ((frame === main && this.#parent.normalSourceMatches(frame.url(), true))
+        || (frame === bound && this.#parent.normalSourceMatches(frame.url())));
+    } catch { return false; }
+  }
+
+`;
+const referenceScope = String.raw`class InstrumentSecurityScope {
+  #parent; #case; #start; #closed = false; #clock;
+  constructor(parent, caseDeadline, clock = () => performance.now()) {
+    if (!Number.isFinite(caseDeadline) || typeof clock !== 'function') throw new Error('Invalid security scope.');
+    this.#parent = parent; this.#case = caseDeadline; this.#clock = clock;
+  }
+  enter() { this.#start ??= this.#clock(); }
+  close() { this.#closed = true; }
+  admissionRemaining() {
+    return this.#closed ? 0 : Math.max(0, Math.min(this.#case - 10000,
+      this.#start === undefined ? Infinity : this.#start + 15000) - this.#clock());
+  }
+  normalWindowRemaining() {
+    return this.#closed ? 0 : Math.max(0, Math.min(this.#case - 2000,
+      this.#start === undefined ? this.#case - 10000 : this.#start + 15000) - this.#clock());
+  }
+  renderEnabled() { return this.#parent.renderEnabled(); }
+  bindingEvidence() { return this.#parent.bindingEvidence(); }
+  normalEvidence() { return this.#parent.normalEvidence(); }
+  normalSourceMatches(...args) { return this.#parent.normalSourceMatches(...args); }
+  riskSessionMatches(...args) { return this.#parent.riskSessionMatches(...args); }
+  evidence() { return { instrument_security_requested: true, instrument_ready: false,
+    financial_permission: false, security_graph_complete: false }; }
+  toJSON() { throw new Error('Private security scope cannot be serialized.'); }
+}
+
+`;
+
+const fs = require('node:fs'), path = require('node:path'), Module = require('node:module');
+const crypto = require('node:crypto');
+function compiled(file, replacements = [], overrides = {}) {
+  const filename = path.join(__dirname, file);
+  let source = fs.readFileSync(filename, 'utf8');
+  for (const [start, end, replacement] of replacements) {
+    const begin = source.indexOf(start), finish = source.indexOf(end, begin);
+    assert.ok(begin >= 0 && finish > begin);
+    source = source.slice(0, begin) + replacement + source.slice(finish);
+  }
+  if (Object.hasOwn(overrides, 'fixture:performance')) {
+    source = source.replace("'use strict';", "'use strict';\nconst performance = require('fixture:performance');");
+  }
+  const loaded = new Module(filename, module);
+  loaded.filename = filename; loaded.paths = Module._nodeModulePaths(__dirname);
+  const original = loaded.require.bind(loaded);
+  loaded.require = name => Object.hasOwn(overrides, name) ? overrides[name] : original(name);
+  loaded._compile(source, filename);
+  return loaded.exports;
+}
+const policyReferences = [
+  ['  live(report = null) {', '  note(reason)', referenceLive],
+  ['  verifyLoader(body, report = null) {', '  // Only values absent', referenceVerify],
+];
+
+function policyTrace(reference, failure, action = 'verify') {
+  const trace = [], reports = [];
+  const body = Buffer.from('SYNTHETIC_PRIVATE_LOADER');
+  let selected = null;
+  const privateError = new Error();
+  for (const key of ['message', 'stack', 'name']) Object.defineProperty(privateError, key, {
+    get() { throw new Error('Private Error property inspected.'); },
+  });
+  const call = (name, value) => { trace.push(name);
+    if (selected === 'throw_' + name) throw privateError;
+    return selected === name ? false : value; };
+  const parent = {
+    renderEnabled: () => call('render', true),
+    bindingEvidence: () => { call('binding', true); return { get payer_payload_delivered() {
+      return call('payer', true); } }; },
+    normalEvidence: () => { call('normal', true); return { get normal_reads_requested() {
+      return call('selected', true); } }; },
+    normalWindowRemaining: () => call('window', 1000),
+    normalSourceMatches: () => true, riskSessionMatches: () => true,
+  };
+  const hash = { ...crypto, createHash: algorithm => { trace.push('hash'); return crypto.createHash(algorithm); } };
+  const { HostedRiskPolicy } = compiled('hosted-risk-policy.cjs', reference ? policyReferences : [], { 'node:crypto': hash });
+  const value = new HostedRiskPolicy(parent, failure !== 'disabled', {
+    origin: 'http://127.0.0.1:1234', bwsOrigin: 'https://127.0.0.1:1235',
+    loaderHash: crypto.createHash('sha256').update(body).digest('hex'),
+  });
+  if (action === 'verify' && failure !== 'claim_missing') value.claimLoader(
+    'http://127.0.0.1:1234/fingerprint.js?sessionId=synthetic&hasScriptId=false&disable3rdTracking=false', 'GET', 'script',
+    { document: 'SYNTHETIC_PRIVATE_DOCUMENT', role: 'dropin', session: 'synthetic', orderSession: 'synthetic',
+      id: 'airwallex-fraud-api', disableTracking: null, merchant: null, tenant: null, project: null });
+  if (failure === 'policy_poisoned') value.poison('unknown_dependency');
+  const poison = value.poison.bind(value);
+  value.poison = reason => { trace.push('poison:' + reason); return poison(reason); };
+  selected = failure;
+  const data = failure === 'body_not_buffer' ? null : failure === 'body_limit' ? Buffer.alloc(262145)
+    : failure === 'body_hash' ? Buffer.from('SYNTHETIC_PRIVATE_WRONG') : body;
+  trace.length = 0;
+  let result;
+  try { result = action === 'live' ? value.live(label => reports.push(label))
+    : value.verifyLoader(data, label => reports.push(label)); }
+  catch (error) { assert.equal(error, privateError); result = 'same_exception'; }
+  return { trace, result, reports, evidence: value.evidence() };
+}
+
+for (const [failure, gate] of [
+  ['claim_missing', 'claim_missing'], ['policy_poisoned', 'policy_poisoned'], ['render', 'render_unavailable'],
+  ['payer', 'payer_not_delivered'], ['selected', 'normal_not_selected'], ['window', 'scope_window_not_positive'],
+  ['body_not_buffer', 'body_not_buffer'], ['body_limit', 'body_limit'], ['body_hash', 'body_hash'],
+  ['throw_render', null], ['throw_binding', null], ['throw_payer', null], ['throw_normal', null],
+  ['throw_selected', null], ['throw_window', null], ['matched', null],
+]) {
+  test('loader validation preserves immutable operand/hash/poison trace: ' + failure, () => {
+    const before = policyTrace(true, failure), after = policyTrace(false, failure);
+    assert.deepEqual(after.trace, before.trace);
+    assert.deepEqual(after.evidence, before.evidence);
+    assert.equal(after.result, before.result);
+    assert.deepEqual(after.reports, gate === null ? [] : [gate]);
+    assert.doesNotMatch(JSON.stringify(after), /SYNTHETIC_PRIVATE/u);
+  });
+}
+for (const failure of ['disabled', 'policy_poisoned', 'render', 'payer', 'selected', 'window', 'matched']) {
+  test('live retains exact short-circuit calls and result: ' + failure, () => {
+    const before = policyTrace(true, failure, 'live'), after = policyTrace(false, failure, 'live');
+    assert.deepEqual(after.trace, before.trace); assert.equal(after.result, before.result);
+  });
+}
+
+test('source-stop memo adds no clock calls or behavioral latch under rewind, ties and saturation', () => {
+  const Reference = compiled('hosted-pending-loader.cjs', [
+    ['class InstrumentSecurityScope', '// One original route', referenceScope],
+  ]).InstrumentSecurityScope;
+  for (const start of [undefined, 0, 12000, 15000, 25000]) {
+    const traces = [[], []]; let now = 0;
+    const values = [new Reference({}, 40000, () => { traces[0].push(now); return now; }),
+      new InstrumentSecurityScope({}, 40000, () => { traces[1].push(now); return now; })];
+    if (start !== undefined) { now = start; values.forEach(scope => scope.enter()); }
+    for (now of [0, 15000, 27000, 30000, 38000, 40000, 0, Number.NaN, Infinity]) {
+      assert.equal(values[1].admissionRemaining(), values[0].admissionRemaining());
+      assert.equal(values[1].normalWindowRemaining(), values[0].normalWindowRemaining());
+    }
+    assert.deepEqual(traces[1], traces[0]);
+    const first = values[1].firstStop();
+    values[1].noteStop('SYNTHETIC_PRIVATE_URL');
+    values[1].close('bound_detached'); values[0].close();
+    for (let index = 0; index < 10000; index++) values[1].noteStop('teardown');
+    assert.equal(values[1].firstStop(), first);
+    assert.equal(values[1].admissionRemaining(), values[0].admissionRemaining());
+    assert.deepEqual(traces[1], traces[0]);
+  }
+  const f = fixture(); f.scope.noteStop('SYNTHETIC_PRIVATE_URL'); assert.equal(f.scope.firstStop(), 'not_observed');
+  f.scope.close('main_document_request'); f.scope.close('teardown');
+  assert.equal(f.scope.firstStop(), 'main_document_request');
+});
+
+const referenceHandle = String.raw`  async #handle(route, context, main, bound, closing, admissionClosed) {
+    if (this.#journal === null) return false;
+    if (admissionClosed()) return false;
+    const request = route.request();
+    let frame;
+    try { frame = request.frame(); } catch { return false; }
+    if (!this.#original(frame, main, bound)) return false;
+    const role = frame === main ? 'main' : 'dropin';
+    const document = frame.url();
+    if (this.#policy.loaderTarget(request.url())) {
+      let delivered = false;
+      try {
+        this.#rememberDeadline();
+        // Only these source-defined attributes enter private memory; no DOM text or input values are read.
+        const proof = await this.#value(frame.evaluate(value => {
+          const matches = [...document.scripts].filter(element => element.src === value);
+          if (matches.length !== 1) return null;
+          const script = matches[0];
+          return { id: script.id, orderSession: script.getAttribute('data-order-session-id'),
+            tenant: script.getAttribute('data-tenant') ?? script.getAttribute('tenant'),
+            project: script.getAttribute('data-project-name'),
+            disableTracking: script.getAttribute('data-disable-3rd-tracking') };
+        }, request.url()));
+        const query = new URL(request.url()).searchParams;
+        const claim = this.#policy.claimLoader(request.url(), request.method(), request.resourceType(),
+          proof === null ? null : { ...proof, document, role,
+            session: query.get('sessionId'), merchant: query.get('merchantId') });
+        if (!claim || this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)) return true;
+        this.#beforeCookies = await this.#value(context.cookies());
+        if (this.#beforeCookies.some(cookie => riskCookieNames.has(cookie.name))) {
+          this.#policy.note('cookie_unbound'); return true;
+        }
+        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)) return true;
+        // Retain construction before await; shutdown disposes every created public context.
+        this.#rememberDeadline();
+        if (this.#instrumentSecurity) {
+          const target = request.url();
+          const selected = { role: 'loader', ordinal: 0, url: target, headers: { accept: '*/*' },
+            body: Buffer.alloc(0), scope: claim.scope,
+            sessionHash: require('node:crypto').createHash('sha256').update(query.get('sessionId')).digest('hex') };
+          const deadline = Math.min(this.#deadline, this.#caseDeadline,
+            performance.now() + this.#parent.normalWindowRemaining());
+          const response = await this.#value(this.#journal.run(selected, async () => {
+            if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)
+                || !this.#policy.live()) throw new Error('Loader scope is unavailable.');
+            return this.#relay.send(target, 'GET', 'loader', selected.headers, selected.body, deadline,
+              () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound));
+          }, value => value.status === 200 && this.#policy.verifyLoader(value.body), deadline));
+          if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) return true;
+          await this.#value(route.fulfill({ status: response.status,
+            headers: this.#policy.responseHeaders(response), body: response.body }));
+          delivered = true;
+          return true;
+        }
+        this.#publicClient ??= this.#playwright.request.newContext({ ignoreHTTPSErrors: false,
+          proxy: { server: this.#proxy, bypass: '' } }).then(client => {
+          // Retain late completion even when bounded shutdown already reported failure.
+          if (this.#closed) void this.#disposePublic(client);
+          return client;
+        });
+        const client = await this.#value(this.#publicClient);
+        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) return true;
+        const response = await this.#value(client.get(request.url(), {
+          headers: { accept: '*/*', cookie: '', referer: '' }, maxRedirects: 0, maxRetries: 0,
+          timeout: Math.max(1, Math.min(this.#parent.normalWindowRemaining(), this.#caseDeadline - performance.now())),
+        }).then(created => {
+          if (this.#closed) void this.#disposeResponse(created);
+          return created;
+        }));
+        try {
+          if (this.#closed || closing() || !this.#original(frame, main, bound)) return true;
+          if (response.status() !== 200) { this.#policy.poison('response'); return true; }
+          const body = await this.#value(response.body());
+          if (!this.#policy.verifyLoader(body)) return true;
+          if (this.#closed || closing() || !this.#original(frame, main, bound)) return true;
+          const headers = Object.fromEntries(Object.entries(response.headers())
+            .filter(([name]) => !['set-cookie', 'set-cookie2'].includes(name.toLowerCase())));
+          await this.#value(route.fulfill({ response, headers, body }));
+          delivered = true;
+        } finally {
+          if (!await this.#bounded(this.#disposeResponse(response))) this.#cleanupFailed = true;
+        }
+      } catch { this.#policy.poison('response'); }
+      finally {
+        if (!delivered && !await this.#bounded(Promise.resolve().then(() => route.abort('blockedbyclient')))) {
+          this.#cleanupFailed = true; this.#policy.poison('shutdown');
+        }
+      }
+      return true;
+    }
+    if (!['POST', 'OPTIONS'].includes(request.method())) return false;
+    if (!this.#policy.telemetryMatches(document, role)) return false;
+    // Collect only new known first-party risk cookies after the verified loader. Never pass an arbitrary jar.
+    if (this.#beforeCookies !== null
+        && !this.#policy.bindCookies(this.#beforeCookies, await this.#value(context.cookies()))) {
+      this.#policy.poison('cookie_unbound'); return false;
+    }
+    const headers = this.#policy.cookieProjection(await this.#value(request.allHeaders()));
+    if (headers === null) return false;
+    const claim = this.#policy.claim(request.url(), request.method(), request.resourceType(),
+      headers, request.postDataBuffer() ?? Buffer.alloc(0), document, role);
+    if (claim === null) return false;
+    let delivered = false;
+    let queued = false;
+    try {
+      // Exactly the admitted visitor plus eight finite events may wait; sends remain serial.
+      if (this.#waiting >= 9) { this.#policy.poison('budget'); return true; }
+      this.#waiting++;
+      queued = true;
+      const task = this.#chain.then(async () => {
+        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+          this.#policy.poison('document_changed'); throw new Error('Risk scope is unavailable.');
+        }
+        const deadline = Math.min(this.#caseDeadline, this.#deadline, performance.now() + this.#parent.normalWindowRemaining());
+        const forward = async selected => this.#journal.run(selected, async () => {
+          if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+            throw new Error('Risk scope is unavailable.');
+          }
+          this.#policy.invoke(selected.role);
+          const response = await this.#relay.send(selected.url, selected.role === 'preflight' ? 'OPTIONS' : 'POST',
+            selected.role, selected.headers, selected.body, deadline, this.#instrumentSecurity
+              ? () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound) : null);
+          this.#policy.status(selected.role, response.status);
+          return response;
+        }, response => this.#policy.validateResponse(selected, response), deadline);
+        // Browser route interception omits automatic CORS OPTIONS: perform the exact grant check before the body.
+        if (claim.role === 'visitor') {
+          const preflight = this.#policy.preflightFor(claim);
+          if (preflight !== null) await forward(preflight);
+        }
+        const response = await forward(claim);
+        if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+          throw new Error('Risk scope is unavailable.');
+        }
+        await this.#value(route.fulfill({ status: response.status,
+          headers: this.#policy.responseHeaders(response), body: response.body }));
+        delivered = true;
+        this.#policy.delivered(claim.role);
+      });
+      this.#chain = task.catch(() => {});
+      await this.#value(task);
+    } catch { this.#policy.poison('journal'); }
+    finally {
+      if (queued) this.#waiting--;
+      if (!delivered && !await this.#bounded(Promise.resolve().then(() => route.abort('blockedbyclient')))) {
+        this.#cleanupFailed = true; this.#policy.poison('shutdown');
+      }
+    }
+    return true;
+  }
+
+`;
+
+async function observerTrace(reference, fault, instrument = true) {
+  const trace = [];
+  let now = 1000, stage = 'before', detached = false, changed = false, validating = false;
+  const performance = { now: () => { trace.push('clock'); return now; } };
+  const body = Buffer.from('SYNTHETIC_PRIVATE_LOADER');
+  const privateError = new Error();
+  for (const key of ['message', 'stack', 'name']) Object.defineProperty(privateError, key, {
+    get() { throw new Error('Private Error property inspected.'); },
+  });
+  const parent = {
+    renderEnabled: () => { trace.push('render'); return !(fault === 'render_after_response' && stage !== 'before'); },
+    bindingEvidence: () => { trace.push('binding'); return { payer_payload_delivered: true }; },
+    normalEvidence: () => { trace.push('normal'); return { normal_reads_requested: true }; },
+    normalSourceMatches: (_value, main) => { trace.push(main ? 'main_source' : 'bound_source');
+      return !changed || (fault === 'or_alternative' && !main); },
+    riskSessionMatches: () => { trace.push('session'); return true; },
+    normalWindowRemaining: () => { trace.push('legacy_window'); return 1000; },
+  };
+  const scope = new InstrumentSecurityScope(parent, 40000, () => { trace.push('scope_clock'); return now; });
+  scope.enter();
+  const fixture = { origin: 'http://127.0.0.1:1234', bwsOrigin: 'https://127.0.0.1:1235',
+    loaderHash: crypto.createHash('sha256').update(body).digest('hex'), ca: Buffer.from('SYNTHETIC_CA') };
+  const hash = { ...crypto, createHash: algorithm => { trace.push('hash'); return crypto.createHash(algorithm); } };
+  const policies = compiled('hosted-risk-policy.cjs', reference ? policyReferences : [], { 'node:crypto': hash });
+  const response = { fields: [{ name: 'content-type', value: 'application/javascript' }],
+    get status() { trace.push('status');
+      if (validating && fault === 'validator_exception') throw privateError;
+      return ['http_status', 'abort'].includes(fault) ? 403 : 200; },
+    get body() { trace.push('body');
+      if (fault === 'http_status' && validating) assert.fail('A false status evaluated the later body operand.');
+      return fault === 'hash' ? Buffer.from('SYNTHETIC_PRIVATE_WRONG') : body; },
+  };
+  const journal = {
+    async run(_claim, invoke, validate) {
+      trace.push('prepare_ack');
+      const result = await invoke();
+      trace.push('validate'); validating = true;
+      let matched = false;
+      try { matched = validate(result) === true; } catch (error) { assert.equal(error, privateError); }
+      validating = false;
+      if (fault === 'after_validation_stop') scope.close('main_navigated');
+      if (fault === 'after_validation_detach') { detached = true; scope.close('bound_detached'); }
+      if (['after_validation_document', 'or_alternative', 'original_exception'].includes(fault)) changed = true;
+      if (fault === 'case_after_validation') now = 40001;
+      trace.push('observed_ack');
+      if (!matched || fault === 'ack_failure') throw new Error('Fixed synthetic journal failure.');
+      return result;
+    },
+    evidence: () => ({}), close: async () => { trace.push('journal_close'); },
+  };
+  class Relay {
+    async send(_target, _method, _role, _headers, _body, _deadline, guard) {
+      trace.push('relay_before_guard'); if (!guard()) throw privateError;
+      trace.push('possible_send'); trace.push('relay_after_guard'); if (!guard()) throw privateError;
+      stage = 'response';
+      if (fault === 'window_after_response') now = 20000;
+      return response;
+    }
+    async close() { trace.push('relay_close'); return true; }
+  }
+  const overrides = { './hosted-risk-policy.cjs': policies, './hosted-risk-relay.cjs': { HostedRiskRelay: Relay },
+    'node:crypto': hash, 'fixture:performance': performance };
+  const replacements = reference ? [
+    ['  #original(', '  handle(route', referenceOriginal],
+    ['  async #handle(', '  async drainSent(', referenceHandle],
+  ] : [];
+  const { HostedRiskObserver } = compiled('hosted-risk-observer.cjs', replacements, overrides);
+  const playwright = { request: { newContext: async () => { trace.push('context'); return {
+    get: async () => { trace.push('get'); stage = 'response'; return {
+      status: () => response.status, body: async () => response.body,
+      headers: () => { trace.push('headers'); return { 'content-type': 'application/javascript' }; },
+      dispose: async () => { trace.push('response_dispose'); },
+    }; }, dispose: async () => { trace.push('context_dispose'); },
+  }; } } };
+  const observer = new HostedRiskObserver(instrument ? scope : parent, journal, playwright, fixture, 40000, instrument);
+  observer.start('http://127.0.0.1:1236');
+  const frame = { url: () => { trace.push('frame_url');
+    if (fault === 'original_exception' && changed) throw privateError;
+    return 'SYNTHETIC_PRIVATE_DOCUMENT'; }, isDetached: () => { trace.push('detached'); return detached; },
+    evaluate: async () => { trace.push('proof'); return { id: 'airwallex-fraud-api', orderSession: 'synthetic',
+      tenant: fault === 'or_alternative' ? 'pa' : null,
+      project: fault === 'or_alternative' ? 'element-js' : null, disableTracking: null }; } };
+  const request = { frame: () => { trace.push('frame'); return frame; },
+    url: () => { trace.push('url'); return fixture.origin + '/fingerprint.js?sessionId=synthetic&hasScriptId=false&disable3rdTracking=false'; },
+    method: () => { trace.push('method'); return 'GET'; }, resourceType: () => { trace.push('type'); return 'script'; } };
+  const route = { request: () => { trace.push('request'); return request; },
+    fulfill: async () => { trace.push('fulfill'); if (fault === 'fulfill') throw privateError; },
+    abort: async () => { trace.push('abort'); if (fault === 'abort') throw privateError; } };
+  const context = { cookies: async () => { trace.push('cookies'); return []; } };
+  const result = await observer.handle(route, context, fault === 'or_alternative' ? frame : null, frame,
+    () => { trace.push('closing'); return fault === 'pre_send_closing'; },
+    () => { trace.push('admission'); return false; });
+  const beforeClose = observer.evidence();
+  scope.close('teardown');
+  const clean = await observer.close();
+  const afterClose = observer.evidence();
+  const legacy = Object.fromEntries(Object.entries(afterClose).filter(([key]) => !key.startsWith('security_loader_')));
+  return { trace, result, clean, legacy, beforeClose, afterClose, stop: scope.firstStop() };
+}
+
+for (const fault of ['matched', 'http_status', 'hash', 'render_after_response', 'window_after_response',
+  'validator_exception', 'after_validation_stop', 'after_validation_detach', 'after_validation_document',
+  'case_after_validation', 'original_exception', 'or_alternative', 'pre_send_closing', 'ack_failure', 'fulfill', 'abort']) {
+  test('instrument loader retains immutable handler call/ACK/send/disposal order: ' + fault, async () => {
+    const before = await observerTrace(true, fault), after = await observerTrace(false, fault);
+    assert.deepEqual(after.trace, before.trace);
+    assert.equal(after.result, before.result); assert.equal(after.clean, before.clean);
+    assert.deepEqual(after.legacy, before.legacy);
+    const evidence = after.beforeClose;
+    const gates = { http_status: 'http_status', hash: 'body_hash', render_after_response: 'render_unavailable',
+      window_after_response: 'scope_window_not_positive', validator_exception: 'validator_exception',
+      after_validation_stop: 'scope_window_not_positive', after_validation_detach: 'frame_detached',
+      after_validation_document: 'bound_source_mismatch', case_after_validation: 'case_bound_failed',
+      original_exception: 'original_probe_exception', pre_send_closing: 'caller_closing',
+      ack_failure: 'operation_failed', fulfill: 'operation_failed', abort: 'http_status' };
+    if (Object.hasOwn(gates, fault)) assert.equal(evidence.security_loader_first_failure_gate, gates[fault]);
+    else assert.equal(Object.hasOwn(evidence, 'security_loader_first_failure_gate'), false);
+    if (['matched', 'or_alternative'].includes(fault)) assert.equal(evidence.security_loader_validation, 'matched');
+    if (fault.startsWith('after_validation_') || fault === 'ack_failure') assert.equal(evidence.security_loader_validation, 'matched');
+    if (fault === 'validator_exception') assert.equal(evidence.security_loader_validation, 'exception');
+    if (fault === 'window_after_response') {
+      assert.equal(evidence.security_loader_scope_stop_at_failure, 'release_loader_window_elapsed');
+      assert.equal(after.stop, 'release_loader_window_elapsed');
+    }
+    if (fault === 'after_validation_detach') assert.equal(evidence.security_loader_scope_stop_at_failure, 'bound_detached');
+    if (fault === 'http_status') {
+      assert.equal(evidence.security_loader_scope_stop_at_failure, 'not_observed');
+      assert.equal(after.stop, 'teardown');
+      assert.equal(after.afterClose.security_loader_scope_stop_at_failure, 'not_observed');
+    }
+    assert.doesNotMatch(JSON.stringify({ ...evidence, ...after.afterClose }), /SYNTHETIC_PRIVATE/u);
+  });
+}
+
+const referenceDocument = String.raw`      if (instrumentSecurity && request.resourceType() === 'document') {
+        let frame;
+        try { frame = request.frame(); } catch { /* Unavailable navigation is withheld. */ }
+        const main = mainPage?.mainFrame();
+        if (!frame || (frame === main && instrumentMainDocumentSeen) || frame === boundFrame) {
+          sourceGeneration++; security.close(); pendingLoader.close();
+          counts.blocked_requests++; await route.abort('blockedbyclient'); return;
+        }
+        if (frame === main) instrumentMainDocumentSeen = true;
+        else if (request.url() === initial) {
+          counts.blocked_requests++; await route.abort('blockedbyclient'); return;
+        }
+      }
+`;
+
+const referenceEvents = String.raw`      let mainNavigations = 0;
+      const frameNavigations = new WeakMap();
+      page.on('framenavigated', frame => {
+        if (frame === page.mainFrame() && ++mainNavigations > 1) {
+          sourceGeneration++; security.close(); pendingLoader.close();
+        } else if (frame === boundFrame && (frameNavigations.get(frame) ?? 0) > 0) {
+          sourceGeneration++; security.close(); pendingLoader.close();
+        }
+        if (frame === page.mainFrame() || frame === boundFrame) {
+          frameNavigations.set(frame, (frameNavigations.get(frame) ?? 0) + 1);
+        }
+      });
+      page.on('framedetached', frame => { if (frame === boundFrame) {
+        sourceGeneration++; security.close(); pendingLoader.close();
+      } });
+`;
+
+async function documentTrace(reference, role, seen) {
+  const trace = [], counts = { blocked_requests: 0 }, scope = new InstrumentSecurityScope({}, 40000, () => 0);
+  const main = {}, boundFrame = {}, frame = role === 'missing' ? undefined : role === 'main' ? main
+    : role === 'bound' ? boundFrame : {};
+  const request = { resourceType: () => { trace.push('type'); return 'document'; },
+    frame: () => { trace.push('frame'); return frame; }, url: () => { trace.push('url'); return 'SYNTHETIC_PRIVATE_OTHER'; } };
+  const mainPage = { mainFrame: () => { trace.push('main'); return main; } };
+  const security = { close: reason => { trace.push('close'); scope.close(reason); } };
+  const pendingLoader = { close: () => trace.push('pending_close') }, route = { abort: async () => trace.push('abort') };
+  const source = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+  const start = source.indexOf("      if (instrumentSecurity && request.resourceType() === 'document') {");
+  const end = source.indexOf('      if (observeParentCountry', start);
+  assert.ok(start > 0 && end > start);
+  const body = reference ? referenceDocument : source.slice(start, end);
+  const run = new Function('request', 'mainPage', 'boundFrame', 'security', 'pendingLoader', 'route', 'counts', 'seen',
+    `return (async () => { const instrumentSecurity = true, initial = 'SYNTHETIC_PRIVATE_INITIAL';
+      let instrumentMainDocumentSeen = seen, sourceGeneration = 0;
+      try { ${body} } finally { counts.generation = sourceGeneration; counts.seen = instrumentMainDocumentSeen; }
+    })();`);
+  await run(request, mainPage, boundFrame, security, pendingLoader, route, counts, seen);
+  return { trace, counts, stop: scope.firstStop() };
+}
+for (const [role, seen, expected] of [['missing', false, 'document_frame_unavailable'],
+  ['main', false, 'not_observed'], ['main', true, 'main_document_request'],
+  ['bound', false, 'bound_document_request'], ['other', false, 'not_observed']]) {
+  test('document-request stop uses only the original evaluated branch: ' + role + '/' + seen, async () => {
+    const before = await documentTrace(true, role, seen), after = await documentTrace(false, role, seen);
+    assert.deepEqual(after.trace, before.trace); assert.deepEqual(after.counts, before.counts);
+    assert.equal(after.stop, expected);
+  });
+}
+
+function eventTrace(reference, actions) {
+  const trace = [], handlers = {}, main = {}, boundFrame = {};
+  const scope = new InstrumentSecurityScope({}, 40000, () => 0);
+  const page = { mainFrame: () => { trace.push('main'); return main; }, on: (event, callback) => { handlers[event] = callback; } };
+  const security = { close: reason => { trace.push('close'); scope.close(reason); } };
+  const pendingLoader = { close: () => trace.push('pending_close') };
+  const source = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+  const start = source.indexOf('      let mainNavigations = 0;'), end = source.indexOf('    page.setDefaultTimeout', start);
+  const body = reference ? referenceEvents : source.slice(start, end).slice(0, source.slice(start, end).lastIndexOf('    }'));
+  const run = new Function('page', 'boundFrame', 'security', 'pendingLoader', `let sourceGeneration = 0;
+    ${body} return () => sourceGeneration;`);
+  const generation = run(page, boundFrame, security, pendingLoader);
+  for (const action of actions) handlers[action === 'detach' ? 'framedetached' : 'framenavigated'](action === 'main' ? main : boundFrame);
+  const first = scope.firstStop(); scope.close('teardown');
+  return { trace, generation: generation(), first, final: scope.firstStop() };
+}
+for (const [actions, reason] of [[['main', 'main'], 'main_navigated'], [['bound', 'bound'], 'bound_navigated'],
+  [['detach'], 'bound_detached'], [['bound', 'bound', 'main', 'main', 'detach'], 'bound_navigated']]) {
+  test('navigation/detach first-stop preserves existing event getter/call order: ' + actions.join('/'), () => {
+    const before = eventTrace(true, actions), after = eventTrace(false, actions);
+    assert.deepEqual(after.trace, before.trace); assert.equal(after.generation, before.generation);
+    assert.equal(after.first, reason); assert.equal(after.final, reason);
+  });
+}
+
+for (const fault of ['matched', 'http_status', 'hash', 'fulfill']) {
+  test('legacy observer evidence bytes and all pre-existing calls remain identical: ' + fault, async () => {
+    const before = await observerTrace(true, fault, false), after = await observerTrace(false, fault, false);
+    assert.deepEqual(after.trace, before.trace);
+    assert.equal(JSON.stringify(after.beforeClose), JSON.stringify(before.beforeClose));
+    assert.equal(JSON.stringify(after.afterClose), JSON.stringify(before.afterClose));
+    assert.equal(after.clean, before.clean); assert.equal(after.result, before.result);
+    assert.equal(Object.keys(after.afterClose).some(key => key.startsWith('security_')), false);
+  });
+}

@@ -73,6 +73,53 @@ final class HostedBrowserTest extends TestCase
         );
     }
 
+    public function testInstrumentLoaderDiagnosticsAreClosedOptionalAndDoNotChangeLegacyOutput(): void
+    {
+        $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false];
+        $diagnostics = ['security_loader_validation' => 'withheld',
+            'security_loader_first_failure_phase' => 'response_validation',
+            'security_loader_first_failure_gate' => 'scope_window_not_positive',
+            'security_source_first_stop' => 'teardown',
+            'security_loader_scope_stop_at_failure' => 'not_observed'];
+        $safe = HostedBrowser::sanitize(
+            $base + $diagnostics,
+            true,
+            true,
+            true,
+            true,
+            mode: HostedSecurityMode::InstrumentSecurity
+        );
+        foreach ($diagnostics as $field => $value) {
+            self::assertSame($value, $safe[$field]);
+        }
+        self::assertSame('fail', $safe['result']);
+        self::assertFalse($safe['instrument_ready']);
+        self::assertFalse($safe['financial_permission']);
+        self::assertSame(
+            HostedBrowser::sanitize($base, true, true, true, true),
+            HostedBrowser::sanitize($base + $diagnostics, true, true, true, true)
+        );
+        foreach (
+            ['SYNTHETIC_PRIVATE_URL', str_repeat('SYNTHETIC_PRIVATE', 1000), true, 1, null, [], new \stdClass()] as $bad
+        ) {
+            $invalid = array_fill_keys(array_keys($diagnostics), $bad);
+            $safe = HostedBrowser::sanitize(
+                $base + $invalid,
+                true,
+                true,
+                true,
+                true,
+                mode: HostedSecurityMode::InstrumentSecurity
+            );
+            foreach (array_keys($diagnostics) as $field) {
+                self::assertArrayNotHasKey($field, $safe);
+            }
+            self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        }
+    }
+
     public function testRejectedInstrumentSourceOrStateNeverSpawnsAChild(): void
     {
         foreach (['source_book', 'poisoned_state'] as $fault) {
