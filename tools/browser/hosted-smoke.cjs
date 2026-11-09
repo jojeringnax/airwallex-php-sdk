@@ -939,19 +939,92 @@ async function instrumentSecuritySmoke(playwright) {
   }
 }
 
-async function boundDocumentSmoke(playwright) {
+// Fixture-only extraction keeps the changed production wiring executable without replacing its calls.
+function boundDocumentWorkerFixture(page, deadline, options = {}) {
+  const fs = require('node:fs');
   const { BoundDocumentObservations } = require('./hosted-browser.cjs');
+  const { InstrumentSecurityScope, PendingLoader } = require('./hosted-pending-loader.cjs');
+  const source = options.source ?? fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+  const section = (start, end) => {
+    const begin = source.indexOf(start), finish = source.indexOf(end, begin);
+    if (begin < 0 || finish <= begin) throw new Error('Production document fixture section unavailable.');
+    return source.slice(begin, finish);
+  };
+  const declaration = section('  let sourceGeneration = 0;', '  let instrumentMainDocumentSeen');
+  const binding = section('            if (renderFrame) {\n              policy.markRenderFrameDelivered();',
+    '            if (response.status() === 200');
+  const events = section('      let mainNavigations = 0;', '    page.setDefaultTimeout').replace(/\n    \}\n$/u, '');
+  const teardown = section('    cardChoice.capture();\n    if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads()',
+    '  if (failed || result === undefined)').replace(/\n  \}\n$/u, '');
+  const outputs = section('  if (failed || result === undefined)', '\n}\n\nasync function main');
+  const trace = options.trace ?? [], clock = options.clock ?? (() => performance.now());
+  class Observer extends BoundDocumentObservations {
+    constructor(originalDeadline, generation) { super(originalDeadline, generation, clock); }
+  }
+  const factory = new Function('page', 'caseDeadline', 'BoundDocumentObservations', 'InstrumentSecurityScope',
+    'PendingLoader', 'trace', 'context', `
+    const instrumentSecurity = true, observeNormal = true, observeConfig = true;
+    let boundFrame, shuttingDown = false, failed = false, firstFailure, normalAdmissionClosed = false;
+    let browserContextCloseStarted = false, browserContextClosed = false;
+    const result = { result: 'blocked', reason: 'financial_sandbox_boundary_unverified', card_entry_enabled: false };
+    const counts = {}, payer = {}, normal = {}, method = {}, readiness = {}, readinessAttachment = {};
+    const methodSendStarted = false, normalWindowTimer = undefined, watchdog = undefined;
+    const pending = new Set(), normalClientPromises = new Set(), normalClientStates = new Map();
+    const publicClientPromise = undefined, methodClientPromise = undefined, browser = null;
+    const empty = () => ({}), markFailure = phase => { failed = true; firstFailure ??= phase; };
+    const track = async action => action(), drainSentNormalReads = async () => {};
+    const dependency = { drainSent: async () => {}, close: async () => true, failed: () => false, evidence: empty };
+    const parentCountry = dependency, currencySettings = dependency;
+    const cardChoice = { capture: () => trace.push('capture_fields'), evidence: empty };
+    const policy = { markRenderFrameDelivered: () => trace.push('render_delivered'), candidateOrigin: () => null,
+      closeNormalWindow: () => trace.push('normal_close'), bindingEvidence: empty,
+      renderEvidence: empty, methodEvidence: empty, normalEvidence: empty };
+    const security = new InstrumentSecurityScope(policy, caseDeadline);
+    const originalClose = security.close.bind(security);
+    security.close = reason => { trace.push('security_close:' + (reason ?? 'teardown')); originalClose(reason); };
+    const risk = { close: async () => true, evidence: empty };
+    const pendingLoader = new PendingLoader(risk, security), originalPendingClose = pendingLoader.close.bind(pendingLoader);
+    pendingLoader.close = () => { trace.push('pending_close'); originalPendingClose(); };
+    const proxy = { counts: { rejected: 0, connected: 0, externalConnected: 0 }, close: async () => {} };
+    const fs = { rm: async () => { trace.push('directory_removed'); } }, directory = 'SYNTHETIC_PRIVATE_DIRECTORY';
+    class PreflightFailure extends Error { #safe; constructor(safe) { super('Fixed fixture failure.'); this.#safe = safe; }
+      evidence() { return this.#safe; } }
+    ${declaration}
+    const install = () => { if (instrumentSecurity) { ${events} } };
+    install();
+    return {
+      bind(request, renderFrameSource) { const renderFrame = true; ${binding} },
+      async finish() { ${teardown} },
+      output(forceFailure = false) { failed = forceFailure; try { ${outputs} }
+        catch (error) { if (error instanceof PreflightFailure) return error.evidence(); throw error; } },
+      generation: () => sourceGeneration,
+    };`);
+  return factory(page, deadline, Observer, InstrumentSecurityScope, PendingLoader, trace, options.context ?? null);
+}
+
+function sanitizeBoundDocumentFixture(evidence) {
+  const { spawnSync } = require('node:child_process');
+  const script = 'require $argv[1]; $data=json_decode(stream_get_contents(STDIN),true,512,JSON_THROW_ON_ERROR);'
+    + '$safe=\\Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\HostedBrowser::sanitize('
+    + '$data,true,true,true,true,mode:\\Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\HostedSecurityMode::InstrumentSecurity);'
+    + 'echo json_encode($safe,JSON_THROW_ON_ERROR);';
+  const child = spawnSync('php', ['-r', script, path.join(__dirname, '../../vendor/autoload.php')], {
+    input: JSON.stringify(evidence), encoding: 'utf8', timeout: 5000,
+    env: { PATH: process.env.PATH ?? '', LANG: 'C' },
+  });
+  if (child.status !== 0 || child.stderr !== '') throw new Error('Local document sanitizer unavailable.');
+  return JSON.parse(child.stdout);
+}
+
+async function boundDocumentSmoke(playwright) {
   const { egressProxy } = require('./hosted-policy.cjs');
-  let browser, context, proxy, observer, current, generation = 0, stopped = false;
-  let bound, gets = 0, forbidden = 0, websocket = 0;
-  const sockets = new Set(), navigations = [];
+  let browser, context, proxy, currentKind, fixture;
+  let forbidden = 0, websocket = 0, deliveredDocuments = 0;
+  const sockets = new Set();
   const server = http.createServer((request, response) => {
-    const pathname = new URL(request.url, 'http://fixture.invalid').pathname;
-    response.setHeader('Content-Type', 'text/html');
-    if (pathname === '/page') response.end('<!doctype html><iframe id="bound" src="/document#base"></iframe>');
-    else if (pathname === '/document') {
-      gets++;
-      response.end('<!doctype html><p>Synthetic document</p><script>if(history.state==null||history.state.idx==null)history.replaceState({...history.state,idx:0},"")</script>');
+    if (request.url === '/page') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<!doctype html><iframe src="/document#SYNTHETIC_PRIVATE_OPTIONS"></iframe>');
     } else { forbidden++; response.writeHead(500).end(); }
   });
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
@@ -961,7 +1034,7 @@ async function boundDocumentSmoke(playwright) {
   const wait = async predicate => {
     const end = performance.now() + 2000;
     while (!predicate()) {
-      if (performance.now() >= end) throw new Error('Local document observation unavailable.');
+      if (performance.now() >= end) throw new Error('Local production document observation unavailable.');
       await new Promise(resolve => setTimeout(resolve, 5));
     }
   };
@@ -971,71 +1044,72 @@ async function boundDocumentSmoke(playwright) {
     browser = await playwright.chromium.launch({ channel: 'chrome', headless: true,
       proxy: { server: proxy.server, bypass: '' }, args: ['--proxy-bypass-list=<-loopback>', '--disable-quic'],
       env: { PATH: process.env.PATH ?? '', LANG: 'en_US.UTF-8' } });
-    context = await browser.newContext({ ignoreHTTPSErrors: false, serviceWorkers: 'block' });
-    await context.route('**/*', route => {
-      const request = route.request(), url = new URL(request.url());
-      return url.origin === origin && ['/page', '/document'].includes(url.pathname)
-        && request.method() === 'GET' && request.resourceType() === 'document'
-        ? route.continue() : route.abort('blockedbyclient');
-    });
-    await context.routeWebSocket(/.*/, socket => socket.close());
-    const page = await context.newPage();
-    page.on('frameattached', frame => { if (frame.parentFrame() === page.mainFrame() && !bound) bound = frame; });
-    page.on('framenavigated', frame => {
-      if (frame !== bound) return;
-      navigations.push(frame.url());
-      if (current) { generation++; stopped = true; current.navigated(frame, generation, true); }
-    });
-    await page.goto(origin + '/page', { waitUntil: 'load', timeout: 5000 });
-    await wait(() => navigations.length >= 2);
-    if (navigations[0] !== navigations[1]) throw new Error('Synthetic startup did not repeat its original URL.');
-    const prepare = async () => {
-      generation = 0; stopped = false;
-      observer = new BoundDocumentObservations(performance.now() + 10000, () => generation);
-      observer.bind(bound, bound.url(), generation); observer.navigated(bound, generation, false);
-      // Queue a separate public round trip after the capture invocation, then flush its response callbacks.
-      await new Promise(resolve => setImmediate(resolve)); await bound.evaluate(() => true);
-      await new Promise(resolve => setImmediate(resolve)); current = observer;
-    };
-    const settle = async () => {
-      await new Promise(resolve => setImmediate(resolve)); await bound.evaluate(() => true);
+    for (currentKind of ['startup', 'history', 'reload', 'hash']) {
+      context = await browser.newContext({ ignoreHTTPSErrors: false, serviceWorkers: 'block' });
+      let bound;
+      await context.route('**/*', async route => {
+        const request = route.request(), url = new URL(request.url());
+        if (url.origin !== origin || request.method() !== 'GET' || request.resourceType() !== 'document') {
+          forbidden++; await route.abort('blockedbyclient'); return;
+        }
+        if (url.pathname === '/page') { await route.continue(); return; }
+        if (url.pathname !== '/document') { forbidden++; await route.abort('blockedbyclient'); return; }
+        const action = currentKind === 'reload'
+          ? 'if(!sessionStorage.reloaded){sessionStorage.reloaded="1";setTimeout(()=>location.reload(),200)}'
+          : currentKind === 'hash' ? 'setTimeout(()=>{location.hash="changed"},200)'
+            : currentKind === 'history' ? 'setTimeout(()=>history.replaceState({idx:1},""),200)'
+              : 'if(history.state==null)history.replaceState({idx:0},"")';
+        await route.fulfill({ status: 200, contentType: 'text/html',
+          body: '<!doctype html><p>Synthetic document</p><script>' + action + '</script>' });
+        deliveredDocuments++;
+        if (!bound) {
+          bound = request.frame();
+          fixture.bind(request, origin + '/document#SYNTHETIC_PRIVATE_OPTIONS');
+        }
+      });
+      await context.routeWebSocket(/.*/, socket => socket.close());
+      const page = await context.newPage();
+      fixture = boundDocumentWorkerFixture(page, performance.now() + 10000, { context });
+      const before = deliveredDocuments;
+      await page.goto(origin + '/page', { waitUntil: 'load', timeout: 5000 });
+      await wait(() => fixture.generation() === 1);
+      if (['history', 'hash'].includes(currentKind)) {
+        await wait(() => fixture.output().security_bound_document_continuity === 'same');
+      }
+      // Only local fixture settling; production teardown itself is executed unchanged below.
       await new Promise(resolve => setImmediate(resolve));
-      observer.close(); await new Promise(resolve => setImmediate(resolve));
-      await bound.evaluate(() => true); await new Promise(resolve => setImmediate(resolve));
-      observer.finish(); current = null;
-      return observer.evidence();
-    };
-    await prepare();
-    await bound.evaluate(() => history.replaceState({ ...history.state, synthetic: true }, ''));
-    await wait(() => stopped);
-    let facts = await settle();
-    if (facts.security_bound_navigation_original_relation !== 'exact_repeat'
-        || facts.security_bound_navigation_previous_relation !== 'exact_repeat'
-        || facts.security_bound_document_reference !== 'captured_before_stop'
-        || facts.security_bound_document_continuity !== 'same'
-        || facts.security_bound_document_cleanup !== 'complete') throw new Error('Local same-Document proof unavailable.');
-    await prepare(); const before = gets;
-    await bound.evaluate(() => location.reload()).catch(() => {}); await wait(() => stopped && gets > before);
-    facts = await settle();
-    if (facts.security_bound_navigation_original_relation !== 'exact_repeat'
-        || facts.security_bound_document_continuity === 'same' || gets !== before + 1) {
-      throw new Error('Identical-URL reload gained continuity.');
+      await fixture.finish(); context = null;
+      const outputs = [fixture.output(), fixture.output(true)].map(sanitizeBoundDocumentFixture);
+      for (const facts of outputs) {
+        if (facts.security_source_first_stop !== 'bound_navigated'
+            || facts.security_bound_navigation_original_relation !== (currentKind === 'hash' ? 'fragment_only_change' : 'exact_repeat')
+            || facts.financial_permission !== false || /SYNTHETIC_PRIVATE/u.test(JSON.stringify(facts))) {
+          throw new Error('Local production navigation guard or redaction changed.');
+        }
+        if (['history', 'hash'].includes(currentKind)
+            && (facts.security_bound_document_reference !== 'captured_before_stop'
+              || facts.security_bound_document_continuity !== 'same'
+              || facts.security_bound_document_cleanup !== 'complete')) {
+          throw new Error('Local production same-Document proof unavailable.');
+        }
+        if (currentKind === 'reload' && facts.security_bound_document_continuity === 'same') {
+          throw new Error('Local production reload gained continuity.');
+        }
+      }
+      if (deliveredDocuments !== before + (currentKind === 'reload' ? 2 : 1)) {
+        throw new Error('Local production fixture changed its document budget.');
+      }
     }
-    await prepare();
-    await bound.evaluate(() => { location.hash = 'changed'; }); await wait(() => stopped);
-    facts = await settle();
-    if (facts.security_bound_navigation_original_relation !== 'fragment_only_change'
-        || facts.security_bound_document_continuity !== 'same') throw new Error('Local hash distinction unavailable.');
     if (forbidden !== 0 || websocket !== 0 || proxy.counts.externalConnected !== 0) {
       throw new Error('Local document fixture crossed its boundary.');
     }
     return { security_native_document_observations_verified: true, security_identical_url_reload_withheld: true,
       security_startup_repeat_observed: true, security_changed_hash_still_closes: true,
+      security_production_document_wiring_verified: true, security_document_php_projection_verified: true,
       security_document_fixture_forbidden_hits: 0, security_document_fixture_external_connections: 0 };
   } finally {
-    observer?.close();
     if (context) await context.close(); if (browser) await browser.close();
-    observer?.finish(); if (proxy) await proxy.close();
+    if (proxy) await proxy.close();
     for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve));
   }
 }
@@ -1050,4 +1124,5 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { smoke, riskSmoke, instrumentSecuritySmoke, boundDocumentSmoke };
+module.exports = { smoke, riskSmoke, instrumentSecuritySmoke, boundDocumentSmoke,
+  boundDocumentWorkerFixture, sanitizeBoundDocumentFixture };

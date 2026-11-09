@@ -902,3 +902,96 @@ test('a synchronous repeat before baseline invocation earns no native capture', 
   assert.equal(f.observer.evidence().security_bound_document_reference, 'not_established');
   assert.equal(f.observer.evidence().security_bound_document_continuity, 'not_captured');
 });
+
+const { boundDocumentWorkerFixture, sanitizeBoundDocumentFixture } = require('./hosted-smoke.cjs');
+async function wiredDocumentScenario(kind = 'same', source) {
+  const handlers = {}, trace = [], main = {}, url = 'https://fixture.invalid/document#SYNTHETIC_PRIVATE_OPTIONS';
+  let captures = 0, comparisons = 0, disposals = 0, release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const privateError = new Error();
+  for (const key of ['message', 'stack', 'name']) Object.defineProperty(privateError, key, {
+    get() { assert.fail('A native failure inspected private Error data.'); },
+  });
+  const handle = { asElement() { return this; }, dispose: async () => { disposals++; trace.push('native_dispose'); } };
+  const frame = { url: () => url, evaluateHandle: async () => {
+    captures++; trace.push('native_capture'); return kind.startsWith('late') ? pending : handle;
+  }, evaluate: async (_expression, prior) => {
+    comparisons++; trace.push('native_compare'); assert.equal(prior, handle);
+    if (kind === 'unavailable') throw privateError;
+    return kind !== 'replacement';
+  } };
+  const page = { on: (event, callback) => { handlers[event] = callback; }, mainFrame: () => main };
+  const fixture = boundDocumentWorkerFixture(page, 1000, { trace, source, clock: () => 0,
+    context: { close: async () => { trace.push('context_close'); } } });
+  handlers.framenavigated(main);
+  fixture.bind({ frame: () => frame }, url);
+  handlers.framenavigated(frame);
+  await flushDocuments(); await flushDocuments();
+  if (kind === 'generation') handlers.framenavigated(main);
+  handlers.framenavigated(frame);
+  await flushDocuments(); await flushDocuments();
+  if (kind === 'late') { release(handle); await flushDocuments(); await flushDocuments(); }
+  await fixture.finish();
+  const outputs = [fixture.output(), fixture.output(true)].map(value => sanitizeBoundDocumentFixture({
+    ...value, raw_url: url, raw_document: 'SYNTHETIC_PRIVATE_DOM',
+  }));
+  if (kind === 'late_cleanup') {
+    release(handle); await flushDocuments(); await flushDocuments();
+    assert.deepEqual(fixture.output().security_bound_document_cleanup, outputs[0].security_bound_document_cleanup);
+  }
+  assert.doesNotMatch(JSON.stringify(outputs), /SYNTHETIC_PRIVATE/u);
+  return { outputs, trace, captures, comparisons, disposals, generation: fixture.generation() };
+}
+
+function assertWiredSame(result) {
+  assert.equal(result.captures, 1); assert.equal(result.comparisons, 1); assert.equal(result.disposals, 1);
+  assert.equal(result.generation, 1);
+  for (const value of result.outputs) {
+    assert.equal(value.security_source_first_stop, 'bound_navigated');
+    assert.equal(value.security_bound_navigation_original_relation, 'exact_repeat');
+    assert.equal(value.security_bound_document_reference, 'captured_before_stop');
+    assert.equal(value.security_bound_document_continuity, 'same');
+    assert.equal(value.security_bound_document_cleanup, 'complete');
+    assert.equal(value.financial_permission, false);
+  }
+  assert.deepEqual(result.trace.slice(result.trace.indexOf('security_close:bound_navigated'),
+    result.trace.indexOf('native_compare') + 1), ['security_close:bound_navigated', 'pending_close', 'native_compare']);
+  assert.ok(result.trace.indexOf('native_capture') > result.trace.indexOf('render_delivered'));
+  assert.ok(result.trace.indexOf('directory_removed') > result.trace.indexOf('context_close'));
+  assert.equal(result.outputs[0].result, 'blocked'); assert.equal(result.outputs[1].result, 'fail');
+}
+
+test('extracted production bind, handlers, teardown and both outputs reach the real PHP sanitizer', async () => {
+  assertWiredSame(await wiredDocumentScenario());
+});
+for (const kind of ['replacement', 'unavailable', 'generation', 'late', 'late_cleanup']) {
+  test('production Document wiring preserves closed proof and cleanup: ' + kind, async () => {
+    const result = await wiredDocumentScenario(kind);
+    assert.equal(result.captures, 1); assert.equal(result.disposals, 1);
+    assert.equal(result.comparisons, ['generation', 'late', 'late_cleanup'].includes(kind) ? 0 : 1);
+    for (const value of result.outputs) {
+      assert.equal(value.financial_permission, false);
+      assert.equal(value.security_bound_document_continuity, kind === 'replacement' ? 'different'
+        : kind === 'unavailable' ? 'unavailable' : 'not_captured');
+      assert.equal(value.security_bound_document_cleanup, kind === 'late_cleanup' ? 'unavailable' : 'complete');
+    }
+  });
+}
+
+for (const [name, before, after] of [
+  ['bind', 'documents?.bind(boundFrame, renderFrameSource, sourceGeneration);', ''],
+  ['failure output', '    ...(documents?.evidence() ?? {}),\n', ''],
+  ['success output', '...(documents?.evidence() ?? {}), ...cardChoice.evidence()', '...cardChoice.evidence()'],
+  ['finish', '    documents?.finish();', ''],
+  ['bind generation', 'documents?.bind(boundFrame, renderFrameSource, sourceGeneration);',
+    'documents?.bind(boundFrame, renderFrameSource, sourceGeneration + 1);'],
+  ['event generation', 'documents.navigated(frame, sourceGeneration, stoppedBound);',
+    'documents.navigated(frame, sourceGeneration + 1, stoppedBound);'],
+]) {
+  test('production-wiring acceptance detects removal or miswiring: ' + name, async () => {
+    const original = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+    assert.equal(original.split(before).length, 2);
+    const result = await wiredDocumentScenario('same', original.replace(before, after));
+    assert.throws(() => assertWiredSame(result), assert.AssertionError);
+  });
+}
