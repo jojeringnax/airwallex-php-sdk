@@ -290,6 +290,44 @@ final class SubscriptionWebhookProbeTest extends TestCase
         self::assertTrue($profileFound);
     }
 
+    /** @return iterable<string,array{WebhookManagementProfile}> */
+    public static function cancelledDurationProfiles(): iterable
+    {
+        yield 'DEFAULT' => [WebhookManagementProfile::DefaultLogin];
+        yield 'ACCOUNT' => [WebhookManagementProfile::Account];
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>
+     */
+    private static function cancelledWithZeroDuration(array $data): array
+    {
+        $data['duration'] = ['period' => 0, 'period_unit' => 'MONTH'];
+        return $data;
+    }
+
+    #[DataProvider('cancelledDurationProfiles')]
+    public function testCancelledZeroMonthDurationCompletesSdkSignedPairAndOwnedCleanup(
+        WebhookManagementProfile $profile,
+    ): void {
+        $this->http = new SubscriptionWebhookFixtureProvider(managementProfile: $profile);
+        $this->http->cancelledProjection = self::cancelledWithZeroDuration(...);
+        $safe = $this->observe(managementProfile: $profile);
+        self::assertSame('pass', $safe['result'], json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertTrue($safe['sdk_pending_verified']);
+        self::assertTrue($safe['sdk_cancelled_verified']);
+        self::assertTrue($safe['signed_resource_pair_observed']);
+        self::assertTrue($safe['version_pair_verified']);
+        self::assertTrue($safe['typed_owner_verified']);
+        self::assertTrue($safe['registration_deleted']);
+        self::assertTrue($safe['price_archived']);
+        self::assertTrue($safe['product_archived']);
+        self::assertFalse($safe['reconciliation_required']);
+        self::assertSame(1, $this->http->count('/api/v1/billing/subscriptions/SYNTHETIC_PRIVATE_SUBSCRIPTION/cancel'));
+        self::assertLessThanOrEqual(39, count($this->http->requests));
+    }
+
     public function testAccountRegistrationFailureNeverFallsBackOrStartsProducer(): void
     {
         $this->http = new SubscriptionWebhookFixtureProvider(managementProfile: WebhookManagementProfile::Account);

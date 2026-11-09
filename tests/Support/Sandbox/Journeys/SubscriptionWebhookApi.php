@@ -223,7 +223,9 @@ final class SubscriptionWebhookApi
             !self::fields($data, $expected + ['status' => $status,
             'cancel_at_period_end' => false, 'enable_automatic_tax' => false])
             || !self::integer($data['days_until_due'] ?? null, 30)
-            || !self::period($data['recurring'] ?? null) || !self::period($data['duration'] ?? null)
+            || !self::period($data['recurring'] ?? null)
+            || (!self::period($data['duration'] ?? null)
+                && !($status === 'CANCELLED' && self::period($data['duration'] ?? null, 0)))
             || !is_string($start) || !is_string($data['starts_at'] ?? null)
             || !self::sameInstant($start, $data['starts_at'])
         ) {
@@ -243,10 +245,10 @@ final class SubscriptionWebhookApi
         return $value === $expected || $value === (string) $expected;
     }
 
-    private static function period(mixed $value): bool
+    private static function period(mixed $value, int $expected = 1): bool
     {
         return is_array($value) && count($value) === 2 && ($value['period_unit'] ?? null) === 'MONTH'
-            && self::integer($value['period'] ?? null, 1);
+            && self::integer($value['period'] ?? null, $expected);
     }
 
     public static function sameInstant(string $left, string $right): bool

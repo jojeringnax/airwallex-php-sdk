@@ -167,7 +167,9 @@ final class SubscriptionWebhookEvidence
             $nativeTerms = $literalObject instanceof stdClass && ($literalObject->days_until_due ?? null) === 30
                 && ($literalObject->duration ?? null) instanceof stdClass
                 && ($literalObject->recurring ?? null) instanceof stdClass
-                && ($literalObject->duration->period ?? null) === 1 && ($literalObject->recurring->period ?? null) === 1
+                && (($literalObject->duration->period ?? null) === 1
+                    || ($kind === 'cancelled' && ($literalObject->duration->period ?? null) === 0))
+                && ($literalObject->recurring->period ?? null) === 1
                 && is_string($literalObject->duration->period_unit ?? null)
                 && is_string($literalObject->recurring->period_unit ?? null)
                 && is_string($literalObject->starts_at ?? null);
