@@ -319,7 +319,7 @@ async function smoke(playwright, instrumentOnly = false) {
       }
       return { security_shared_runner_verified: true, security_normal_window_unchanged: true,
         security_financial_permission: false, security_external_connections: 0,
-        ...await instrumentSecuritySmoke(playwright) };
+        ...await instrumentSecuritySmoke(playwright), ...await boundDocumentSmoke(playwright) };
     }
     const result = await inspect(origin + '/page?s=SYNTHETIC_SECRET', playwright, origin, async (page, context) => {
       if (await page.evaluate(() => window.fixtureLoaded) !== true) throw new Error('Local smoke failed.');
@@ -939,6 +939,107 @@ async function instrumentSecuritySmoke(playwright) {
   }
 }
 
+async function boundDocumentSmoke(playwright) {
+  const { BoundDocumentObservations } = require('./hosted-browser.cjs');
+  const { egressProxy } = require('./hosted-policy.cjs');
+  let browser, context, proxy, observer, current, generation = 0, stopped = false;
+  let bound, gets = 0, forbidden = 0, websocket = 0;
+  const sockets = new Set(), navigations = [];
+  const server = http.createServer((request, response) => {
+    const pathname = new URL(request.url, 'http://fixture.invalid').pathname;
+    response.setHeader('Content-Type', 'text/html');
+    if (pathname === '/page') response.end('<!doctype html><iframe id="bound" src="/document#base"></iframe>');
+    else if (pathname === '/document') {
+      gets++;
+      response.end('<!doctype html><p>Synthetic document</p><script>if(history.state==null||history.state.idx==null)history.replaceState({...history.state,idx:0},"")</script>');
+    } else { forbidden++; response.writeHead(500).end(); }
+  });
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  server.on('upgrade', (_request, socket) => { websocket++; socket.destroy(); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const wait = async predicate => {
+    const end = performance.now() + 2000;
+    while (!predicate()) {
+      if (performance.now() >= end) throw new Error('Local document observation unavailable.');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  };
+  try {
+    proxy = await egressProxy({ allowsAuthority: (host, port) => host === '127.0.0.1'
+      && String(port) === String(server.address().port), allowsHttp: value => new URL(value).origin === origin });
+    browser = await playwright.chromium.launch({ channel: 'chrome', headless: true,
+      proxy: { server: proxy.server, bypass: '' }, args: ['--proxy-bypass-list=<-loopback>', '--disable-quic'],
+      env: { PATH: process.env.PATH ?? '', LANG: 'en_US.UTF-8' } });
+    context = await browser.newContext({ ignoreHTTPSErrors: false, serviceWorkers: 'block' });
+    await context.route('**/*', route => {
+      const request = route.request(), url = new URL(request.url());
+      return url.origin === origin && ['/page', '/document'].includes(url.pathname)
+        && request.method() === 'GET' && request.resourceType() === 'document'
+        ? route.continue() : route.abort('blockedbyclient');
+    });
+    await context.routeWebSocket(/.*/, socket => socket.close());
+    const page = await context.newPage();
+    page.on('frameattached', frame => { if (frame.parentFrame() === page.mainFrame() && !bound) bound = frame; });
+    page.on('framenavigated', frame => {
+      if (frame !== bound) return;
+      navigations.push(frame.url());
+      if (current) { generation++; stopped = true; current.navigated(frame, generation, true); }
+    });
+    await page.goto(origin + '/page', { waitUntil: 'load', timeout: 5000 });
+    await wait(() => navigations.length >= 2);
+    if (navigations[0] !== navigations[1]) throw new Error('Synthetic startup did not repeat its original URL.');
+    const prepare = async () => {
+      generation = 0; stopped = false;
+      observer = new BoundDocumentObservations(performance.now() + 10000, () => generation);
+      observer.bind(bound, bound.url(), generation); observer.navigated(bound, generation, false);
+      // Queue a separate public round trip after the capture invocation, then flush its response callbacks.
+      await new Promise(resolve => setImmediate(resolve)); await bound.evaluate(() => true);
+      await new Promise(resolve => setImmediate(resolve)); current = observer;
+    };
+    const settle = async () => {
+      await new Promise(resolve => setImmediate(resolve)); await bound.evaluate(() => true);
+      await new Promise(resolve => setImmediate(resolve));
+      observer.close(); await new Promise(resolve => setImmediate(resolve));
+      await bound.evaluate(() => true); await new Promise(resolve => setImmediate(resolve));
+      observer.finish(); current = null;
+      return observer.evidence();
+    };
+    await prepare();
+    await bound.evaluate(() => history.replaceState({ ...history.state, synthetic: true }, ''));
+    await wait(() => stopped);
+    let facts = await settle();
+    if (facts.security_bound_navigation_original_relation !== 'exact_repeat'
+        || facts.security_bound_navigation_previous_relation !== 'exact_repeat'
+        || facts.security_bound_document_reference !== 'captured_before_stop'
+        || facts.security_bound_document_continuity !== 'same'
+        || facts.security_bound_document_cleanup !== 'complete') throw new Error('Local same-Document proof unavailable.');
+    await prepare(); const before = gets;
+    await bound.evaluate(() => location.reload()).catch(() => {}); await wait(() => stopped && gets > before);
+    facts = await settle();
+    if (facts.security_bound_navigation_original_relation !== 'exact_repeat'
+        || facts.security_bound_document_continuity === 'same' || gets !== before + 1) {
+      throw new Error('Identical-URL reload gained continuity.');
+    }
+    await prepare();
+    await bound.evaluate(() => { location.hash = 'changed'; }); await wait(() => stopped);
+    facts = await settle();
+    if (facts.security_bound_navigation_original_relation !== 'fragment_only_change'
+        || facts.security_bound_document_continuity !== 'same') throw new Error('Local hash distinction unavailable.');
+    if (forbidden !== 0 || websocket !== 0 || proxy.counts.externalConnected !== 0) {
+      throw new Error('Local document fixture crossed its boundary.');
+    }
+    return { security_native_document_observations_verified: true, security_identical_url_reload_withheld: true,
+      security_startup_repeat_observed: true, security_changed_hash_still_closes: true,
+      security_document_fixture_forbidden_hits: 0, security_document_fixture_external_connections: 0 };
+  } finally {
+    observer?.close();
+    if (context) await context.close(); if (browser) await browser.close();
+    observer?.finish(); if (proxy) await proxy.close();
+    for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve));
+  }
+}
+
 if (require.main === module) {
   (async () => {
     if (process.argv.length !== 3 || !path.isAbsolute(process.argv[2])) throw new Error('Local smoke failed.');
@@ -949,4 +1050,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { smoke, riskSmoke, instrumentSecuritySmoke };
+module.exports = { smoke, riskSmoke, instrumentSecuritySmoke, boundDocumentSmoke };

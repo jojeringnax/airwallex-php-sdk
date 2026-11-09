@@ -662,9 +662,9 @@ function eventTrace(reference, actions) {
   const source = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
   const start = source.indexOf('      let mainNavigations = 0;'), end = source.indexOf('    page.setDefaultTimeout', start);
   const body = reference ? referenceEvents : source.slice(start, end).slice(0, source.slice(start, end).lastIndexOf('    }'));
-  const run = new Function('page', 'boundFrame', 'security', 'pendingLoader', `let sourceGeneration = 0;
+  const run = new Function('page', 'boundFrame', 'security', 'pendingLoader', 'documents', `let sourceGeneration = 0;
     ${body} return () => sourceGeneration;`);
-  const generation = run(page, boundFrame, security, pendingLoader);
+  const generation = run(page, boundFrame, security, pendingLoader, { navigated: () => {} });
   for (const action of actions) handlers[action === 'detach' ? 'framedetached' : 'framenavigated'](action === 'main' ? main : boundFrame);
   const first = scope.firstStop(); scope.close('teardown');
   return { trace, generation: generation(), first, final: scope.firstStop() };
@@ -688,3 +688,217 @@ for (const fault of ['matched', 'http_status', 'hash', 'fulfill']) {
     assert.equal(Object.keys(after.afterClose).some(key => key.startsWith('security_')), false);
   });
 }
+
+const { BoundDocumentObservations } = require('./hosted-browser.cjs');
+const flushDocuments = () => new Promise(resolve => setImmediate(resolve));
+function documentFixture(deadline = 1000) {
+  let generation = 0, now = 0, captures = 0, probes = 0, disposals = 0;
+  let url = 'https://fixture.invalid/#/elements/dropin?options=SYNTHETIC_PRIVATE';
+  let capture, probe, disposal;
+  const handle = { asElement() { return this; }, dispose: async () => { disposals++; if (disposal) return disposal; } };
+  const frame = { url: () => url, evaluateHandle: () => { captures++; return capture ?? handle; },
+    evaluate: () => { probes++; return probe ?? true; } };
+  const observer = new BoundDocumentObservations(deadline, () => generation, () => now);
+  observer.bind(frame, url, generation);
+  return { observer, frame, handle, first: () => observer.navigated(frame, generation, false),
+    stop: () => { generation++; observer.navigated(frame, generation, true); },
+    generation: () => { generation++; }, time: value => { now = value; }, url: value => { url = value; },
+    capture: value => { capture = value; }, probe: value => { probe = value; }, disposal: value => { disposal = value; },
+    counts: () => ({ captures, probes, disposals }) };
+}
+
+test('passive document proof is one-shot, private and independent of the unchanged closing guard', async () => {
+  const f = documentFixture(); f.first(); await flushDocuments(); f.stop(); await flushDocuments();
+  assert.deepEqual(f.observer.evidence(), {
+    security_bound_navigation_original_relation: 'exact_repeat', security_bound_navigation_previous_relation: 'exact_repeat',
+    security_bound_document_reference: 'captured_before_stop', security_bound_document_continuity: 'same',
+  });
+  f.observer.close(); await flushDocuments(); f.observer.finish(); f.observer.finish();
+  assert.equal(f.observer.evidence().security_bound_document_cleanup, 'complete');
+  assert.deepEqual(f.counts(), { captures: 1, probes: 1, disposals: 1 });
+  assert.doesNotMatch(JSON.stringify(f.observer.evidence()), /SYNTHETIC_PRIVATE/u);
+  assert.doesNotMatch(util.inspect(f.observer), /fixture\.invalid|SYNTHETIC_PRIVATE/u);
+  assert.throws(() => JSON.stringify(f.observer));
+});
+
+for (const value of [false, 'true', null, 1]) {
+  test('native continuity requires a boolean result: ' + String(value), async () => {
+    const f = documentFixture(); f.probe(Promise.resolve(value)); f.first(); await flushDocuments();
+    f.stop(); await flushDocuments(); await f.observer.finish();
+    assert.equal(f.observer.evidence().security_bound_document_continuity, value === false ? 'different' : 'unavailable');
+    assert.equal(f.counts().disposals, 1);
+  });
+}
+
+test('first navigation relationships remain fixed through later changes and detachment generations', async () => {
+  const f = documentFixture(); f.first(); await flushDocuments();
+  f.url('https://fixture.invalid/#/elements/dropin?options=OTHER_PRIVATE'); f.stop(); await flushDocuments();
+  const first = f.observer.evidence();
+  assert.equal(first.security_bound_navigation_original_relation, 'fragment_only_change');
+  assert.equal(first.security_bound_navigation_previous_relation, 'fragment_only_change');
+  f.url('https://other.invalid/PRIVATE'); f.stop(); f.generation();
+  assert.deepEqual(f.observer.evidence(), first); await f.observer.finish();
+});
+
+test('previous and original relationships differ without inventing an original Document', async () => {
+  const f = documentFixture(); f.url('https://fixture.invalid/#/different'); f.first(); f.stop();
+  assert.equal(f.observer.evidence().security_bound_navigation_original_relation, 'fragment_only_change');
+  assert.equal(f.observer.evidence().security_bound_navigation_previous_relation, 'exact_repeat');
+  assert.equal(f.observer.evidence().security_bound_document_continuity, 'not_captured');
+  assert.equal(f.counts().captures, 0); await f.observer.finish();
+});
+
+for (const value of ['https://fixture.invalid/next', 'about:blank', 'https://fixture.invalid/\nPRIVATE',
+  'bad PRIVATE', null, 'https://fixture.invalid/' + 'PRIVATE'.repeat(4000)]) {
+  test('passive URL relationship is bounded and exposes no components: ' + (value === null ? 'null' : value.length), async () => {
+    const f = documentFixture(); f.first(); await flushDocuments(); f.url(value); f.stop(); await flushDocuments();
+    const expected = typeof value === 'string' && (value.endsWith('/next') || value === 'about:blank')
+      ? 'nonfragment_change' : 'unavailable';
+    assert.equal(f.observer.evidence().security_bound_navigation_original_relation, expected);
+    assert.doesNotMatch(JSON.stringify(f.observer.evidence()), /PRIVATE|fixture\.invalid/u);
+    await f.observer.finish();
+  });
+}
+
+test('cached URL and native evaluation failures inspect no Error properties', async () => {
+  const f = documentFixture(), privateError = new Error();
+  for (const field of ['message', 'name', 'stack']) Object.defineProperty(privateError, field, {
+    get() { assert.fail('Private Error property read.'); },
+  });
+  f.first(); await flushDocuments();
+  f.frame.url = () => { throw privateError; };
+  f.frame.evaluate = () => { throw privateError; };
+  f.stop(); await flushDocuments(); await f.observer.finish();
+  assert.equal(f.observer.evidence().security_bound_navigation_original_relation, 'unavailable');
+  assert.equal(f.observer.evidence().security_bound_document_continuity, 'unavailable');
+});
+
+for (const fault of ['stop', 'generation', 'close', 'case_deadline', 'operation_deadline']) {
+  test('a late baseline is unusable and disposed once: ' + fault, async () => {
+    const f = documentFixture(); let release;
+    f.capture(new Promise(resolve => { release = resolve; })); f.first(); await flushDocuments();
+    if (fault === 'stop') f.stop();
+    if (fault === 'generation') f.generation();
+    if (fault === 'close') f.observer.close();
+    if (fault === 'case_deadline') f.time(1001);
+    if (fault === 'operation_deadline') f.time(501);
+    release(f.handle); await flushDocuments();
+    if (fault !== 'stop' && fault !== 'close') f.stop();
+    await f.observer.finish();
+    assert.notEqual(f.observer.evidence().security_bound_document_continuity, 'same');
+    assert.equal(f.counts().probes, 0); assert.equal(f.counts().disposals, 1);
+  });
+}
+
+for (const fault of ['generation', 'close', 'deadline']) {
+  test('a late native comparison cannot upgrade unknown continuity: ' + fault, async () => {
+    const f = documentFixture(); let release;
+    f.probe(new Promise(resolve => { release = resolve; })); f.first(); await flushDocuments();
+    f.stop(); await flushDocuments();
+    if (fault === 'generation') f.generation();
+    if (fault === 'close') f.observer.close();
+    if (fault === 'deadline') f.time(501);
+    release(true); await flushDocuments(); await f.observer.finish();
+    assert.equal(f.observer.evidence().security_bound_document_continuity, 'unavailable');
+    assert.equal(f.counts().disposals, 1);
+  });
+}
+
+for (const fault of ['capture', 'comparison', 'disposal']) {
+  test('no-progress native work remains bounded with once-only late cleanup: ' + fault, async () => {
+    const f = documentFixture(15); let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    if (fault === 'capture') f.capture(pending);
+    if (fault === 'comparison') f.probe(pending);
+    if (fault === 'disposal') f.disposal(pending);
+    f.first(); await flushDocuments(); f.stop(); await flushDocuments();
+    const start = performance.now(); await f.observer.finish();
+    assert.ok(performance.now() - start < 500);
+    assert.equal(f.observer.evidence().security_bound_document_cleanup, 'unavailable');
+    const before = f.observer.evidence(); release(fault === 'capture' ? f.handle : true);
+    await flushDocuments(); await f.observer.finish();
+    assert.deepEqual(f.observer.evidence(), before); assert.equal(f.counts().disposals, 1);
+  });
+}
+
+test('replacement frames, missing handles and pre-invocation shutdown cannot establish a reference', async () => {
+  for (const fault of ['replacement', 'missing', 'closed_before_call', 'expired_before_call']) {
+    const f = documentFixture();
+    if (fault === 'replacement') {
+      const other = { url: () => assert.fail('Unbound URL was observed.') };
+      f.observer.bind(other, 'https://other.invalid/', 0); f.observer.navigated(other, 0, false);
+    }
+    if (fault === 'missing') f.capture(Promise.resolve(undefined));
+    f.first();
+    if (fault === 'closed_before_call') f.observer.close();
+    if (fault === 'expired_before_call') f.time(1001);
+    await flushDocuments(); f.stop(); await flushDocuments(); await f.observer.finish();
+    if (fault !== 'replacement') assert.notEqual(f.observer.evidence().security_bound_document_continuity, 'same');
+    if (fault === 'closed_before_call' || fault === 'expired_before_call') assert.equal(f.counts().captures, 0);
+    if (fault === 'replacement') assert.equal(f.counts().captures, 1);
+  }
+});
+
+for (const role of ['capture', 'comparison']) {
+  test('a no-progress native read expires without relying on teardown: ' + role, async () => {
+    const f = documentFixture(10); let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    if (role === 'capture') f.capture(pending); else f.probe(pending);
+    f.first(); await flushDocuments();
+    if (role === 'comparison') f.stop();
+    await new Promise(resolve => setTimeout(resolve, 25));
+    if (role === 'capture') f.stop();
+    assert.notEqual(f.observer.evidence().security_bound_document_continuity, 'same');
+    f.observer.finish(); const before = f.observer.evidence();
+    release(role === 'capture' ? f.handle : true); await flushDocuments();
+    assert.deepEqual(f.observer.evidence(), before); assert.equal(f.counts().disposals, 1);
+  });
+}
+
+test('a native null/non-Node handle is never adopted as the original Document', async () => {
+  const f = documentFixture(); let disposed = 0;
+  f.capture(Promise.resolve({ asElement: () => null, dispose: async () => { disposed++; } }));
+  f.first(); await flushDocuments(); f.stop(); await flushDocuments(); f.observer.finish();
+  assert.equal(f.observer.evidence().security_bound_document_reference, 'unavailable');
+  assert.equal(f.observer.evidence().security_bound_document_continuity, 'not_captured');
+  assert.equal(f.counts().probes, 0); assert.equal(disposed, 1);
+});
+
+test('baseline invocation sends only public origin/path, never private fragment or options', async () => {
+  const f = documentFixture();
+  f.frame.evaluateHandle = (_expression, expected) => {
+    assert.equal(expected, 'https://fixture.invalid/');
+    assert.doesNotMatch(expected, /PRIVATE|options|#/u); return f.handle;
+  };
+  f.first(); await flushDocuments(); f.stop(); await flushDocuments(); f.observer.finish();
+  assert.equal(f.observer.evidence().security_bound_document_continuity, 'same');
+});
+
+test('a changed non-fragment location receives no original Document argument', async () => {
+  const f = documentFixture(); f.first(); await flushDocuments(); f.url('https://other.invalid/PRIVATE');
+  f.stop(); await flushDocuments(); f.observer.finish();
+  assert.equal(f.observer.evidence().security_bound_navigation_original_relation, 'nonfragment_change');
+  assert.equal(f.observer.evidence().security_bound_document_continuity, 'unavailable');
+  assert.equal(f.counts().probes, 0); assert.equal(f.counts().disposals, 1);
+});
+
+for (const fault of ['generation', 'close', 'deadline', 'location']) {
+  test('a stale native comparison is withheld before invocation: ' + fault, async () => {
+    const f = documentFixture(); f.first(); await flushDocuments(); f.stop();
+    if (fault === 'generation') f.generation();
+    if (fault === 'close') f.observer.close();
+    if (fault === 'deadline') f.time(501);
+    if (fault === 'location') f.url('https://other.invalid/PRIVATE');
+    await flushDocuments(); f.observer.finish();
+    assert.equal(f.counts().probes, 0);
+    assert.equal(f.observer.evidence().security_bound_document_continuity, 'unavailable');
+    assert.equal(f.counts().disposals, 1);
+  });
+}
+
+test('a synchronous repeat before baseline invocation earns no native capture', async () => {
+  const f = documentFixture(); f.first(); f.stop(); await flushDocuments(); f.observer.finish();
+  assert.equal(f.counts().captures, 0); assert.equal(f.counts().probes, 0);
+  assert.equal(f.observer.evidence().security_bound_document_reference, 'not_established');
+  assert.equal(f.observer.evidence().security_bound_document_continuity, 'not_captured');
+});

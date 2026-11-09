@@ -120,6 +120,79 @@ final class HostedBrowserTest extends TestCase
         }
     }
 
+    public function testPassiveBoundDocumentFactsAreNativeClosedAndAbsentFromLegacyOutput(): void
+    {
+        $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false];
+        $facts = ['security_bound_navigation_original_relation' => 'fragment_only_change',
+            'security_bound_navigation_previous_relation' => 'exact_repeat',
+            'security_bound_document_reference' => 'captured_before_stop',
+            'security_bound_document_continuity' => 'same', 'security_bound_document_cleanup' => 'complete'];
+        $safe = HostedBrowser::sanitize(
+            $base + $facts + ['raw_url' => 'PRIVATE_URL', 'raw_document' => 'PRIVATE_DOM'],
+            true,
+            true,
+            true,
+            true,
+            mode: HostedSecurityMode::InstrumentSecurity
+        );
+        foreach ($facts as $key => $value) {
+            self::assertSame($value, $safe[$key]);
+        }
+        self::assertFalse($safe['financial_permission']);
+        self::assertSame('fail', $safe['result']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertSame(
+            HostedBrowser::sanitize($base, true, true, true, true),
+            HostedBrowser::sanitize($base + $facts, true, true, true, true)
+        );
+        foreach (['PRIVATE_URL', str_repeat('PRIVATE', 5000), true, 1, null, [], new \stdClass()] as $bad) {
+            $safe = HostedBrowser::sanitize(
+                $base + array_fill_keys(array_keys($facts), $bad),
+                true,
+                true,
+                true,
+                true,
+                mode: HostedSecurityMode::InstrumentSecurity
+            );
+            foreach (array_keys($facts) as $key) {
+                self::assertArrayNotHasKey($key, $safe);
+            }
+        }
+    }
+
+    public function testSameDocumentCannotBeReportedWithoutAnEstablishedOriginalReference(): void
+    {
+        $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false];
+        foreach (['not_established', 'unavailable', 'PRIVATE', true, null] as $reference) {
+            $safe = HostedBrowser::sanitize(
+                $base + ['security_bound_document_reference' => $reference,
+                    'security_bound_document_continuity' => 'same'],
+                true,
+                true,
+                true,
+                true,
+                mode: HostedSecurityMode::InstrumentSecurity
+            );
+            self::assertArrayNotHasKey('security_bound_document_continuity', $safe);
+        }
+        $safe = HostedBrowser::sanitize(
+            $base + ['security_bound_document_reference' => 'not_established',
+                'security_bound_document_continuity' => 'not_captured',
+                'security_bound_document_cleanup' => 'unavailable'],
+            true,
+            true,
+            true,
+            true,
+            mode: HostedSecurityMode::InstrumentSecurity
+        );
+        self::assertSame('not_captured', $safe['security_bound_document_continuity']);
+        self::assertSame('unavailable', $safe['security_bound_document_cleanup']);
+    }
+
     public function testRejectedInstrumentSourceOrStateNeverSpawnsAChild(): void
     {
         foreach (['source_book', 'poisoned_state'] as $fault) {

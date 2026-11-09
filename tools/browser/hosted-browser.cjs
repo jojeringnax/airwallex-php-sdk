@@ -20,6 +20,159 @@ class PreflightFailure extends Error {
 }
 let startupPhase = 'configuration';
 
+// Passive Instrument-only facts. Nothing in this object grants admission or reopens a scope.
+class BoundDocumentObservations {
+  #deadline; #generation; #clock; #frame; #original; #previous; #publicBase;
+  #bindingGeneration; #baselineGeneration; #handle; #baseline = 'not_captured';
+  #started = false; #stopped = false; #closed = false; #sealed = false; #captureSettled = false;
+  #comparisonSettled = true;
+  #tasks = new Set(); #disposals = new Map(); #safe = {};
+  #closedSignal; #closeSignal;
+  constructor(deadline, generation, clock = () => performance.now()) {
+    if (!Number.isFinite(deadline) || typeof generation !== 'function' || typeof clock !== 'function') {
+      throw new Error('Invalid passive document observation.');
+    }
+    this.#deadline = deadline; this.#generation = generation; this.#clock = clock;
+    this.#closedSignal = new Promise(resolve => { this.#closeSignal = resolve; });
+  }
+  static #url(value) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 20000 || /[\u0000-\u0020\u007f]/u.test(value)) return null;
+    try { return new URL(value).href === value ? value : null; } catch { return null; }
+  }
+  static #relation(current, prior) {
+    if (current === null || prior === null) return 'unavailable';
+    if (current === prior) return 'exact_repeat';
+    return current.split('#', 1)[0] === prior.split('#', 1)[0] ? 'fragment_only_change' : 'nonfragment_change';
+  }
+  static #usable(handle) {
+    try { return handle !== null && typeof handle === 'object' && typeof handle.dispose === 'function'
+      && typeof handle.asElement === 'function' && handle.asElement() === handle; }
+    catch { return false; }
+  }
+  bind(frame, source, generation) {
+    if (this.#closed || this.#frame !== undefined) return;
+    this.#frame = frame; this.#original = BoundDocumentObservations.#url(source); this.#previous = null;
+    this.#bindingGeneration = generation;
+    if (this.#original !== null) {
+      const url = new URL(this.#original); this.#publicBase = url.origin + url.pathname;
+    }
+  }
+  #source(frame) {
+    try { return BoundDocumentObservations.#url(frame.url()); } catch { return null; }
+  }
+  #sameBase(frame) {
+    const current = this.#source(frame);
+    return current !== null && this.#original !== null && current.split('#', 1)[0] === this.#original.split('#', 1)[0];
+  }
+  async #within(promise, deadline) {
+    const remaining = deadline - this.#clock();
+    if (remaining <= 0) { void Promise.resolve(promise).catch(() => {}); return { ok: false }; }
+    let timer;
+    try {
+      const result = await Promise.race([Promise.resolve(promise).then(value => ({ ok: true, value }), () => ({ ok: false })),
+        new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false }), remaining); }),
+        this.#closedSignal.then(() => ({ ok: false }))]);
+      return this.#clock() < deadline ? result : { ok: false };
+    } finally { clearTimeout(timer); }
+  }
+  #track(promise) {
+    this.#tasks.add(promise);
+    void promise.then(() => this.#tasks.delete(promise), () => this.#tasks.delete(promise));
+  }
+  #dispose(handle) {
+    if (handle === null || handle === undefined) return Promise.resolve(true);
+    if (!this.#disposals.has(handle)) {
+      const state = { settled: false, ok: false, promise: null };
+      state.promise = Promise.resolve().then(() => handle.dispose()).then(() => {
+        state.settled = true; state.ok = true; return true;
+      }, () => { state.settled = true; return false; });
+      this.#disposals.set(handle, state);
+    }
+    return this.#disposals.get(handle).promise;
+  }
+  #capture(frame, generation) {
+    this.#started = true; this.#baseline = 'pending'; this.#baselineGeneration = generation;
+    const deadline = Math.min(this.#deadline, this.#clock() + 500);
+    const promise = Promise.resolve().then(() => {
+      if (this.#closed || this.#stopped || this.#generation() !== generation || this.#clock() >= deadline
+          || this.#source(frame) !== this.#original) return null;
+      // Only the already-qualified public origin/path enters the expression, never its private fragment/options.
+      return frame.evaluateHandle(expected => {
+        try { const url = new URL(document.URL); return url.origin + url.pathname === expected ? document : null; }
+        catch { return null; }
+      }, this.#publicBase);
+    });
+    // Late native objects still get one disposal, even after the bounded observer has sealed its output.
+    void promise.then(handle => {
+      this.#captureSettled = true;
+      if (this.#closed || this.#stopped || this.#sealed) void this.#dispose(handle);
+    }, () => { this.#captureSettled = true; });
+    this.#track((async () => {
+      const result = await this.#within(promise, deadline);
+      if (!result.ok || !BoundDocumentObservations.#usable(result.value) || this.#closed || this.#stopped
+          || this.#generation() !== generation || this.#sealed || this.#clock() >= deadline
+          || this.#source(frame) !== this.#original) {
+        if (!this.#sealed) this.#baseline = 'unavailable';
+        void promise.then(handle => this.#dispose(handle), () => {});
+        return;
+      }
+      this.#handle = result.value; this.#baseline = 'ready';
+    })());
+  }
+  navigated(frame, generation, stoppedBound) {
+    if (this.#closed || frame !== this.#frame) return;
+    const current = this.#source(frame);
+    if (stoppedBound && !this.#stopped) {
+      this.#stopped = true;
+      this.#safe.security_bound_navigation_original_relation = BoundDocumentObservations.#relation(current, this.#original);
+      this.#safe.security_bound_navigation_previous_relation = BoundDocumentObservations.#relation(current, this.#previous);
+      const ready = this.#baseline === 'ready' && this.#baselineGeneration + 1 === generation;
+      this.#safe.security_bound_document_reference = ready ? 'captured_before_stop'
+        : this.#baseline === 'unavailable' ? 'unavailable' : 'not_established';
+      this.#safe.security_bound_document_continuity = ready ? 'unavailable' : 'not_captured';
+      if (ready) {
+        const deadline = Math.min(this.#deadline, this.#clock() + 500);
+        this.#comparisonSettled = false;
+        const promise = Promise.resolve().then(() => {
+          if (this.#closed || this.#generation() !== generation || this.#clock() >= deadline || !this.#sameBase(frame)) return null;
+          return frame.evaluate(prior => prior === document, this.#handle);
+        });
+        void promise.then(() => { this.#comparisonSettled = true; }, () => { this.#comparisonSettled = true; });
+        this.#track((async () => {
+          try {
+            const result = await this.#within(promise, deadline);
+            if (!this.#closed && !this.#sealed && this.#generation() === generation && this.#clock() < deadline
+                && this.#sameBase(frame) && result.ok
+                && typeof result.value === 'boolean') {
+              this.#safe.security_bound_document_continuity = result.value ? 'same' : 'different';
+            }
+          } finally { void this.#dispose(this.#handle); }
+        })());
+      }
+    }
+    this.#previous = current;
+    if (!this.#started && !this.#stopped && current !== null && current === this.#original
+        && generation === this.#bindingGeneration) this.#capture(frame, generation);
+  }
+  close() {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#closeSignal();
+    if (this.#handle !== undefined) void this.#dispose(this.#handle);
+  }
+  finish() {
+    if (this.#sealed) return;
+    this.close();
+    if (this.#started) {
+      this.#safe.security_bound_document_cleanup = this.#tasks.size === 0 && this.#captureSettled && this.#comparisonSettled
+        && [...this.#disposals.values()].every(value => value.settled && value.ok) ? 'complete' : 'unavailable';
+    }
+    this.#sealed = true;
+  }
+  evidence() { return { ...this.#safe }; }
+  toJSON() { throw new Error('Private document observations cannot be serialized.'); }
+}
+
 async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false, observeCurrencySettings = false, selectCard = false, cardRuntime = null, instrumentSecurity = false) {
   const instrumentCaseDeadline = performance.now() + 40000;
   if (typeof instrumentSecurity !== 'boolean' || (instrumentSecurity
@@ -144,6 +297,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   const risk = new HostedRiskObserver(security ?? policy, riskJournal, playwright, riskFixture, caseDeadline, instrumentSecurity);
   const pendingLoader = instrumentSecurity ? new PendingLoader(risk, security) : null;
   let sourceGeneration = 0;
+  const documents = instrumentSecurity ? new BoundDocumentObservations(caseDeadline, () => sourceGeneration) : null;
   let instrumentMainDocumentSeen = false;
   const securityClosed = () => shuttingDown || (security !== null && security.admissionRemaining() <= 0);
   const watchdog = setTimeout(() => {
@@ -254,7 +408,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           counts.controller_replays_blocked++;
         }
       }
-      let renderFrame = false;
+      let renderFrame = false, renderFrameSource;
       if (render && request.resourceType() === 'document' && action === 'block') {
         policy.noteRenderCheck('document_candidates');
         if (request.method() !== 'GET') {
@@ -275,7 +429,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
                 try { source = await element.getAttribute('src'); }
                 catch { policy.noteRenderCheck('source_unavailable'); }
                 finally { await element.dispose(); }
-                if (source !== undefined) renderFrame = policy.claimRenderFrame(source);
+                if (source !== undefined) {
+                  renderFrame = policy.claimRenderFrame(source);
+                  if (renderFrame) renderFrameSource = source;
+                }
               }
               action = renderFrame ? 'allow' : 'block';
             }
@@ -600,6 +757,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             if (renderFrame) {
               policy.markRenderFrameDelivered();
               boundFrame = request.frame();
+              documents?.bind(boundFrame, renderFrameSource, sourceGeneration);
             }
             if (response.status() === 200 && request.resourceType() === 'document'
                 && request.url() === initial && request.frame() === mainPage.mainFrame()) policy.startParentCountryWindow();
@@ -637,14 +795,17 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       let mainNavigations = 0;
       const frameNavigations = new WeakMap();
       page.on('framenavigated', frame => {
+        let stoppedBound = false;
         if (frame === page.mainFrame() && ++mainNavigations > 1) {
           sourceGeneration++; security.close('main_navigated'); pendingLoader.close();
         } else if (frame === boundFrame && (frameNavigations.get(frame) ?? 0) > 0) {
           sourceGeneration++; security.close('bound_navigated'); pendingLoader.close();
+          stoppedBound = true;
         }
         if (frame === page.mainFrame() || frame === boundFrame) {
           frameNavigations.set(frame, (frameNavigations.get(frame) ?? 0) + 1);
         }
+        documents.navigated(frame, sourceGeneration, stoppedBound);
       });
       page.on('framedetached', frame => { if (frame === boundFrame) {
         sourceGeneration++; security.close('bound_detached'); pendingLoader.close();
@@ -750,6 +911,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads(), parentCountry.drainSent(), currencySettings.drainSent()]); }
     shuttingDown = true;
     security?.close(); pendingLoader?.close();
+    documents?.close();
     policy.closeNormalWindow();
     clearTimeout(normalWindowTimer);
     clearTimeout(watchdog);
@@ -770,6 +932,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await Promise.all([...pending]);
     if (proxy) await track(() => proxy.close(), 'shutdown_proxy');
     await track(() => fs.rm(directory, { recursive: true, force: true }), 'shutdown_directory');
+    documents?.finish();
   }
   if (failed || result === undefined) throw new PreflightFailure({
     result: 'fail', reason: 'browser_preflight_failed', card_entry_enabled: false,
@@ -779,8 +942,9 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}),
     ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
     ...risk.evidence(), ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}),
+    ...(documents?.evidence() ?? {}),
   });
-  return { ...result, ...counts, ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}), ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}), ...(documents?.evidence() ?? {}), ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
@@ -830,7 +994,7 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { inspect, instrumentMain: async () => {
+module.exports = { inspect, BoundDocumentObservations, instrumentMain: async () => {
   try { await main(true); } catch (error) {
     const safe = error instanceof PreflightFailure ? error.evidence() : { result: 'fail',
       reason: 'browser_preflight_failed', card_entry_enabled: false, browser_failure_phase: startupPhase };
