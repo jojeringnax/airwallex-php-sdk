@@ -73,6 +73,7 @@ final class Rules
             $added = 0;
             $items = self::itemObjects($body['items'] ?? []);
             foreach ($items as $item) {
+                self::prorationValue($item);
                 if (isset($item['id'])) {
                     if (array_key_exists('price_id', $item)) {
                         Validator::fail();
@@ -160,12 +161,18 @@ final class Rules
      */
     private static function price(#[SensitiveParameter] array $body): void
     {
-        // Provisional FLAT/PER_UNIT subset; review #64 owns non-metered tiered model scope.
         $model = $body['pricing_model'] ?? 'PER_UNIT';
-        if (!in_array($model, ['FLAT', 'PER_UNIT'], true)) {
+        if (!in_array($model, ['FLAT', 'PER_UNIT', 'VOLUME', 'GRADUATED'], true)) {
             Validator::fail();
         }
-        self::requireKeys($body, [$model === 'FLAT' ? 'flat_amount' : 'unit_amount']);
+        if (in_array($model, ['VOLUME', 'GRADUATED'], true)) {
+            self::priceTiers($body);
+        } else {
+            self::requireKeys($body, [$model === 'FLAT' ? 'flat_amount' : 'unit_amount']);
+            if (array_key_exists('tiers', $body)) {
+                Validator::fail();
+            }
+        }
         if (isset($body['billing_type']) && !in_array($body['billing_type'], ['IN_ADVANCE', 'IN_ARREARS'], true)) {
             Validator::fail();
         }
@@ -176,6 +183,52 @@ final class Rules
             ) {
                 Validator::fail();
             }
+        }
+    }
+
+    /** @param array<string,mixed> $body */
+    private static function priceTiers(#[SensitiveParameter] array $body): void
+    {
+        self::requireKeys($body, ['tiers']);
+        $tiers = self::itemObjects($body['tiers']);
+        if ($tiers === [] || array_key_exists('lot', $body)) {
+            Validator::fail();
+        }
+        $lower = '0';
+        foreach ($tiers as $index => $tier) {
+            if ($index === count($tiers) - 1) {
+                if (array_key_exists('upper_bound', $tier)) {
+                    Validator::fail();
+                }
+            } else {
+                $upper = $tier['upper_bound'] ?? null;
+                if (!is_string($upper) || Validator::compareDecimals($upper, $lower) <= 0) {
+                    Validator::fail();
+                }
+                $lower = $upper;
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $item */
+    private static function prorationValue(#[SensitiveParameter] array $item): void
+    {
+        if (($item['proration_mode'] ?? null) !== 'CUSTOM') {
+            if (array_key_exists('proration_value', $item)) {
+                Validator::fail();
+            }
+            return;
+        }
+        $amounts = $item['proration_value'] ?? null;
+        if (
+            !is_array($amounts)
+            || (!array_key_exists('charge_amount', $amounts) && !array_key_exists('credit_amount', $amounts))
+        ) {
+            Validator::fail();
+        }
+        foreach ($amounts as $amount) {
+            // Decimal syntax validation only: the provider schema keeps these values as JSON strings.
+            Validator::validate($amount, ['type' => 'number'], []);
         }
     }
 
@@ -220,7 +273,8 @@ final class Rules
     {
         foreach ($value as $key => $child) {
             if (
-                in_array($key, ['discounts', 'meter_id', 'metered', 'tiers', 'rate_card_id', 'rate_card_version',
+                ($key === 'metered' && $child !== false)
+                || in_array($key, ['discounts', 'meter_id', 'rate_card_id', 'rate_card_version',
                 'enable_automatic_tax', 'default_tax_percent', 'tax_percent'], true)
             ) {
                 Validator::fail();

@@ -79,7 +79,7 @@ Replace every placeholder before provider use. `loginAccountId` is optional when
 
 Each operation must use the environment and owner stored with its opaque resource ID. Authenticate the local buyer before looking up that mapping. An incoming resource/account ID is not authorization. Billing fails locally on a delegated Payments client; login-account selection and delegation cannot be combined. For both accepted Billing models, use the [two-account walkthroughs](connected-account-contracts.md#two-account-walkthroughs) and their evidence gates.
 
-The [client reference](client-configuration.md) covers token expiration/reuse, optional PSR-16 caching, immutable contexts and transport configuration. Default token storage is in memory. The optional authentication clock/retry configuration is a delegated provisional interface decision under [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60); its timing units and bounded read-retry policy are documented there. SDK API requests pin `x-api-version: 2026-08-21`; configure webhook subscriptions to the same version separately.
+The [client reference](client-configuration.md) covers token expiration/reuse, optional PSR-16 caching, immutable contexts and transport configuration. Default token storage is in memory. It also defines the accepted optional authentication clock and opt-in read retries for [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60), including timing units and the default one-attempt policy. SDK API requests pin `x-api-version: 2026-08-21`; configure webhook subscriptions to the same version separately.
 
 ## Run a recipe for the intended workflow
 
@@ -87,11 +87,12 @@ The files below return a closure or a map of named application recipes. Load the
 
 | Workflow | Runnable example and action |
 | --- | --- |
-| Monthly flat and per-seat prices | [Catalogue](../examples/billing-catalogue.php) |
+| Flat, per-seat, Volume and Graduated prices | [Catalogue](../examples/billing-catalogue.php) |
 | Billing customer profile and hosted subscription checkout | [Customer/signup](../examples/billing-customer-checkout.php) |
 | Reconcile hosted instrument setup after browser return | [Setup reconciliation](../examples/billing-reconcile-setup.php) |
 | Verified card instrument to Billing Source and direct Subscription | [Card linkage](../examples/billing-card-subscription.php), with stored buyer/collector mapping |
 | Provider trial/future start, quantity and plan changes | [Billing lifecycle](../examples/billing-lifecycle.php): `start_trial`, `change_quantity`, `replace_price` |
+| Custom charge/credit amounts or a chosen proration calculation time | [Proration](../examples/billing-proration.php): choose `custom_adjustment` or `prorate_at` |
 | Scheduled ending or immediate permanent cancellation | [Billing lifecycle](../examples/billing-lifecycle.php): choose `schedule_end` or `cancel_now` |
 | Preserve and restore an applicable finite end | [Billing lifecycle](../examples/billing-lifecycle.php): `schedule_finite_end`, then separately authorized `restore_finite_end`, with private durable snapshot callbacks |
 | Replace an expired source and observe recovery | [Billing lifecycle](../examples/billing-lifecycle.php): `replace_source_and_observe` |
@@ -141,7 +142,7 @@ For `refund`, supply a decimal amount for a partial refund or omit it for the re
 
 ## Preserve payload precision and list context
 
-Pass money as major-unit strings, such as `['amount' => '19.90', 'currency' => 'EUR']`. Implemented schemas encode those fields as exact JSON numbers. PHP floats are rejected at decimal positions. Returned monetary/decimal values remain strings, including integer-valued amounts; additional numeric fields retain their original numeric text. Perform application arithmetic with an exact decimal representation. The SDK does not calculate tax, proration, rounding or currency conversion.
+Pass money as major-unit strings, such as `['amount' => '19.90', 'currency' => 'EUR']`. Implemented schemas encode those fields as exact JSON numbers where the provider declares numbers. Subscription Update custom charge/credit amounts remain JSON strings; [financial controls](billing-resources.md#choosing-subscription-financial-controls) owns their conditional rules. PHP floats are rejected at decimal positions. Returned monetary/decimal values remain strings, including integer-valued amounts; additional numeric fields retain their original numeric text. Perform application arithmetic with an exact decimal representation. The SDK does not calculate tax, proration, rounding or currency conversion.
 
 Omission differs from explicit null, and `false`, zero, an empty string, an empty array and an empty object have distinct meanings. Send null only where the operation permits it; use `new stdClass()` for an empty JSON object. Read [payload precision](payload-precision.md) and the [shared representation contract](consumer-interfaces.md#interface-conventions) before transforming provider arrays.
 
@@ -178,14 +179,9 @@ After timeout or transport failure, a mutation might already have reached Airwal
 
 API and webhook contracts target **2026-08-21**. The [compatibility policy](release-policy.md) describes the planned `0.1.0` cut and pre-1.0 changes; that target is not a published release or a full-scope validation result. Repository deterministic checks execute the exact recipe files and provider-shaped failure fixtures. Actual account activation, method acceptance, collection linkage and delivery behavior require their separate sandbox/provider evidence.
 
-The accepted scope and deferrals live in [planning](planning.md). OAuth, hosted Billing portal sessions, subscription pause/reactivation, discounts/coupons, tax calculation and usage-based Billing are outside the implemented initial boundary. Non-metered tiered Price models have a separate provisional coverage decision; they are not automatically classified as usage billing.
+The accepted scope and deferrals live in [planning](planning.md). OAuth, hosted Billing portal sessions, subscription pause/reactivation, discounts/coupons, tax calculation and usage-based Billing are outside the implemented initial boundary. Nonmetered Volume and Graduated Price creation is included; see [tier rules and examples](billing-resources.md#price-models-and-tiers).
 
-Keep these delegated provisional choices visible before adopting the development interface:
-
-| Review | Current implementation choice |
-| --- | --- |
-| [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60) | Optional authentication clock and configurable bounded read retries |
-| [#64](https://github.com/jojeringnax/airwallex-php-sdk/issues/64) | Initial `FLAT`/`PER_UNIT` creation subset pending non-metered tiered-model review |
+The [release readiness reference](release-readiness.md#known-limitations-and-upgrade-guidance) records the remaining provisional boundaries.
 
 The [connected-account evidence](connected-account-contracts.md#evidence-still-needed), [Billing capability gates](billing-capabilities.md#delivery-and-evidence-gates) and [webhook integration evidence](webhook-contracts.md#remaining-integration-evidence) remain authoritative. [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) owns the applicable sandbox journeys/provider confirmations; [#44](https://github.com/jojeringnax/airwallex-php-sdk/issues/44) owns the release-readiness/artifact record. Blocked or unavailable evidence is not a pass. In particular, organization Billing authorization, eligible collection-account linkage, source-change collection, schedule reversal, document renewal and matching-version actual webhook envelopes are not established by synthetic examples.
 

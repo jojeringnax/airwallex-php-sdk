@@ -17,20 +17,24 @@ use GuzzleHttp\Promise\FulfilledPromise;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SourceEvidence;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
+use Jojeringnax\Airwallex\Tests\Support\HistoricalAlipayTestCase;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliationTransport;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliationCommand;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession;
 use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UriInterface;
 
-final class AlipayConsentReconciliationTransportTest extends TestCase
+#[RunTestsInSeparateProcesses]
+#[PreserveGlobalState(false)]
+final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTestCase
 {
     /** @var array{base:string,state:string,credentials:string,prior:string,provider:AlipayConsentReconciliationProvider,
      * marker:string,customer:string,consent:string} */
@@ -39,6 +43,7 @@ final class AlipayConsentReconciliationTransportTest extends TestCase
 
     protected function setUp(): void
     {
+        parent::setUp();
         $this->fixture = AlipayConsentReconciliationTest::fixture();
         $configuration = Configuration::load('sandbox', $this->fixture['credentials']);
         $session = new SandboxSession($configuration, 'account', $this->fixture['provider']);
