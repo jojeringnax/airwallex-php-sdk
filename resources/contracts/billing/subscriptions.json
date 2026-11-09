@@ -768,12 +768,40 @@
                         "enum": [
                           "NONE",
                           "PRORATED",
-                          "ALL"
+                          "ALL",
+                          "CUSTOM"
                         ],
                         "x-enumDescriptions": {
                           "NONE": "Does not issue any credit for the Subscription's unused time, only charges the new fee from the next billing cycle.",
                           "PRORATED": "Calculates and applies the proration on both credit and fee for the Subscription's unused time.",
-                          "ALL": "Credits the full remaining creditable amount of the old items for the current billing cycle, and charges the full amount of the new items for the current billing cycle."
+                          "ALL": "Credits the full remaining creditable amount of the old items for the current billing cycle, and charges the full amount of the new items for the current billing cycle.",
+                          "CUSTOM": "Uses merchant-specified charge and credit amounts instead of calculating prorated amounts automatically."
+                        }
+                      },
+                      "proration_value": {
+                        "type": "object",
+                        "description": "Custom charge and credit amounts in the billing currency. Required when `proration_mode` is `CUSTOM` and must be omitted otherwise. At least one of `charge_amount` or `credit_amount` must be provided.",
+                        "anyOf": [
+                          {
+                            "required": [
+                              "charge_amount"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "credit_amount"
+                            ]
+                          }
+                        ],
+                        "properties": {
+                          "charge_amount": {
+                            "type": "string",
+                            "description": "Base amount to charge for this item, expressed as a decimal string in the billing currency."
+                          },
+                          "credit_amount": {
+                            "type": "string",
+                            "description": "Base amount to credit for this item, expressed as a decimal string in the billing currency."
+                          }
                         }
                       },
                       "quantity": {
@@ -847,6 +875,11 @@
                 "payment_source_id": {
                   "type": "string",
                   "description": "ID of the [Payment Source](/docs/api/billing/payment_sources) to pay for the subscription at each billing period. Required if `collection_method` is `AUTO_CHARGE`. If the payment_source_id is updated, the last failed invoice payment associated with this subscription will be retried immediately."
+                },
+                "proration_date": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Timestamp used to calculate prorations for the subscription update. Must fall within the current billing period. If omitted, no proration timestamp override is applied. To use the same proration calculation time as [Preview an Invoice](/docs/api/billing/invoices/preview), pass the same `proration_date` used in the preview."
                 },
                 "remaining_duration": {
                   "required": [
@@ -1140,6 +1173,21 @@
       "sdkPagination": true
     }
   },
+  "request_updates": [
+    {
+      "reviewed": "2026-11-09",
+      "operation": "updateSubscription",
+      "source": "https://www.airwallex.com/docs/api/billing/subscriptions",
+      "version": "2026-08-21",
+      "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+      "provider_md5": "2ba41cf5fc310712213aad98078c85be",
+      "fields": [
+        "items.proration_mode",
+        "items.proration_value",
+        "proration_date"
+      ]
+    }
+  ],
   "schemas": {
     "Subscription": {
       "required": [

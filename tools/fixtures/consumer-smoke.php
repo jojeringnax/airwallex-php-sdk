@@ -40,6 +40,7 @@ $mock = new MockHandler([
     new Response(200, [], '{"items":[],"page_after":"next-bookmark","page_before":null}'),
     new Response(201, [], '{"id":"synthetic-intent","amount":19.90,"unknown_numeric":12345678901234567890.123400}'),
     new Response(200, [], '{"items":[],"has_more":false}'),
+    new Response(200, [], '{"id":"synthetic-subscription","status":"ACTIVE"}'),
 ]);
 $handler = HandlerStack::create($mock);
 $handler->push(Middleware::history($history));
@@ -70,10 +71,17 @@ $expectConsumer($intent['amount'] === '19.90', 'Installed Payments amount lost p
 $expectConsumer($intent['unknown_numeric'] === '12345678901234567890.123400', 'Unknown numeric text was changed.');
 $paymentPage = $client->payments()->paymentIntents()->list(['page_num' => 0, 'page_size' => 10]);
 $expectConsumer($paymentPage === ['items' => [], 'has_more' => false], 'Payments envelope changed.');
+$subscription = $client->billing()->subscriptions()->update('synthetic-subscription', [
+    'request_id' => 'persisted-proration-action',
+    'items' => [['id' => 'synthetic-item', 'quantity' => 3, 'proration_mode' => 'CUSTOM',
+        'proration_value' => ['charge_amount' => '100.000000000000000001', 'credit_amount' => '20.00']]],
+    'proration_date' => '2028-02-29T10:15:30.123456789+01:00',
+]);
+$expectConsumer($subscription['id'] === 'synthetic-subscription', 'Installed Subscription Update failed.');
 if (!is_array($history)) {
     throw new RuntimeException('Consumer request capture is unavailable.');
 }
-$expectConsumer(count($history) === 5, 'Installed SDK did not reuse its authentication token.');
+$expectConsumer(count($history) === 6, 'Installed SDK did not reuse its authentication token.');
 $requests = [];
 foreach ($history as $entry) {
     $request = is_array($entry) ? ($entry['request'] ?? null) : null;
@@ -88,6 +96,13 @@ $intentBody = (string) $requests[3]->getBody();
 $expectConsumer(str_contains($intentBody, '"amount":19.90'), 'Exact financial wire number was changed.');
 $expectConsumer(str_contains($intentBody, '"opaque_id":"00123"'), 'Opaque metadata was converted to a number.');
 $expectConsumer(str_contains((string) $requests[4]->getUri(), 'page_num=0'), 'Zero-based paging was changed.');
+$expectConsumer(
+    (string) $requests[5]->getBody() === '{"request_id":"persisted-proration-action","items":[{'
+        . '"id":"synthetic-item","quantity":3,"proration_mode":"CUSTOM","proration_value":{'
+        . '"charge_amount":"100.000000000000000001","credit_amount":"20.00"}}],'
+        . '"proration_date":"2028-02-29T10:15:30.123456789+01:00"}',
+    'Installed custom amounts or calculation timestamp changed.'
+);
 $body = '{"name":"future.event","amount":19.9000,"nested":{},"list":[]}';
 $timestamp = '1700000000000';
 $signature = hash_hmac('sha256', $timestamp . $body, 'synthetic-webhook-secret');

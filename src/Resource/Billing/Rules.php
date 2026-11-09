@@ -73,6 +73,7 @@ final class Rules
             $added = 0;
             $items = self::itemObjects($body['items'] ?? []);
             foreach ($items as $item) {
+                self::prorationValue($item);
                 if (isset($item['id'])) {
                     if (array_key_exists('price_id', $item)) {
                         Validator::fail();
@@ -206,6 +207,28 @@ final class Rules
                 }
                 $lower = $upper;
             }
+        }
+    }
+
+    /** @param array<string, mixed> $item */
+    private static function prorationValue(#[SensitiveParameter] array $item): void
+    {
+        if (($item['proration_mode'] ?? null) !== 'CUSTOM') {
+            if (array_key_exists('proration_value', $item)) {
+                Validator::fail();
+            }
+            return;
+        }
+        $amounts = $item['proration_value'] ?? null;
+        if (
+            !is_array($amounts)
+            || (!array_key_exists('charge_amount', $amounts) && !array_key_exists('credit_amount', $amounts))
+        ) {
+            Validator::fail();
+        }
+        foreach ($amounts as $amount) {
+            // Decimal syntax validation only: the provider schema keeps these values as JSON strings.
+            Validator::validate($amount, ['type' => 'number'], []);
         }
     }
 

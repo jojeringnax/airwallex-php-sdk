@@ -92,6 +92,7 @@ The files below return a closure or a map of named application recipes. Load the
 | Reconcile hosted instrument setup after browser return | [Setup reconciliation](../examples/billing-reconcile-setup.php) |
 | Verified card instrument to Billing Source and direct Subscription | [Card linkage](../examples/billing-card-subscription.php), with stored buyer/collector mapping |
 | Provider trial/future start, quantity and plan changes | [Billing lifecycle](../examples/billing-lifecycle.php): `start_trial`, `change_quantity`, `replace_price` |
+| Custom charge/credit amounts or a chosen proration calculation time | [Proration](../examples/billing-proration.php): choose `custom_adjustment` or `prorate_at` |
 | Scheduled ending or immediate permanent cancellation | [Billing lifecycle](../examples/billing-lifecycle.php): choose `schedule_end` or `cancel_now` |
 | Preserve and restore an applicable finite end | [Billing lifecycle](../examples/billing-lifecycle.php): `schedule_finite_end`, then separately authorized `restore_finite_end`, with private durable snapshot callbacks |
 | Replace an expired source and observe recovery | [Billing lifecycle](../examples/billing-lifecycle.php): `replace_source_and_observe` |
@@ -141,7 +142,7 @@ For `refund`, supply a decimal amount for a partial refund or omit it for the re
 
 ## Preserve payload precision and list context
 
-Pass money as major-unit strings, such as `['amount' => '19.90', 'currency' => 'EUR']`. Implemented schemas encode those fields as exact JSON numbers. PHP floats are rejected at decimal positions. Returned monetary/decimal values remain strings, including integer-valued amounts; additional numeric fields retain their original numeric text. Perform application arithmetic with an exact decimal representation. The SDK does not calculate tax, proration, rounding or currency conversion.
+Pass money as major-unit strings, such as `['amount' => '19.90', 'currency' => 'EUR']`. Implemented schemas encode those fields as exact JSON numbers where the provider declares numbers. Subscription Update custom charge/credit amounts remain JSON strings; [financial controls](billing-resources.md#choosing-subscription-financial-controls) owns their conditional rules. PHP floats are rejected at decimal positions. Returned monetary/decimal values remain strings, including integer-valued amounts; additional numeric fields retain their original numeric text. Perform application arithmetic with an exact decimal representation. The SDK does not calculate tax, proration, rounding or currency conversion.
 
 Omission differs from explicit null, and `false`, zero, an empty string, an empty array and an empty object have distinct meanings. Send null only where the operation permits it; use `new stdClass()` for an empty JSON object. Read [payload precision](payload-precision.md) and the [shared representation contract](consumer-interfaces.md#interface-conventions) before transforming provider arrays.
 
@@ -180,7 +181,7 @@ API and webhook contracts target **2026-08-21**. The [compatibility policy](rele
 
 The accepted scope and deferrals live in [planning](planning.md). OAuth, hosted Billing portal sessions, subscription pause/reactivation, discounts/coupons, tax calculation and usage-based Billing are outside the implemented initial boundary. Nonmetered Volume and Graduated Price creation is included; see [tier rules and examples](billing-resources.md#price-models-and-tiers).
 
-For remaining provisional boundaries, see [Billing resources](billing-resources.md#choosing-subscription-financial-controls) and [release readiness](release-readiness.md#known-limitations-and-upgrade-guidance).
+The [release readiness reference](release-readiness.md#known-limitations-and-upgrade-guidance) records the remaining provisional boundaries.
 
 The [connected-account evidence](connected-account-contracts.md#evidence-still-needed), [Billing capability gates](billing-capabilities.md#delivery-and-evidence-gates) and [webhook integration evidence](webhook-contracts.md#remaining-integration-evidence) remain authoritative. [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) owns the applicable sandbox journeys/provider confirmations; [#44](https://github.com/jojeringnax/airwallex-php-sdk/issues/44) owns the release-readiness/artifact record. Blocked or unavailable evidence is not a pass. In particular, organization Billing authorization, eligible collection-account linkage, source-change collection, schedule reversal, document renewal and matching-version actual webhook envelopes are not established by synthetic examples.
 
