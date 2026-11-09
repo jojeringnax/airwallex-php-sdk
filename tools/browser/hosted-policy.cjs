@@ -175,6 +175,47 @@ function privateJson(body) {
   return data;
 }
 
+const readDenialReasons = Object.freeze({
+  method_config: Object.freeze(['admission_closed', 'bound_frame_unavailable', 'initiator_unavailable',
+    'initiator_not_bound', 'render_scope_unavailable', 'payer_not_delivered', 'frame_not_delivered',
+    'reference_unavailable', 'slot_consumed', 'request_shape', 'query_shape', 'header_client_secret',
+    'header_api_version', 'header_trace', 'header_content_type', 'header_client_source',
+    'header_extra_or_forbidden', 'header_device', 'header_tracker']),
+  customer: Object.freeze(['admission_closed', 'observation_disabled', 'initiator_unavailable', 'initiator_detached',
+    'initiator_not_bound', 'initiator_document_mismatch', 'payer_not_delivered', 'window_unavailable',
+    'frame_not_delivered', 'reference_unavailable', 'request_shape', 'resource_binding', 'query_shape',
+    'slot_consumed', 'header_extra_or_forbidden', 'header_origin', 'header_client_secret', 'header_api_version',
+    'header_content_type', 'header_client_source', 'header_trace', 'header_device', 'header_tracker']),
+  country: Object.freeze(['admission_closed', 'observation_disabled', 'initiator_unavailable', 'initiator_detached',
+    'initiator_not_bound', 'initiator_document_mismatch', 'payer_not_delivered', 'window_unavailable',
+    'frame_not_delivered', 'reference_unavailable', 'request_shape', 'slot_consumed',
+    'header_extra_or_forbidden', 'header_origin']),
+});
+
+// One route's constant labels only. A claim failure is not evidence until its final blocked disposition.
+class ReadDenial {
+  #role; #reason; #caller = 'initiator_unavailable'; #committed = false; #record;
+  constructor(role, record) { this.#role = role; this.#record = record; }
+  fail(role, reason) {
+    if (role === this.#role && this.#reason === undefined && readDenialReasons[role].includes(reason)) this.#reason = reason;
+    return null;
+  }
+  worker(reason) { return this.fail(this.#role, reason); }
+  roleIs(role) { return this.#role === role; }
+  caller(reason) {
+    if (['initiator_unavailable', 'initiator_detached', 'initiator_not_bound', 'initiator_document_mismatch'].includes(reason)) {
+      this.#caller = reason;
+    }
+  }
+  callerFailed() { return this.worker(this.#caller); }
+  commit() {
+    if (this.#committed) return;
+    this.#committed = true;
+    if (this.#reason !== undefined) this.#record(this.#role, this.#reason);
+  }
+  toJSON() { throw new Error('Private route diagnostic cannot be serialized.'); }
+}
+
 class HostedPolicy {
   #initial;
   #fixture;
@@ -223,6 +264,8 @@ class HostedPolicy {
   #frameDelivered = false;
   #configAttempted = false;
   #configMatched = false;
+  #readDenials = {};
+  #readDenialsCapped = false;
   #deniedReads = Object.fromEntries(deniedReadNames.map(name => [name, 0]));
   #renderChecks = Object.fromEntries(renderCheckNames.map(name => [name, 0]));
   constructor(initial, fixtureOrigin = null, expected = null, render = false, observeConfig = false, observeNormal = false, clock = () => performance.now(), observeParentCountry = false, observeCurrencySettings = false) {
@@ -432,13 +475,18 @@ class HostedPolicy {
     this.#frameDelivered = true;
   }
 
-  claimMethodConfig(value, method, type, headers, body = null) {
+  claimMethodConfig(value, method, type, headers, body = null, denial = null) {
+    const reject = reason => { denial?.fail('method_config', reason); return null; };
     const url = parse(value);
-    if (!this.#observeConfig || !this.renderEnabled() || !this.#payerDelivered || !this.#frameDelivered
-        || !this.#frameReference || this.#configAttempted || method !== 'GET'
-        || !['fetch', 'xhr'].includes(type) || body !== null || !url
+    if (!this.#observeConfig) return null;
+    if (!this.renderEnabled()) return reject('render_scope_unavailable');
+    if (!this.#payerDelivered) return reject('payer_not_delivered');
+    if (!this.#frameDelivered) return reject('frame_not_delivered');
+    if (!this.#frameReference) return reject('reference_unavailable');
+    if (this.#configAttempted) return reject('slot_consumed');
+    if (method !== 'GET' || !['fetch', 'xhr'].includes(type) || body !== null || !url
         || url.origin !== new URL(this.#initial).origin || url.pathname !== '/api/v1/pa/config/payment_method_types'
-        || url.hash || value !== url.origin + url.pathname + url.search) return null;
+        || url.hash || value !== url.origin + url.pathname + url.search) return reject('request_shape');
     const query = url.searchParams;
     const required = { page_num: '0', page_size: '200', active: 'true',
       transaction_currency: this.#expected.currency, __verification_methods: 'true' };
@@ -447,17 +495,19 @@ class HostedPolicy {
         || Object.entries(required).some(([key, val]) => query.get(key) !== val)
         || (query.has('country_code') && !/^[A-Z]{2}$/u.test(query.get('country_code')))
         || (query.has('payment_intent_id') && (typeof this.#frameReference.intent !== 'string'
-          || query.get('payment_intent_id') !== this.#frameReference.intent))) return null;
-    if (headers['client-secret'] !== this.#frameReference.secret || headers['x-api-version'] !== '2024-06-14'
-        || !/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')
-        || headers['content-type'] !== 'application/json' || headers['x-client-ip-source'] !== 'awx-checkout'
-        || Object.keys(headers).some(key => key.startsWith('x-')
+          || query.get('payment_intent_id') !== this.#frameReference.intent))) return reject('query_shape');
+    if (headers['client-secret'] !== this.#frameReference.secret) return reject('header_client_secret');
+    if (headers['x-api-version'] !== '2024-06-14') return reject('header_api_version');
+    if (!/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')) return reject('header_trace');
+    if (headers['content-type'] !== 'application/json') return reject('header_content_type');
+    if (headers['x-client-ip-source'] !== 'awx-checkout') return reject('header_client_source');
+    if (Object.keys(headers).some(key => key.startsWith('x-')
           && !['x-api-version', 'x-client-ip-source', 'x-device-type', 'x-cloud-trace-context'].includes(key))
         || ['authorization', 'x-auth-token', 'x-on-behalf-of', 'x-tax-region',
-          'x-tax-calculation-identifier', 'x-pan'].some(key => Object.hasOwn(headers, key))
-        || (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type']))
-        || (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'
-          || headers['awx-tracker'].length > 256 || /[^\x21-\x7e]/u.test(headers['awx-tracker'])))) return null;
+          'x-tax-calculation-identifier', 'x-pan'].some(key => Object.hasOwn(headers, key))) return reject('header_extra_or_forbidden');
+    if (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type'])) return reject('header_device');
+    if (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'
+        || headers['awx-tracker'].length > 256 || /[^\x21-\x7e]/u.test(headers['awx-tracker']))) return reject('header_tracker');
     this.#configAttempted = true; // Before any send: the browser helper's retry must remain denied.
     const outbound = { accept: 'application/json, text/plain, */*', cookie: '', referer: '',
       'client-secret': headers['client-secret'], 'content-type': 'application/json',
@@ -646,7 +696,8 @@ class HostedPolicy {
 
   closeNormalWindow() { this.#normalClosed = true; }
 
-  #normalHeaders(headers, role) {
+  #normalHeaders(headers, role, denial = null) {
+    const reject = reason => { denial?.worker(reason); return null; };
     const common = ['accept', 'accept-language', 'accept-encoding', 'host', 'connection', 'priority',
       'user-agent', 'origin', 'referer', 'cookie', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
       'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site'];
@@ -654,15 +705,19 @@ class HostedPolicy {
       'x-device-type', 'x-cloud-trace-context'];
     const allowed = [...common, ...(role === 'pa' ? pa : role === 'checkout_status' ? ['authorization']
       : role === 'currency_settings' ? ['client-secret'] : [])];
-    if (!headers || typeof headers !== 'object' || Object.keys(headers).some(key => !allowed.includes(key))
-        || (Object.hasOwn(headers, 'origin') && headers.origin !== new URL(this.#initial).origin)) return null;
+    if (!headers || typeof headers !== 'object' || Object.keys(headers).some(key => !allowed.includes(key))) {
+      return reject('header_extra_or_forbidden');
+    }
+    if (Object.hasOwn(headers, 'origin') && headers.origin !== new URL(this.#initial).origin) return reject('header_origin');
     if (role === 'pa') {
-      if (headers['client-secret'] !== this.#frameReference?.secret || headers['x-api-version'] !== '2024-06-14'
-          || headers['content-type'] !== 'application/json' || headers['x-client-ip-source'] !== 'awx-checkout'
-          || !/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')
-          || (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type']))
-          || (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'
-            || headers['awx-tracker'].length > 256 || /[^\x21-\x7e]/u.test(headers['awx-tracker'])))) return null;
+      if (headers['client-secret'] !== this.#frameReference?.secret) return reject('header_client_secret');
+      if (headers['x-api-version'] !== '2024-06-14') return reject('header_api_version');
+      if (headers['content-type'] !== 'application/json') return reject('header_content_type');
+      if (headers['x-client-ip-source'] !== 'awx-checkout') return reject('header_client_source');
+      if (!/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')) return reject('header_trace');
+      if (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type'])) return reject('header_device');
+      if (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'
+          || headers['awx-tracker'].length > 256 || /[^\x21-\x7e]/u.test(headers['awx-tracker']))) return reject('header_tracker');
       const result = { accept: 'application/json, text/plain, */*', cookie: '', referer: '' };
       for (const key of pa) if (Object.hasOwn(headers, key)) result[key] = headers[key];
       return result;
@@ -680,28 +735,37 @@ class HostedPolicy {
       ...(['country', 'parent_country'].includes(role) && Object.hasOwn(headers, 'origin') ? { origin: headers.origin } : {}) };
   }
 
-  claimNormalRead(value, method, type, headers, body, fromMain, fromBound) {
+  claimNormalRead(value, method, type, headers, body, fromMain, fromBound, denial = null) {
+    if (denial?.roleIs('method_config')) denial = null;
+    const reject = reason => { denial?.worker(reason); return null; };
     const url = parse(value);
-    if (!this.#observeNormal || !this.#payerDelivered || this.normalWindowRemaining() <= 0 || !url
-        || method !== 'GET' || !['fetch', 'xhr'].includes(type) || body !== null || url.hash
-        || value !== url.origin + url.pathname + url.search) return null;
+    if (!this.#observeNormal) return reject('observation_disabled');
+    if (!this.#payerDelivered) return reject('payer_not_delivered');
+    if (this.normalWindowRemaining() <= 0) return reject('window_unavailable');
+    if (!url || method !== 'GET' || !['fetch', 'xhr'].includes(type) || body !== null || url.hash
+        || value !== url.origin + url.pathname + url.search) return reject('request_shape');
     const origin = new URL(this.#initial).origin;
     let role;
     if (fromMain && url.origin === origin && url.pathname === '/billing/payer-web-api/checkout/status'
         && !url.search) role = 'checkout_status';
-    else if (fromBound && this.#frameDelivered && this.#frameReference) {
+    else if (fromBound) {
+      if (!this.#frameDelivered) return reject('frame_not_delivered');
+      if (!this.#frameReference) return reject('reference_unavailable');
       const customer = this.#frameReference.customer;
-      if (!/^[A-Za-z0-9_-]{1,200}$/u.test(customer)) return null;
-      if (url.origin === origin && url.pathname === '/api/v1/pa/customers/' + customer && !url.search) role = 'customer';
+      if (!/^[A-Za-z0-9_-]{1,200}$/u.test(customer)) return reject('reference_unavailable');
+      if (url.origin === origin && url.pathname === '/api/v1/pa/customers/' + customer
+          && (!url.search || reject('query_shape'))) role = 'customer';
       else if (url.origin === origin && url.pathname === '/api/v1/pa/payment_consents'
           && url.search.slice(1).split('&').sort().join('&')
             === ['customer_id=' + customer, 'status=VERIFIED', 'page_size=100'].sort().join('&')) role = 'consent_list';
       else if (url.origin === (this.#fixture ?? 'https://www.sandbox.airwallex.com')
           && url.pathname === '/country' && !url.search) role = 'country';
     }
-    if (!role || this.#normalAttempts[role] >= (role === 'checkout_status' ? 3 : 1)
-        || (role === 'checkout_status' && (this.#statusPoisoned || this.#statusBusy))) return null;
-    const outbound = this.#normalHeaders(headers, ['customer', 'consent_list'].includes(role) ? 'pa' : role);
+    else { denial?.callerFailed(); }
+    if (!role) return reject('resource_binding');
+    if (this.#normalAttempts[role] >= (role === 'checkout_status' ? 3 : 1)
+        || (role === 'checkout_status' && (this.#statusPoisoned || this.#statusBusy))) return reject('slot_consumed');
+    const outbound = this.#normalHeaders(headers, ['customer', 'consent_list'].includes(role) ? 'pa' : role, denial);
     if (outbound === null) return null;
     this.#normalAttempts[role]++;
     if (role === 'checkout_status') {
@@ -771,6 +835,27 @@ class HostedPolicy {
       normal_checkout_status_poisoned: this.#statusPoisoned } : {};
   }
 
+  readDenial(value, method, type) {
+    if (!this.#observeConfig || method !== 'GET' || !['xhr', 'fetch'].includes(type)) return null;
+    const url = parse(value);
+    if (!url) return null;
+    const countryOrigin = this.#fixture ?? 'https://www.sandbox.airwallex.com';
+    let role;
+    if (url.origin === countryOrigin && url.pathname === '/country' && !url.search && !url.hash
+        && value === url.origin + url.pathname) role = 'country';
+    else if (url.origin === new URL(this.#initial).origin) {
+      role = url.pathname === '/api/v1/pa/config/payment_method_types' ? 'method_config'
+        : /^\/api\/v1\/pa\/customers\/[^/]+$/u.test(url.pathname) ? 'customer' : null;
+    }
+    if (!role) return null;
+    return new ReadDenial(role, (family, reason) => {
+      this.#readDenials[family] ??= {};
+      const previous = this.#readDenials[family][reason] ?? 0;
+      this.#readDenials[family][reason] = Math.min(1000000, previous + 1);
+      if (previous >= 999999) this.#readDenialsCapped = true;
+    });
+  }
+
   noteDeniedRead(value, method, type) {
     if (!this.#observeConfig || method !== 'GET' || !['xhr', 'fetch'].includes(type)) return;
     const url = parse(value);
@@ -795,7 +880,10 @@ class HostedPolicy {
 
   methodEvidence() {
     return this.#observeConfig ? { method_config_requested: true, method_config_get_attempted: this.#configAttempted,
-      denied_read_families: { ...this.#deniedReads } } : {};
+      denied_read_families: { ...this.#deniedReads },
+      ...(Object.keys(this.#readDenials).length ? { read_denial_reasons: Object.fromEntries(
+        Object.entries(this.#readDenials).map(([role, reasons]) => [role, { ...reasons }])) } : {}),
+      ...(this.#readDenialsCapped ? { read_denial_counts_capped: true } : {}) } : {};
   }
 
   decide(value, method, type) {
@@ -1005,4 +1093,4 @@ async function egressProxy(policy, publicOnly = false) {
   };
 }
 
-module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, controllerAsset, renderCheckNames, deniedReadNames, assetMatches, publicAddress, publicConnectionTarget, sameAddress };
+module.exports = { HostedPolicy, egressProxy, parse, returnUrl, staticAssets, renderAssets, controllerAsset, renderCheckNames, deniedReadNames, assetMatches, publicAddress, publicConnectionTarget, sameAddress, readDenialReasons };

@@ -775,6 +775,75 @@ final class HostedBrowserTest extends TestCase
         self::assertArrayNotHasKey('denied_read_families', $safe);
     }
 
+    public function testSparseReadDenialsKeepOnlyPositiveClosedFactsAndPreserveAbsence(): void
+    {
+        $base = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+            'card_entry_enabled' => false];
+        self::assertArrayNotHasKey('read_denial_reasons', HostedBrowser::sanitize($base, true, true));
+        $input = $base + ['read_denial_reasons' => [
+            'method_config' => ['header_api_version' => 2, 'PRIVATE_REASON' => 'PRIVATE_SECRET'],
+            'customer' => [], 'country' => ['initiator_not_bound' => 1, 'header_client_secret' => 7],
+            'PRIVATE_ROLE' => ['PRIVATE_RAW' => 'PRIVATE_VALUE'],
+        ]];
+        $safe = HostedBrowser::sanitize($input, true, true);
+        self::assertSame(['method_config' => ['header_api_version' => 2],
+            'country' => ['initiator_not_bound' => 1]], $safe['read_denial_reasons']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertArrayNotHasKey('read_denial_counts_capped', $safe);
+        self::assertArrayNotHasKey('read_denial_reasons', HostedBrowser::sanitize($input, true));
+        $unknown = $base + ['read_denial_reasons' => ['customer' => [], 'PRIVATE_ROLE' => ['PRIVATE' => 1]]];
+        self::assertArrayNotHasKey('read_denial_reasons', HostedBrowser::sanitize($unknown, true, true));
+        $capped = HostedBrowser::sanitize($base + ['read_denial_reasons' => [
+            'customer' => ['slot_consumed' => 1000000]], 'read_denial_counts_capped' => true], true, true);
+        self::assertTrue($capped['read_denial_counts_capped']);
+        self::assertIsArray($capped['read_denial_reasons']);
+        self::assertIsArray($capped['read_denial_reasons']['customer']);
+        self::assertSame(1000000, $capped['read_denial_reasons']['customer']['slot_consumed']);
+    }
+
+    /** @return iterable<string,array{mixed}> */
+    public static function invalidSparseReadDenialCounts(): iterable
+    {
+        foreach (
+            ['numeric_string' => '1', 'zero' => 0, 'negative' => -1, 'overflow' => 1000001,
+            'float' => 1.0, 'boolean' => true, 'null' => null, 'array' => [],
+            'private_string' => 'PRIVATE_VALUE'] as $name => $value
+        ) {
+            yield $name => [$value];
+        }
+    }
+
+    #[DataProvider('invalidSparseReadDenialCounts')]
+    public function testMalformedKnownReadDenialCountIsRejectedWithoutCoercion(mixed $value): void
+    {
+        try {
+            HostedBrowser::sanitize(['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+                'card_entry_enabled' => false, 'read_denial_reasons' => [
+                    'method_config' => ['header_api_version' => $value]]], true, true);
+            self::fail('Malformed positive counts cannot become zero or a valid fact.');
+        } catch (RuntimeException $error) {
+            self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+        }
+    }
+
+    public function testSparseMapAndSaturationRequireNativeShapeAndAnObservedCap(): void
+    {
+        foreach (
+            [['read_denial_reasons' => 'PRIVATE'], ['read_denial_reasons' => ['customer' => 'PRIVATE']],
+            ['read_denial_counts_capped' => true], ['read_denial_counts_capped' => false],
+            ['read_denial_reasons' => ['customer' => ['slot_consumed' => 1]],
+            'read_denial_counts_capped' => true]] as $invalid
+        ) {
+            try {
+                HostedBrowser::sanitize(['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
+                    'card_entry_enabled' => false] + $invalid, true, true);
+                self::fail('Invalid sparse evidence was accepted.');
+            } catch (RuntimeException $error) {
+                self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+            }
+        }
+    }
+
     public function testDeliveredMethodEvidenceRequiresAllPrivateReadPrerequisites(): void
     {
         $data = ['result' => 'blocked', 'reason' => 'financial_sandbox_boundary_unverified',
