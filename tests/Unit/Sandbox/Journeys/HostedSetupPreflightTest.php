@@ -8,6 +8,7 @@ use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Psr7\Response;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedSetupPreflight;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedBrowser;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedRiskJournal;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\HostedSecurityMode;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession;
@@ -78,7 +79,8 @@ final class HostedSetupPreflightTest extends TestCase
         }
         $transport = new HttpClient(['handler' => function (RequestInterface $request) use (
             $fault,
-            $options
+            $options,
+            $originalOptions,
         ): Response {
             $this->requests[] = $request;
             $path = $request->getUri()->getPath();
@@ -99,6 +101,9 @@ final class HostedSetupPreflightTest extends TestCase
                     self::assertIsArray($state);
                     self::assertIsArray($state['actions']);
                     self::assertArrayHasKey('preflight_risk_bootstrap', $state['actions']);
+                    if (($originalOptions['retain-one-exact-same-document'] ?? false) === true) {
+                        self::assertArrayHasKey('instrument_security_profile', $state['actions']);
+                    }
                 }
                 return $this->json(['token' => 'fixture_token', 'expires_at' => '2099-01-01T00:00:00Z']);
             }
@@ -167,12 +172,18 @@ final class HostedSetupPreflightTest extends TestCase
                 bool $observeCurrencySettings,
                 bool $selectCard,
                 HostedSecurityMode $actualMode,
+                bool $retainSameDocument,
             ) use (
                 $fault,
                 $options,
                 $mode,
+                $originalOptions,
             ): array {
                 self::assertSame($mode, $actualMode);
+                self::assertSame(
+                    ($originalOptions['retain-one-exact-same-document'] ?? false) === true,
+                    $retainSameDocument
+                );
                 self::assertSame(($options['render-owned-data'] ?? false) === true, $render);
                 self::assertSame(($options['observe-one-method-config'] ?? false) === true, $observeConfig);
                 self::assertSame(($options['observe-normal-reads'] ?? false) === true, $observeNormal);
@@ -197,6 +208,23 @@ final class HostedSetupPreflightTest extends TestCase
                 self::assertIsArray($state['actions']);
                 if ($mode === HostedSecurityMode::InstrumentSecurity) {
                     self::assertArrayHasKey('instrument_security_profile', $state['actions']);
+                    $intent = ['profile' => $mode->value, 'browser_case_max_ms' => 40000,
+                        'new_admission_max_ms' => 30000, 'response_release_max_ms' => 38000,
+                        'loader_wait_max_ms' => 2000, 'security_stage_max_ms' => 15000,
+                        'loader_limit_bytes' => 262144, 'loader_encoding' => 'identity',
+                        'input_authority' => false, 'financial_authority' => false,
+                        'browser_tools' => HostedBrowser::sourceHashes($mode)];
+                    if ($retainSameDocument) {
+                        $intent['native_navigation'] = ['profile' => 'one_exact_same_document',
+                            'decision' => 120, 'limit' => 1, 'playwright_version' => '1.62.1',
+                            'core_bundle_bytes' => 3425603,
+                            'core_bundle_sha256' => '9393fa79e1c67c74edc26b610d65a4f7ed73d345a762465cc88340a33a2454ac'];
+                    }
+                    self::assertIsArray($state['actions']['instrument_security_profile']);
+                    self::assertSame(
+                        hash('sha256', json_encode($intent, JSON_THROW_ON_ERROR)),
+                        $state['actions']['instrument_security_profile']['body_hash']
+                    );
                     self::assertArrayNotHasKey('preflight_native_card_choice', $state['actions']);
                 }
                 if ($observeCurrencySettings) {
@@ -297,6 +325,9 @@ final class HostedSetupPreflightTest extends TestCase
                         'security_graph_complete' => false,
                         'security_loader_candidate' => true, 'security_loader_promoted' => false,
                         'security_loader_wait_reason' => 'expired'] : []),
+                    ...($retainSameDocument ? ['security_same_document_requested' => true,
+                        'security_same_document_retained' => false,
+                        'security_same_document_reason' => 'not_observed'] : []),
                     ...($selectCard ? ['native_card_selection_requested' => true,
                         'native_card_selection' => 'withheld', 'native_card_action_attempts' => 0,
                         'native_card_action_invoked' => false] : []),
@@ -335,6 +366,34 @@ final class HostedSetupPreflightTest extends TestCase
         self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
         self::assertSame(1, $this->cancels);
         self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testSelectedNativeNavigationProfileIsBoundBeforeAuthAndHandedOffOnlyInInstrument(): void
+    {
+        $result = $this->execute(
+            options: ['retain-one-exact-same-document' => true],
+            mode: HostedSecurityMode::InstrumentSecurity
+        );
+        self::assertSame('blocked', $result['result']);
+        self::assertIsArray($result['browser']);
+        self::assertTrue($result['browser']['security_same_document_requested']);
+        self::assertFalse($result['browser']['security_same_document_retained']);
+        self::assertSame(1, $this->browserCalls);
+        self::assertSame(1, $this->cancels);
+    }
+
+    public function testNativeNavigationProfileCannotEnterLegacyOrUseAValue(): void
+    {
+        foreach ([HostedSecurityMode::Preflight, HostedSecurityMode::InstrumentSecurity] as $mode) {
+            $result = HostedSetupPreflight::run(
+                ['environment' => 'sandbox',
+                'observe-first-party-security' => true, 'retain-one-exact-same-document' => 'PRIVATE_VALUE'],
+                mode: $mode
+            );
+            self::assertSame('fail', $result['result']);
+            self::assertSame('configuration', $result['phase']);
+        }
+        self::assertSame([], $this->requests);
     }
 
     public function testNewModeRejectsCardOverrideBeforeAuth(): void

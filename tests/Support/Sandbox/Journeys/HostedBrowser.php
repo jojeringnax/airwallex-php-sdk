@@ -60,7 +60,11 @@ final readonly class HostedBrowser
         bool $observeCurrencySettings = false,
         bool $selectCard = false,
         HostedSecurityMode $mode = HostedSecurityMode::Preflight,
+        bool $retainSameDocument = false,
     ): array {
+        if ($retainSameDocument && $mode !== HostedSecurityMode::InstrumentSecurity) {
+            throw new RuntimeException('Native navigation retention requires the fixed security profile.');
+        }
         if (
             $mode === HostedSecurityMode::InstrumentSecurity && (!$render || !$observeConfig || !$observeNormal
             || !$observeRisk || $selectCard)
@@ -107,6 +111,7 @@ final readonly class HostedBrowser
                 ...($observeParentCountry ? ['observeParentCountry' => true] : []),
                 ...($observeCurrencySettings ? ['observeCurrencySettings' => true] : []),
                 ...($selectCard ? ['selectCard' => true] : []),
+                ...($retainSameDocument ? ['retainSameDocument' => true] : []),
             ];
             if ($riskJournal !== null) {
                 if (!is_resource($journalRead) || !is_resource($journalAck)) {
@@ -172,6 +177,7 @@ final readonly class HostedBrowser
                 $observeCurrencySettings,
                 $selectCard,
                 $mode,
+                $retainSameDocument,
             );
             if ($journalFailed) {
                 $safe['risk_parent_journal_failed'] = true;
@@ -226,7 +232,11 @@ final readonly class HostedBrowser
         bool $observeCurrencySettings = false,
         bool $selectCard = false,
         HostedSecurityMode $mode = HostedSecurityMode::Preflight,
+        bool $retainSameDocument = false,
     ): array {
+        if ($retainSameDocument && $mode !== HostedSecurityMode::InstrumentSecurity) {
+            throw new RuntimeException('Native navigation retention requires the fixed security profile.');
+        }
         if (
             ($observeConfig && !$render) || ($observeNormal && !$observeConfig)
             || ($observeRisk && !$observeNormal) || ($observeParentCountry && !$observeNormal)
@@ -249,6 +259,23 @@ final readonly class HostedBrowser
         $safe = ['result' => $result, 'reason' => $reason, 'card_entry_enabled' => false];
         if ($mode === HostedSecurityMode::InstrumentSecurity) {
             $safe += self::instrumentEvidence($data, $observeRisk, $selectCard);
+            if ($retainSameDocument) {
+                $requested = $data['security_same_document_requested'] ?? null;
+                $retained = $data['security_same_document_retained'] ?? null;
+                $reason = $data['security_same_document_reason'] ?? null;
+                if (
+                    $requested !== true || !is_bool($retained)
+                    || !in_array($reason, ['not_observed', 'runtime_unverified', 'binding_unavailable',
+                        'shape_unavailable', 'listener_failed', 'packet_unavailable', 'already_used',
+                        'new_document', 'url_changed', 'generation_changed', 'reference_unavailable',
+                        'scope_unavailable', 'retained_once'], true)
+                    || (!$retained && $reason === 'retained_once')
+                ) {
+                    throw new RuntimeException('Invalid native navigation evidence.');
+                }
+                $safe += ['security_same_document_requested' => true,
+                    'security_same_document_retained' => $retained, 'security_same_document_reason' => $reason];
+            }
         }
         $failurePhases = ['configuration', 'tooling_load', 'browser_startup', 'proxy_start', 'browser_launch',
             'browser_context', 'page_setup', 'navigation', 'route_action', 'watchdog', 'visible_label',
