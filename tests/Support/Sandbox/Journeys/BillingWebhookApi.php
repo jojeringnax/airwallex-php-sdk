@@ -34,6 +34,7 @@ final class BillingWebhookApi
         ?ClientInterface $http = null,
         ?float $deadline = null,
         ?Closure $clock = null,
+        WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
     ) {
         $this->configuration = $configuration;
         $this->managementTransport = new WebhookDeliveryTransport(
@@ -41,12 +42,14 @@ final class BillingWebhookApi
             $http,
             clock: $clock,
             overallDeadline: $deadline,
-            managementOnly: true
+            managementOnly: true,
+            managementProfile: $managementProfile,
         );
         $this->management = new WebhookDeliveryApi(
             $configuration,
             $this->managementTransport,
-            WebhookDeliveryEvents::BillingCheckout
+            WebhookDeliveryEvents::BillingCheckout,
+            $managementProfile,
         );
         $this->prerequisiteTransport = new BillingWebhookTransport(
             $configuration->accountId(),
@@ -74,20 +77,26 @@ final class BillingWebhookApi
     }
 
     /** @return array{management:string,producer:string,collector:string,organization_reference:string,composite:string} */
-    public static function contexts(#[SensitiveParameter] Configuration $configuration): array
-    {
+    public static function contexts(
+        #[SensitiveParameter] Configuration $configuration,
+        WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
+    ): array {
         $role = static fn (string $context, ?string $login): string => hash('sha256', json_encode([
             'environment' => 'sandbox', 'credentials' => $configuration->credentials()->fingerprint(),
             'context' => $context, 'login_account' => $login,
         ], JSON_THROW_ON_ERROR));
         $account = $role('account', $configuration->accountId());
+        $management = $managementProfile === WebhookManagementProfile::Account ? $account
+            : $role('default-management', null);
         $organization = $role('organization', null);
         $collector = hash('sha256', $configuration->accountId());
         $organizationReference = hash('sha256', json_encode($configuration->organizationId(), JSON_THROW_ON_ERROR));
         return ['organization_reference' => $organizationReference,
-            'management' => $account, 'producer' => $organization, 'collector' => $collector,
-            'composite' => hash('sha256', json_encode([$account, $organization, $collector, $organizationReference,
-                WebhookDeliveryEvents::BillingCheckout->names(), '2026-08-21'], JSON_THROW_ON_ERROR))];
+            'management' => $management, 'producer' => $organization, 'collector' => $collector,
+            'composite' => hash('sha256', json_encode([$management, $organization, $collector, $organizationReference,
+                WebhookDeliveryEvents::BillingCheckout->names(), '2026-08-21',
+                ...($managementProfile === WebhookManagementProfile::DefaultLogin ? ['DEFAULT'] : []),
+            ], JSON_THROW_ON_ERROR))];
     }
 
     public function legalEntity(): string
@@ -155,7 +164,7 @@ final class BillingWebhookApi
             }
         }
         return ($expected['status'] ?? null) !== 'CANCELLED'
-            || (array_key_exists('url', $data) && $data['url'] === null);
+            || (!array_key_exists('url', $data) || $data['url'] === null);
     }
 
     /** @return array<string,string> */

@@ -15,7 +15,7 @@ use RuntimeException;
 use SensitiveParameter;
 use Throwable;
 
-/** Account-managed subscription, organization-produced own SETUP; no collection or callback mutation. */
+/** Selected management profile, organization-produced own SETUP; no collection or callback mutation. */
 final class BillingWebhookProbe
 {
     /**
@@ -37,15 +37,21 @@ final class BillingWebhookProbe
         ?Closure $ledgers = null,
         ?Closure $stores = null,
         ?Closure $elapsed = null,
+        WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
     ): array {
-        $safe = ['scenario' => 'billing-webhook-pair', 'api_version' => '2026-08-21',
-            'management_context' => 'account', 'producer_context' => 'organization', 'result' => 'fail',
+        $safe = ['scenario' => $managementProfile->scenario(), 'api_version' => '2026-08-21',
+            'management_context' => $managementProfile->context(),
+            'producer_context' => 'organization', 'result' => 'fail',
             'phase' => 'configuration', 'registration_created' => false, 'registration_deleted' => false,
             'registration_outcome_unknown' => false, 'customer_created' => false, 'checkout_created' => false,
             'sdk_active_verified' => false, 'sdk_cancelled_verified' => false, 'producer_outcome_unknown' => false,
             'reconciliation_required' => false, 'signed_resource_pair_observed' => false,
             'organization_comparison' => 'unavailable', 'typed_owner_verified' => false,
             'organization_manager_verified' => false, 'financial_completion_verified' => false];
+        if ($managementProfile === WebhookManagementProfile::DefaultLogin) {
+            $safe['management_profile'] = 'DEFAULT';
+            $safe['collector_context'] = 'account';
+        }
         $runtime = null;
         $api = null;
         $registration = null;
@@ -87,7 +93,7 @@ final class BillingWebhookProbe
             $configuration = Configuration::load('sandbox', $credentials);
             $organization = $configuration->organizationId();
             $safe['organization_comparison'] = $organization === null ? 'unavailable' : 'available';
-            $contexts = BillingWebhookApi::contexts($configuration);
+            $contexts = BillingWebhookApi::contexts($configuration, $managementProfile);
             $fingerprint = $contexts['composite'];
             $safe['context_fingerprints'] = $contexts;
             $safe['phase'] = 'provenance';
@@ -95,15 +101,18 @@ final class BillingWebhookProbe
                 : $ledgers($fingerprint, $directory);
             $ledger->assertContext($fingerprint);
             $safe += $ledger->evidence();
-            $tools = self::tools($node);
+            $tools = self::tools($node, $managementProfile);
             $safe['tool_hashes'] = $tools;
             $source = hash('sha256', json_encode([$ledger->evidence(), $tools, $contexts], JSON_THROW_ON_ERROR));
             $ledger->requestId('billing_webhook_provenance', ['source_fingerprint' => $source,
                 'contexts' => $contexts, 'events' => WebhookDeliveryEvents::BillingCheckout->names(),
                 'api_version' => '2026-08-21',
-                'organization_expectation_sha256' => $contexts['organization_reference']], $fingerprint);
+                'organization_expectation_sha256' => $contexts['organization_reference'],
+                ...($managementProfile === WebhookManagementProfile::DefaultLogin
+                    ? ['management_profile' => 'DEFAULT'] : []),
+            ], $fingerprint);
             $store = $stores === null ? new WebhookDeliveryStore($directory, $ledger) : $stores($directory, $ledger);
-            $api = new BillingWebhookApi($configuration, $http, $deadline, $elapsed);
+            $api = new BillingWebhookApi($configuration, $http, $deadline, $elapsed, $managementProfile);
             $safe['phase'] = 'account_prerequisite';
             $entity = $api->legalEntity();
             $started = $clock();
@@ -347,7 +356,42 @@ final class BillingWebhookProbe
             && $safe['typed_owner_verified'] && $safe['selected_envelope_pair_verified']
             && $safe['server_lifecycle_verified'] && $safe['registration_deleted'];
         $safe['result'] = $failed || $safe['reconciliation_required'] ? 'fail' : ($complete ? 'pass' : 'pending');
+        if ($managementProfile === WebhookManagementProfile::DefaultLogin && is_array($safe['delivery'] ?? null)) {
+            try {
+                $safe['delivery'] = self::defaultLabels($safe['delivery']);
+            } catch (Throwable) {
+                unset($safe['delivery']);
+                $safe['result'] = 'fail';
+                $safe['reason'] = 'observation_not_completed';
+            }
+        }
         return $safe;
+    }
+
+    /**
+     * @param array<string,mixed> $delivery
+     * @return array<string,mixed>
+     */
+    private static function defaultLabels(array $delivery): array
+    {
+        if (!is_array($delivery['events'] ?? null)) {
+            return $delivery;
+        }
+        $events = [];
+        foreach ($delivery['events'] as $event) {
+            if (!is_array($event)) {
+                throw new ProtocolException('The fixed delivery projection is unavailable.');
+            }
+            foreach (['account_id_configured_manager', 'object_account_id_configured_manager'] as $key) {
+                if (array_key_exists($key, $event)) {
+                    $event[str_replace('_configured_manager', '_configured_reference', $key)] = $event[$key];
+                    unset($event[$key]);
+                }
+            }
+            $events[] = $event;
+        }
+        $delivery['events'] = $events;
+        return $delivery;
     }
 
     /** @param array<string,mixed> $options */
@@ -396,10 +440,10 @@ final class BillingWebhookProbe
     }
 
     /** @return array<string,string> */
-    private static function tools(string $node): array
+    private static function tools(string $node, WebhookManagementProfile $managementProfile): array
     {
         $root = dirname(__DIR__, 4);
-        $files = ['entry' => $root . '/tools/billing-webhook-delivery-probe.php',
+        $files = ['entry' => $root . '/tools/' . $managementProfile->entry(),
             'receiver' => $root . '/tools/webhooks/webhook-receiver.cjs',
             'supervisor' => $root . '/tools/webhooks/webhook-supervisor.cjs', 'node_runtime' => $node];
         $hashes = [];
