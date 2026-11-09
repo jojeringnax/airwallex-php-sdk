@@ -53,6 +53,10 @@ final class InvoiceAccessObservation
             'complete_pdf_verified' => false, 'rendering_verified' => false,
             'expiry_verified' => false, 'renewal_verified' => false, 'signature_verified' => false,
             'mutation_sent' => false, 'redirect_followed' => false, 'third_party_followed' => false];
+        if ($this->readPayer) {
+            $safe['payer_sdk_capability_bound'] = false;
+            $safe['payer_capability_correlated_access_observed'] = false;
+        }
         if ($this->withoutPdfRange) {
             $safe['pdf_request_profile'] = 'ordinary_get';
         }
@@ -178,13 +182,17 @@ final class InvoiceAccessObservation
                             'path' => '/billing/payer-web-api/invoice', 'invoice_id' => $invoice['id'],
                             'prior_ledger_sha256' => $priorDigest,
                             'hosted_url_sha256' => hash('sha256', $hosted)], $fingerprint);
+                        $safe['payer_sdk_capability_bound'] = true;
                         $safe['payer_send_started'] = true;
                         $response = $http->sendRequest(new Request('GET', InvoiceAccessPolicy::PAYER, [
                             'Accept' => 'application/json', 'Accept-Encoding' => 'identity',
                             'Authorization' => 'Bearer ' . $token,
                         ]));
                         $safe['payer_http_status'] = $response->getStatusCode();
-                        $safe += self::payer($response, $invoice);
+                        $payerFacts = self::payer($response, $invoice);
+                        $safe += $payerFacts;
+                        $safe['payer_capability_correlated_access_observed'] = $safe['payer_sdk_capability_bound']
+                            && ($payerFacts['payer_capability_correlated_access_observed'] ?? false) === true;
                         $safe['payer_outcome'] = $safe['payer_observed_outcome'];
                         $safe['payer_invoice_matched'] = $safe['payer_outcome'] === 'payer_invoice_matched';
                         $safe['payer_customer_indirect_anchor_matched'] = $safe['payer_invoice_matched'];
@@ -259,7 +267,8 @@ final class InvoiceAccessObservation
         $status = $response->getStatusCode();
         $media = self::media($response);
         $safe = ['payer_http_status' => $status, 'payer_media' => $media,
-            'payer_observed_outcome' => $status >= 300 && $status < 400 ? 'redirect_unfollowed' : 'http_rejected'];
+            'payer_observed_outcome' => $status >= 300 && $status < 400 ? 'redirect_unfollowed' : 'http_rejected',
+            'payer_capability_correlated_access_observed' => false];
         if ($status !== 200) {
             return $safe;
         }
@@ -279,6 +288,8 @@ final class InvoiceAccessObservation
             'currency' => ['currency', 'EUR'], 'collectionMethod' => ['collection_method', 'OUT_OF_BAND'],
             'status' => ['status', $invoice['status']]];
         $matched = true;
+        $contextMatched = true;
+        $identityCompatible = false;
         foreach ($expected as $field => [$label, $value]) {
             $present = property_exists($data, $field);
             $string = $present && is_string($data->{$field});
@@ -286,6 +297,11 @@ final class InvoiceAccessObservation
             $safe['payer_' . $label . '_present'] = $present;
             $safe['payer_' . $label . '_string'] = $string;
             $safe['payer_' . $label . '_matched'] = $fieldMatched;
+            if ($field === 'id') {
+                $identityCompatible = !$present || $fieldMatched;
+            } else {
+                $contextMatched = $contextMatched && $fieldMatched;
+            }
             if (!$fieldMatched) {
                 $matched = false;
             }
@@ -296,7 +312,9 @@ final class InvoiceAccessObservation
         return array_replace($safe, [
             'payer_observed_outcome' => $matched ? 'payer_invoice_matched' : 'invalid_response',
             'payer_payment_status_comparison_available' => $payment,
-            'payer_payment_status_matched' => $paymentMatched]);
+            'payer_payment_status_matched' => $paymentMatched,
+            'payer_capability_correlated_access_observed' => $contextMatched && $paymentMatched
+                && $identityCompatible]);
     }
 
     private static function media(#[SensitiveParameter] ResponseInterface $response): string
