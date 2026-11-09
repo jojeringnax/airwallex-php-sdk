@@ -178,7 +178,27 @@ The [observed provider case](billing-capabilities.md#trials-cancellation-and-gra
 
 A draft invoice may have null PDF; authorize document access before returning any link. Download, storage and email belong to consumers. Re-fetching current data does not promise expired-link renewal; preserve the [expiry evidence gap](billing-capabilities.md#invoice-access-and-delivery). No hosted Billing portal-session method is defined.
 
-Payment recovery uses an explicit `subscriptions()->update($id, ['request_id' => ..., 'payment_source_id' => ...])` after verifying the replacement source's ownership. This can immediately retry the last failed invoice. Retrieve subscription/invoice state afterwards; no automatic source replacement, dunning schedule or entitlement cutoff is implied.
+For an application-known expired instrument, first obtain and independently authorize its replacement through the applicable setup flow. Load the persisted buyer, Billing organization-client, legal-entity and collection-account mapping. The [executed recovery recipes](../examples/billing-lifecycle.php) use the existing Subscription and Payment Source reads to check that mapping before one explicit source change:
+
+```php
+$recipes = require 'examples/billing-lifecycle.php';
+$observed = $recipes['replace_source_and_observe'](
+    $billing, $subscriptionId, $authorizedReplacementSourceId,
+    $billingCustomerId, $legalEntityId, $collectionAccountId, '<persisted-recovery-request-id>',
+);
+// Persist the action outcome privately. After a rejection, lost response or failed read, use only reads:
+$later = $recipes['observe_recovery'](
+    $billing, $subscriptionId, $billingCustomerId, $legalEntityId, $collectionAccountId,
+);
+```
+
+The application authorizes the client and replacement instrument; the SDK cannot infer organization membership or merchant-initiated authorization from opaque IDs. The example checks the current Subscription's ID, Billing Customer, legal entity and linked collection account, then the replacement Source's ID, Customer and collector. Missing optional owner fields withhold this example's proof; they are not newly required API fields. These are SDK-decoded-field comparisons, not separate raw-JSON identity or duplicate-key validation. No Payment Source expiry field, instrument usability or current collector/product eligibility is inferred. Preconditions or Source-read failures throw before the update. Resolve those failures before choosing a deliberate action.
+
+Changing `payment_source_id` can immediately retry the last failed invoice under the selected `2026-08-21` [Subscription contract](../resources/contracts/billing/subscriptions.json). The application supplies one already-persisted `request_id`; the callable neither generates an identity nor retries the update. Record that the action was attempted before invoking it, and do not rerun the mutation recipe to reconcile an uncertain result. Application persistence supplies that cross-call discipline; this example is not an idempotency store.
+
+The return separates `update_response`/`update_error` from the later `subscription`, `invoice` and `read_error`. Provider API errors retain only the SDK's safe status/code fields; a transport/protocol failure remains `unconfirmed`. An unproved update response is withheld without implying that no effect occurred. Reconciliation reads return only matching owned Subscription/Invoice observations; a failed or unproved read leaves that resource null and a fixed error fact. The latest Invoice is followed only when a nonempty reference is supplied, and its ID, Customer and Subscription must match. Otherwise the unchanged Subscription preserves the missing/null/unknown reference. No list, alternate lookup or Invoice mutation is hidden in the recipe.
+
+Read-only observations preserve unknown, nonterminal, repeated and reordered provider states, exact monetary values and extra fields. They establish neither that the source change caused an observed state nor that payment, settlement or access entitlement succeeded. A response or later error never schedules another source change, collection retry or dunning action. Actual reusable-instrument/Source linkage, eligible collection accounts and account-configured recovery/dunning evidence remain under [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42); the [dunning conflict](api-contracts.md#payment-recovery-conflict) does not establish a universal retry schedule. These deterministic recipes do not depend on another browser diagnostic or promise a live recovery outcome.
 
 ## Standalone Payments
 
