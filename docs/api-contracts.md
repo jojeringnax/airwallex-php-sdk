@@ -16,6 +16,10 @@ On 2026-11-08, the HTML of all 13 API resource pages in the inventory, plus the 
 
 The same page metadata contains `activeCategory.endpoints`; the inventory operations and representative required fields, response schema references, permissions and resource levels were cross-checked there. The URLs currently default to this version and may change later: on re-verification, check the selected option and `currentVersion` rather than assuming the URL still identifies the baseline. Product guides provide supplemental behavior and are not independently date-versioned.
 
+On **2026-11-09**, fresh official-page metadata still selected `2026-08-21` and the same specification filename, with advertised MD5 `c75b7f73321b6952731bfa2b7eab5748`. Parsed `activeCategory` and environment-domain objects from all 13 resource pages matched the retained original page data: 76 category operations, 371 category-local schema entries and all 55 operations selected by the runtime contracts, including their route and authorization metadata. Only `versionItems` changed in those page objects; its 48 advertised versions retained their names/paths and changed MD5 values. The normalized runtime snapshots keep their original source attribution and local annotations; no SDK repin follows from this comparison.
+
+This comparison does not cover the complete YAML, standalone authentication or Webhooks-management page data, provider runtime behavior or the reason for the checksum change. The original complete YAML was not established by this audit. Reverify the relevant selected contract before relying on an affected operation; a shared date-version or checksum change alone does not establish either whole-specification equality or a changed endpoint contract.
+
 ## Authorization and ownership
 
 The [API-key guide](https://www.airwallex.com/docs/developer-tools/api/manage-api-keys) independently identifies Billing as organization-level and Payments as account-level. Scoped keys may grant both. Resource Read permissions cover GET operations; Write includes reads and mutations. These are API-key permission labels, not OAuth scope strings.
