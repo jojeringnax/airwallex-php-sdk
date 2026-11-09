@@ -164,7 +164,7 @@ final class BillingWebhookApi
             }
         }
         return ($expected['status'] ?? null) !== 'CANCELLED'
-            || (array_key_exists('url', $data) && $data['url'] === null);
+            || (!array_key_exists('url', $data) || $data['url'] === null);
     }
 
     /** @return array<string,string> */

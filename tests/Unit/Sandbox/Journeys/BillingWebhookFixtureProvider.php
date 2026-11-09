@@ -20,6 +20,8 @@ final class BillingWebhookFixtureProvider implements ClientInterface
     public ?WebhookDeliveryFixtureRuntime $runtime = null;
     /** @var (Closure(RequestInterface):?ResponseInterface)|null */
     public ?Closure $intercept = null;
+    /** @var (Closure(array<string,mixed>):array<string,mixed>)|null */
+    public ?Closure $cancelledProjection = null;
     /** @var array<string,mixed> */
     private array $registration = [];
     /** @var array<string,mixed> */
@@ -97,7 +99,10 @@ final class BillingWebhookFixtureProvider implements ClientInterface
         }
         if ($path === '/api/v1/billing/billing_checkouts/SYNTHETIC_PRIVATE_CHECKOUT/cancel') {
             $this->checkout['status'] = 'CANCELLED';
-            $this->checkout['url'] = null;
+            unset($this->checkout['url']);
+            if ($this->cancelledProjection !== null) {
+                $this->checkout = ($this->cancelledProjection)($this->checkout);
+            }
             $this->runtime?->capture($this->checkout, 'billing_checkout.cancelled');
             return self::json($this->checkout);
         }
