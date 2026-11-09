@@ -48,9 +48,9 @@ final class WebhookDeliveryTransport implements ClientInterface
         }
         if (
             $eventPair === WebhookDeliveryEvents::Subscription
-            && (!$managementOnly || $managementProfile !== WebhookManagementProfile::DefaultLogin)
+            && !$managementOnly
         ) {
-            throw new ProtocolException('Subscription delivery requires its isolated DEFAULT management pair.');
+            throw new ProtocolException('Subscription delivery requires its isolated management pair.');
         }
         if (
             $managementProfile === WebhookManagementProfile::DefaultLogin
@@ -168,7 +168,10 @@ final class WebhookDeliveryTransport implements ClientInterface
         ) {
             throw new ProtocolException('Webhook delivery requires its fixed account-owned Sandbox operations.');
         }
-        if ($this->managementProfile === WebhookManagementProfile::DefaultLogin) {
+        if (
+            $this->managementProfile === WebhookManagementProfile::DefaultLogin
+            || $this->eventPair === WebhookDeliveryEvents::Subscription
+        ) {
             $this->defaultRequest($request, $login, $create);
         }
         $key = $method . ' ' . $path;
@@ -228,7 +231,8 @@ final class WebhookDeliveryTransport implements ClientInterface
                 }
                 if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
                     if (
-                        $login && $this->managementProfile === WebhookManagementProfile::DefaultLogin
+                        $login && ($this->managementProfile === WebhookManagementProfile::DefaultLogin
+                            || $this->eventPair === WebhookDeliveryEvents::Subscription)
                         && $response->getStatusCode() !== 201
                     ) {
                         throw new ProtocolException('Default management login requires the selected success status.');
@@ -263,7 +267,9 @@ final class WebhookDeliveryTransport implements ClientInterface
     private function defaultRequest(#[SensitiveParameter] RequestInterface $request, bool $login, bool $create): void
     {
         $allowed = ['host', 'accept', 'content-type', 'x-api-version',
-            ...($login ? ['x-client-id', 'x-api-key'] : ['authorization'])];
+            ...($login ? ['x-client-id', 'x-api-key',
+                ...($this->managementProfile === WebhookManagementProfile::Account ? ['x-login-as'] : [])]
+                : ['authorization'])];
         foreach (array_keys($request->getHeaders()) as $name) {
             if (!in_array(strtolower($name), $allowed, true) || count($request->getHeader($name)) !== 1) {
                 throw new ProtocolException('Default management rejects alternate authentication or context headers.');

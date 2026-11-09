@@ -377,29 +377,30 @@ final class WebhookDeliveryTransportTest extends TestCase
             self::assertTrue($transport->sent('create_webhook'));
         }
     }
-    public function testSubscriptionPairRequiresExplicitDefaultManagementAndRejectsCrossedApiBinding(): void
+    public function testSubscriptionPairRequiresManagementOnlyAndRejectsCrossedApiBinding(): void
     {
         $pair = WebhookDeliveryEvents::Subscription;
-        foreach ([false, true] as $managementOnly) {
+        foreach (WebhookManagementProfile::cases() as $profile) {
             try {
-                new WebhookDeliveryTransport('fixture', managementOnly: $managementOnly, eventPair: $pair);
-                self::fail('An ACCOUNT profile granted Subscription management.');
+                new WebhookDeliveryTransport('fixture', managementProfile: $profile, eventPair: $pair);
+                self::fail('Subscription management granted a producer transport.');
             } catch (ProtocolException $error) {
                 self::assertNull($error->getPrevious());
             }
-        }
-        $bound = new WebhookDeliveryTransport(
-            'fixture',
-            managementOnly: true,
-            managementProfile: WebhookManagementProfile::DefaultLogin,
-            eventPair: $pair
-        );
-        $bound->assertEventPair($pair);
-        try {
-            $bound->assertEventPair(WebhookDeliveryEvents::BillingCheckout);
-            self::fail('Crossed explicit pair accepted.');
-        } catch (ProtocolException $error) {
-            self::assertNull($error->getPrevious());
+            $bound = new WebhookDeliveryTransport(
+                'fixture',
+                managementOnly: true,
+                managementProfile: $profile,
+                eventPair: $pair
+            );
+            $bound->assertEventPair($pair);
+            $bound->assertManagementProfile($profile);
+            try {
+                $bound->assertEventPair(WebhookDeliveryEvents::BillingCheckout);
+                self::fail('Crossed explicit pair accepted.');
+            } catch (ProtocolException $error) {
+                self::assertNull($error->getPrevious());
+            }
         }
         $old = new WebhookDeliveryTransport(
             'fixture',
@@ -409,6 +410,69 @@ final class WebhookDeliveryTransportTest extends TestCase
         $old->assertEventPair(WebhookDeliveryEvents::BillingCheckout);
         $this->expectException(ProtocolException::class);
         $old->assertEventPair($pair);
+    }
+
+    /** @return iterable<string,array{string,string|null}> */
+    public static function accountSubscriptionBadLoginHeaders(): iterable
+    {
+        yield 'missing selector' => ['x-login-as', null];
+        yield 'foreign selector' => ['x-login-as', 'foreign'];
+        yield 'OBO' => ['x-on-behalf-of', 'foreign'];
+        yield 'alternate context' => ['x-organization-id', 'foreign'];
+        yield 'extra bearer' => ['Authorization', 'Bearer fixture'];
+        yield 'cookie' => ['Cookie', 'fixture'];
+        yield 'referer' => ['Referer', 'fixture'];
+    }
+
+    #[DataProvider('accountSubscriptionBadLoginHeaders')]
+    public function testAccountSubscriptionLoginKeepsClosedHeaderRoles(string $name, ?string $value): void
+    {
+        $http = new WebhookConfigFixtureClient([]);
+        $transport = new WebhookDeliveryTransport(
+            'fixture',
+            $http,
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::Account,
+            eventPair: WebhookDeliveryEvents::Subscription
+        );
+        $request = new Request(
+            'POST',
+            self::HOST . '/api/v1/authentication/login',
+            ['Accept' => 'application/json', 'x-api-version' => '2026-08-21', 'x-client-id' => 'client',
+            'x-api-key' => 'key',
+            'x-login-as' => 'fixture']
+        );
+        $request = $value === null ? $request->withoutHeader($name) : $request->withHeader($name, $value);
+        $this->expectException(ProtocolException::class);
+        try {
+            $transport->sendRequest($request);
+        } finally {
+            self::assertSame([], $http->requests);
+        }
+    }
+
+    public function testAccountSubscriptionLoginRequiresSelected201WithoutChangingLegacyAccount(): void
+    {
+        $http = new WebhookConfigFixtureClient([new Response(200, [], '{"token":"fixture","expires_at":"2099"}')]);
+        $transport = new WebhookDeliveryTransport(
+            'fixture',
+            $http,
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::Account,
+            eventPair: WebhookDeliveryEvents::Subscription
+        );
+        try {
+            $transport->sendRequest(new Request(
+                'POST',
+                self::HOST . '/api/v1/authentication/login',
+                ['Accept' => 'application/json', 'x-api-version' => '2026-08-21', 'x-client-id' => 'client',
+                'x-api-key' => 'key',
+                'x-login-as' => 'fixture']
+            ));
+            self::fail('Nonselected login status was accepted.');
+        } catch (ProtocolException) {
+            self::assertCount(1, $http->requests);
+        }
     }
 
     public function testNewDefaultPairCannotUseOldCheckoutBodyAndOldDefaultCannotUseSubscriptionBody(): void
