@@ -10,6 +10,24 @@ permissions:
   contents: read
 
 jobs:
+  browser-policies:
+    name: Node 22 browser policies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, mbstring, xml, xmlwriter
+          coverage: none
+          tools: composer:v2
+      - name: Install PHP fixture bridge
+        run: composer install --prefer-dist --no-interaction
+      - name: Run deterministic browser and webhook policies
+        run: node --test --test-concurrency=1 tools/browser/*.test.cjs tools/webhooks/*.test.cjs
   checks:
     name: PHP ${{ matrix.php }} / ${{ matrix.dependencies }}
     runs-on: ubuntu-latest
