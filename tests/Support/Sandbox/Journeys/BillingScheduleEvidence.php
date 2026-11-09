@@ -18,8 +18,10 @@ final class BillingScheduleEvidence
         'flag-one-day', 'flag-seven-days', 'finite-ends', 'finite-duration', 'finite-remaining',
         'clear-all-pending', 'cancel-all', 'cancel-prorated', 'checkout-trial',
         'remaining-active-only', 'flag-restore-end', 'immediate-oob-trial', 'immediate-oob-trial-basic-offset',
+        'future-oob-trial-basic-offset',
     ];
     private ?string $trialEnd = null;
+    private ?string $futureTrialStart = null;
     private bool $ambiguous = false;
     private bool $cancelAttempted = false;
     private bool $cancelVerified = false;
@@ -132,11 +134,15 @@ final class BillingScheduleEvidence
         $now = ($this->clock)();
         if (
             !is_int($now) || $now < 0
-            || ($this->isImmediateTrial() && $now > PHP_INT_MAX - 172800)
+            || (($this->isImmediateTrial() || $this->isFutureTrial()) && $now > PHP_INT_MAX - 172800)
         ) {
             throw new RuntimeException('A case requires a Unix-second clock.');
         }
         $this->catalogue();
+        if ($this->isFutureTrial()) {
+            $this->futureTrial($now);
+            return;
+        }
         if ($this->isImmediateTrial()) {
             $this->immediateTrial($now);
             return;
@@ -222,6 +228,112 @@ final class BillingScheduleEvidence
         return in_array($this->case, ['immediate-oob-trial', 'immediate-oob-trial-basic-offset'], true);
     }
 
+    private function isFutureTrial(): bool
+    {
+        return $this->case === 'future-oob-trial-basic-offset';
+    }
+
+    private function futureTrial(int $now): void
+    {
+        $this->futureTrialStart = gmdate('Y-m-d\TH:i:s\Z', $now + 86400);
+        $this->trialEnd = gmdate('Y-m-d\TH:i:sO', $now + 172800);
+        $this->initialDuration = ['period' => 1, 'period_unit' => 'MONTH'];
+        $this->scope = ['billing_customer_id' => $this->customer, 'legal_entity_id' => $this->entity,
+            'currency' => 'EUR', 'collection_method' => 'OUT_OF_BAND', 'metadata' => $this->metadata()];
+        $created = $this->mutate(
+            'create_subscription',
+            'subscriptions',
+            null,
+            $this->scope + ['days_until_due' => 30, 'duration' => $this->initialDuration,
+                'starts_at' => $this->futureTrialStart, 'trial_ends_at' => $this->trialEnd,
+                'items' => [['price_id' => $this->price, 'quantity' => 1]]],
+            fn (array $wire): array => $this->session->client->billing()->subscriptions()->create($wire)
+        );
+        $this->subscription = self::id($created);
+        $this->ledger->recordCreated('subscriptions', $this->subscription);
+        $this->guardFutureTrial($this->readState('future_pending_observed', 'PENDING'), 'PENDING');
+        $this->initialItem('future_pending_item');
+        $this->reserve('start_now', 'subscription_update', $this->subscription, ['starts_at' => 'NOW']);
+        $subscriptions = $this->session->client->billing()->subscriptions();
+        $this->guardFutureTrial($subscriptions->retrieve($this->subscription), 'PENDING');
+        $this->update('start_now', ['starts_at' => 'NOW']);
+        $this->guardFutureTrial($this->readState('future_trial_observed', 'IN_TRIAL'), 'IN_TRIAL');
+        $this->observations['trial_observed_without_payment_action'] = true;
+        $this->initialItem('future_trial_item');
+        $this->reserve('end_trial_now', 'subscription_update', $this->subscription, ['trial_ends_at' => 'NOW']);
+        $this->guardFutureTrial($subscriptions->retrieve($this->subscription), 'IN_TRIAL');
+        $this->update('end_trial_now', ['trial_ends_at' => 'NOW']);
+        $this->guardFutureTrial($this->readState('future_active_observed', 'ACTIVE'), 'ACTIVE');
+        $this->initialItem('future_active_item');
+        $this->observations['controlled_trial_lifecycle_observed'] = true;
+    }
+
+    /** @param array<array-key,mixed> $resource */
+    private function guardFutureTrial(array $resource, string $state): void
+    {
+        $this->ownSubscription($resource);
+        self::fields($resource, ['status' => $state, 'days_until_due' => 30,
+            'duration' => ['period' => 1, 'period_unit' => 'MONTH']]);
+        $now = ($this->clock)();
+        $start = $resource['starts_at'] ?? null;
+        if (!is_int($now) || $now < 0 || !is_string($start) || $this->trialEnd === null) {
+            throw new ProtocolException('The controlled trial clock or start is unavailable.');
+        }
+        self::seconds($start);
+        if ($state === 'PENDING') {
+            if (
+                $this->futureTrialStart === null || !self::sameInstant($start, $this->futureTrialStart)
+                || !self::sameInstant($resource['trial_ends_at'] ?? null, $this->trialEnd)
+                || self::seconds($start) <= $now || self::compareInstants($start, $this->trialEnd) >= 0
+            ) {
+                throw new ProtocolException('The requested future trial interval is not established.');
+            }
+        } elseif ($state === 'IN_TRIAL') {
+            if (
+                ($this->steps['start_now'] ?? null) !== 'pass'
+                || !self::sameInstant($resource['trial_ends_at'] ?? null, $this->trialEnd)
+                || self::compareInstants($start, $this->trialEnd) >= 0 || self::seconds($this->trialEnd) <= $now
+            ) {
+                throw new ProtocolException('The controlled trial interval is not safe.');
+            }
+        } elseif ($state === 'ACTIVE') {
+            $periodStart = $resource['current_period_starts_at'] ?? null;
+            $periodEnd = $resource['current_period_ends_at'] ?? null;
+            if (
+                ($this->steps['end_trial_now'] ?? null) !== 'pass'
+                || !is_string($periodStart) || !is_string($periodEnd)
+                || self::compareInstants($periodStart, $periodEnd) >= 0
+                || self::compareInstants($start, $periodStart) > 0 || self::seconds($periodEnd) <= $now
+            ) {
+                throw new ProtocolException('The controlled active finite cycle is not established.');
+            }
+            $this->observations['controlled_active_cycle_ordered'] = true;
+            $this->observations['controlled_active_trial_end_present'] = array_key_exists('trial_ends_at', $resource);
+            $this->observations['controlled_active_trial_start_present'] =
+                array_key_exists('trial_starts_at', $resource);
+        } else {
+            throw new ProtocolException('The controlled trial state cannot authorize cleanup.');
+        }
+    }
+
+    /** @param array<array-key,mixed> $resource */
+    private function cancelFutureTrial(array $resource): void
+    {
+        $state = $resource['status'] ?? null;
+        if (!is_string($state)) {
+            throw new ProtocolException('The controlled trial cleanup state is unavailable.');
+        }
+        $this->guardFutureTrial($resource, $state);
+        $this->reserve('cleanup_cancel', 'subscription_cancel', $this->subscription, ['proration_behavior' => 'NONE']);
+        $this->phase = 'future_trial_cancel_guard';
+        $subscriptions = $this->session->client->billing()->subscriptions();
+        $this->guardFutureTrial($subscriptions->retrieve($this->subscription), $state);
+        $this->initialItem('future_cleanup_item');
+        $this->guardFutureTrial($subscriptions->retrieve($this->subscription), $state);
+        $this->observations['controlled_trial_cleanup_guarded'] = true;
+        $this->cancel('NONE', 'cleanup_cancel');
+    }
+
     private function immediateTrial(int $now): void
     {
         $format = $this->case === 'immediate-oob-trial-basic-offset' ? 'Y-m-d\TH:i:sO' : 'Y-m-d\TH:i:s\Z';
@@ -277,9 +389,9 @@ final class BillingScheduleEvidence
         $this->cancel('NONE', 'cleanup_cancel');
     }
 
-    private function initialItem(): void
+    private function initialItem(string $step = 'initial_item'): void
     {
-        $this->phase = 'initial_item';
+        $this->phase = $step;
         $delays = [1, 2, 4, 8, 8, 7];
         for ($attempt = 0; $attempt < $this->attempts; ++$attempt) {
             $page = $this->session->client->billing()->subscriptions()->listItems(
@@ -305,14 +417,15 @@ final class BillingScheduleEvidence
                     throw new ProtocolException('The initial Item quantity did not match.');
                 }
                 $this->ledger->recordObservation(
-                    'initial_item',
+                    $step,
                     ['subscription_id' => $this->subscription,
                     'item_id' => $id, 'price_id' => $this->price],
                     self::contextFingerprint($this->session, $this->collector)
                 );
-                $this->observations['initial_items_page_complete'] = array_key_exists('page_after', $page)
+                $this->observations[$step === 'initial_item' ? 'initial_items_page_complete' : $step . '_page_complete']
+                    = array_key_exists('page_after', $page)
                     && $page['page_after'] === null;
-                $this->steps['initial_item'] = 'pass';
+                $this->steps[$step] = 'pass';
                 return;
             }
             if ($attempt + 1 < $this->attempts) {
@@ -362,7 +475,8 @@ final class BillingScheduleEvidence
             'unit_amount' => '1.23', 'billing_type' => 'IN_ADVANCE', 'active' => true,
             'recurring' => ['period' => 1, 'period_unit' => in_array(
                 $this->case,
-                ['checkout-trial', 'immediate-oob-trial', 'immediate-oob-trial-basic-offset'],
+                ['checkout-trial', 'immediate-oob-trial', 'immediate-oob-trial-basic-offset',
+                    'future-oob-trial-basic-offset'],
                 true
             ) ? 'MONTH' : 'DAY'],
             'metadata' => $this->metadata()];
@@ -694,6 +808,8 @@ final class BillingScheduleEvidence
                     $this->cancelVerified = true;
                 } elseif ($this->cancelAttempted) {
                     throw new ProtocolException('An attempted cancellation is not yet confirmed.');
+                } elseif ($this->isFutureTrial()) {
+                    $this->cancelFutureTrial($resource);
                 } elseif ($this->isImmediateTrial()) {
                     $this->cancelImmediateTrial();
                 } elseif (in_array($resource['status'] ?? null, ['PENDING', 'IN_TRIAL', 'ACTIVE', 'UNPAID'], true)) {
