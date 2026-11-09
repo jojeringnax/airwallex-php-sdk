@@ -254,5 +254,28 @@ After successful verification, `WebhookEvent::fromJson($rawBody)` in the same na
 
 A valid JSON object with an unknown name, missing or unsupported version, conflicting envelope fields or unknown resource status remains unrecognized and available for consumer inspection; it receives no typed state transition. Preserve supplied fields without normalizing ownership or assigning the SDK version. Consumers retain the original `$rawBody` alongside the decoded fields when inspection or quarantine needs the exact bytes; storage and retention belong to the application. The [webhook catalogue](webhook-contracts.md#unknown-events-versions-and-reconciliation) defines interpretation and the remaining delivery evidence gates. Configure the provider webhook subscription to the SDK baseline independently of request headers.
 
+Selected `billing_checkout.*` observations can contain the Retrieve resource directly in `data`, while generic envelopes contain `data.object`. The decoder preserves both forms. For a direct Checkout without a competing `object` key, known integer fields now use the same selected-schema integer representation as generic Checkout fields. Existing generic selection and all other direct families remain unchanged. These fields were previously returned as numeric text in direct Checkout payloads; development consumers should remove string-only assumptions at those documented positions. Money, extra numbers, decimal/exponent forms, quoted numbers and overflow retain exact strings. This is a representation change before the initial release, not event acceptance or a state transition.
+
+After the existing raw-body verification, a consumer can inspect the original resource shape:
+
+```php
+$envelope = WebhookEvent::fromJson($rawBody)->toArray();
+$data = $envelope['data'] ?? null;
+$checkout = is_array($data) && array_key_exists('object', $data)
+    ? $data['object'] : $data;
+// Trusted endpoint/environment/owner/resource acceptance and durable deduplication are application work.
+if (($envelope['version'] ?? null) === '2026-08-21'
+    && ($envelope['name'] ?? null) === 'billing_checkout.created'
+    && ($envelope['org_id'] ?? null) === $trustedOrganization
+    && is_array($checkout) && ($checkout['id'] ?? null) === $knownCheckoutId) {
+    $quantity = $checkout['line_items'][0]['quantity'] ?? null;
+    if (is_int($quantity)) {
+        $observedQuantity = $quantity; // No cast or financial/access decision follows from its type.
+    }
+}
+```
+
+A SETUP with no line items or an unrecognized representation may supply no usable quantity. Current numeric selection operates on lossless decoded values and is not native identity validation or duplicate-key rejection. The [catalogue conflict record](webhook-contracts.md#documentation-conflicts-and-interpretation) limits the observed evidence to the selected Checkout case. The executed verification recipe and source/archive consumer checks cover direct shape, exact amounts and integer representation; they do not establish a completed Billing instrument flow.
+
 Consumer processing and persistence follow [state ownership](architecture.md#state-and-persistence-ownership) and the [webhook contract](api-contracts.md#webhook-contract). Verification and decoding complete the SDK call; application processing completes separately.
 
