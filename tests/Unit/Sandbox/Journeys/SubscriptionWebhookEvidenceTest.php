@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Jojeringnax\Airwallex\Tests\Unit\Sandbox\Journeys;
 
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SubscriptionWebhookEvidence;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SubscriptionWebhookApi;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookDeliveryStore;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -114,6 +115,121 @@ final class SubscriptionWebhookEvidenceTest extends TestCase
         self::assertTrue($safe['typed_owner_verified']);
         self::assertSame($before, $this->store->read('capture-000001.body'));
         self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+    }
+
+    #[DataProvider('shapes')]
+    public function testCancelledZeroMonthDurationKeepsBothSignedSnapshotProofs(bool $direct): void
+    {
+        $this->runtime->eventFilter = static function (array $event) use ($direct): array {
+            unset($event['account_id']);
+            $event['org_id'] = 'SYNTHETIC_PRIVATE_ORG';
+            self::assertIsArray($event['data']);
+            self::assertIsArray($event['data']['object']);
+            if ($event['name'] === 'subscription.cancelled') {
+                $event['data']['object']['duration'] = ['period' => 0, 'period_unit' => 'MONTH'];
+            }
+            if ($direct) {
+                $event['data'] = $event['data']['object'];
+            }
+            return $event;
+        };
+        $this->capture();
+        $this->capture(true);
+        $before = $this->store->read('capture-000002.body');
+        $literal = json_decode($before, flags: JSON_THROW_ON_ERROR);
+        self::assertInstanceOf(\stdClass::class, $literal);
+        self::assertInstanceOf(\stdClass::class, $literal->data);
+        $data = $direct ? $literal->data : ($literal->data->object ?? null);
+        self::assertInstanceOf(\stdClass::class, $data);
+        self::assertInstanceOf(\stdClass::class, $data->duration);
+        self::assertInstanceOf(\stdClass::class, $data->recurring);
+        self::assertSame(0, $data->duration->period);
+        self::assertSame(1, $data->recurring->period);
+        $safe = $this->evidence->collect();
+        self::assertSame(2, $safe['mac_verified_count']);
+        self::assertSame(1, $safe['fresh_contract_matching_created_count']);
+        self::assertSame(1, $safe['fresh_contract_matching_cancelled_count']);
+        self::assertTrue($safe['typed_owner_verified']);
+        self::assertSame($before, $this->store->read('capture-000002.body'));
+    }
+
+    /** @return iterable<string,array{bool,array<string,mixed>,bool,bool}> */
+    public static function durationSnapshots(): iterable
+    {
+        yield 'pending one' => [false, ['period' => 1, 'period_unit' => 'MONTH'], true, true];
+        yield 'cancelled one' => [true, ['period' => 1, 'period_unit' => 'MONTH'], true, true];
+        yield 'cancelled zero' => [true, ['period' => 0, 'period_unit' => 'MONTH'], true, true];
+        yield 'SDK lossless zero' => [true, ['period' => '0', 'period_unit' => 'MONTH'], true, false];
+        yield 'SDK lossless one' => [true, ['period' => '1', 'period_unit' => 'MONTH'], true, false];
+        yield 'pending zero' => [false, ['period' => 0, 'period_unit' => 'MONTH'], false, false];
+        yield 'pending quoted zero' => [false, ['period' => '0', 'period_unit' => 'MONTH'], false, false];
+        yield 'negative cancelled' => [true, ['period' => -1, 'period_unit' => 'MONTH'], false, false];
+        yield 'different cancelled duration' => [true, ['period' => 2, 'period_unit' => 'MONTH'], false, false];
+        yield 'different unit' => [true, ['period' => 0, 'period_unit' => 'DAY'], false, false];
+        yield 'nonstring unit' => [true, ['period' => 0, 'period_unit' => 1], false, false];
+        yield 'float zero' => [true, ['period' => 0.0, 'period_unit' => 'MONTH'], false, false];
+        yield 'boolean zero' => [true, ['period' => false, 'period_unit' => 'MONTH'], false, false];
+        yield 'missing period' => [true, ['period_unit' => 'MONTH'], false, false];
+        yield 'extra duration field' => [true, ['period' => 0, 'period_unit' => 'MONTH', 'extra' => 1], false, false];
+    }
+
+    /** @param array<string,mixed> $duration */
+    #[DataProvider('durationSnapshots')]
+    public function testDurationStatusBoundaryKeepsSdkAndNativeProofsSeparate(
+        bool $cancelled,
+        array $duration,
+        bool $sdkMatches,
+        bool $nativeMatches,
+    ): void {
+        $status = $cancelled ? 'CANCELLED' : 'PENDING';
+        $resource = $this->projection + ['status' => $status, 'duration' => $duration,
+            'days_until_due' => 30, 'recurring' => ['period' => 1, 'period_unit' => 'MONTH'],
+            'cancel_at_period_end' => false, 'enable_automatic_tax' => false, 'applied_discounts' => []];
+        self::assertSame($sdkMatches, SubscriptionWebhookApi::subscription($resource, $this->projection, $status));
+        $this->runtime->eventFilter = static function (array $event) use ($duration): array {
+            unset($event['account_id']);
+            $event['org_id'] = 'SYNTHETIC_PRIVATE_ORG';
+            self::assertIsArray($event['data']);
+            self::assertIsArray($event['data']['object']);
+            $event['data']['object']['duration'] = $duration;
+            return $event;
+        };
+        if (is_float($duration['period'] ?? null)) {
+            $this->runtime->bodyFilter = static fn (string $body): string => str_replace(
+                '"duration":{"period":0,',
+                '"duration":{"period":0.0,',
+                $body
+            );
+        }
+        $this->capture($cancelled);
+        $safe = $this->evidence->collect();
+        self::assertSame(1, $safe['mac_verified_count']);
+        self::assertSame(
+            $nativeMatches ? 1 : 0,
+            $safe['fresh_contract_matching_' . ($cancelled ? 'cancelled' : 'created') . '_count']
+        );
+    }
+
+    public function testCancelledZeroDurationCannotAuthorizeZeroRecurrence(): void
+    {
+        $resource = $this->projection + ['status' => 'CANCELLED',
+            'duration' => ['period' => 0, 'period_unit' => 'MONTH'],
+            'recurring' => ['period' => 0, 'period_unit' => 'MONTH'], 'days_until_due' => 30,
+            'cancel_at_period_end' => false, 'enable_automatic_tax' => false, 'applied_discounts' => []];
+        self::assertFalse(SubscriptionWebhookApi::subscription($resource, $this->projection, 'CANCELLED'));
+        $this->runtime->eventFilter = static function (array $event): array {
+            unset($event['account_id']);
+            $event['org_id'] = 'SYNTHETIC_PRIVATE_ORG';
+            self::assertIsArray($event['data']);
+            self::assertIsArray($event['data']['object']);
+            $event['data']['object']['duration'] = ['period' => 0, 'period_unit' => 'MONTH'];
+            $event['data']['object']['recurring'] = ['period' => 0, 'period_unit' => 'MONTH'];
+            return $event;
+        };
+        $this->capture(true);
+        $safe = $this->evidence->collect();
+        self::assertSame(1, $safe['mac_verified_count']);
+        self::assertSame(0, $safe['fresh_contract_matching_cancelled_count']);
     }
 
     /** @return iterable<string,array{string,mixed}> */
