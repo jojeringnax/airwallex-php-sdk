@@ -117,7 +117,7 @@ Define these deterministic checks in the authentication/resource implementation 
 
 The capability and authentication decisions are recorded in [planning](planning.md#capability-decisions). No business-model choice remains open. Public interface decisions are defined in [consumer interfaces](consumer-interfaces.md).
 
-The reviewed public documentation establishes API-key organization access and account-level Payments delegation separately. It does not establish connected-merchant Billing entitlement or arbitrary connected-account linkage. Obtain the following account-specific evidence from Airwallex before implementing or advertising that bridge:
+The reviewed public documentation establishes API-key organization access and account-level Payments delegation separately. It does not establish connected-merchant Billing entitlement or arbitrary connected-account linkage. The SDK implements those documented request boundaries and tests context isolation deterministically. Under the [documentation-based completion rule](release-policy.md#documentation-based-completion), account-specific confirmations and live enforcement checks are supplemental to SDK delivery. Confirm the following deployment prerequisites before using the bridge for a particular merchant:
 
 | Confirmation needed | Required evidence |
 | --- | --- |
@@ -126,6 +126,6 @@ The reviewed public documentation establishes API-key organization access and ac
 | Can the merchant's connected Payments account collect for that Billing organization? | Explicit eligibility of A/B as `linked_payment_account_id`, with the allowed invoicing legal entities; separately confirm P for platform-service collection |
 | Are the relevant products enabled? | Billing availability and Payments activation for each collector and its intended payment methods |
 
-[Journey validation (#42)](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) owns the provider confirmations above, both walkthroughs and the negative cases. Record the selected API version, sanitized resource mappings, request context and observed failures. The [sandbox harness (#17)](https://github.com/jojeringnax/airwallex-php-sdk/issues/17) consumes the confirmed account and permission prerequisites before enabling those scenarios. Keep unresolved confirmations explicit as blocked evidence; the contract research in #4 does not establish account eligibility. Credentials remain outside the repository.
+[Journey validation (#42)](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) records supplemental provider confirmations, both walkthroughs and live negative cases. Record the selected API version, sanitized resource mappings, request context and observed failures. The [sandbox harness (#17)](https://github.com/jojeringnax/airwallex-php-sdk/issues/17) consumes the confirmed account and permission prerequisites before enabling those scenarios. Keep unresolved confirmations explicit as blocked evidence; SDK completion and the contract research in #4 do not establish account eligibility. Credentials remain outside the repository.
 
 No sandbox requests or account-specific provider confirmations are recorded here. Endpoint fixtures and runnable SDK interfaces belong to their implementation issues; they must preserve the ownership boundaries documented here.

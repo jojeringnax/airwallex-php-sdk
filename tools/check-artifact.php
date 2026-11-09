@@ -58,16 +58,9 @@ try {
         'composer_version' => capturePackageCommand([...consumerComposerCommand(), '--version', '--no-ansi'], $root),
         'consumer_dependencies' => $versions,
         'archive' => basename($archive), 'sha256' => hash_file('sha256', $archive),
-        'package_validation' => 'pass', 'release_ready' => false,
-        'required_evidence' => ['https://github.com/jojeringnax/airwallex-php-sdk/issues/42'],
-        'decision_reviews' => [
-            'https://github.com/jojeringnax/airwallex-php-sdk/issues/60',
-            'https://github.com/jojeringnax/airwallex-php-sdk/issues/91',
-            'https://github.com/jojeringnax/airwallex-php-sdk/issues/95',
-            'https://github.com/jojeringnax/airwallex-php-sdk/issues/104',
-            'https://github.com/jojeringnax/airwallex-php-sdk/issues/127',
-            'https://github.com/jojeringnax/airwallex-php-sdk/issues/130',
-        ],
+        'package_validation' => 'pass', 'readiness_scope' => 'package_validation_only',
+        'release_policy' => 'docs/release-policy.md#observable-release-gates',
+        'supplemental_evidence' => ['https://github.com/jojeringnax/airwallex-php-sdk/issues/42'],
         'contents' => $contents,
     ];
     file_put_contents($destination . '/manifest.json', json_encode($manifest, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));

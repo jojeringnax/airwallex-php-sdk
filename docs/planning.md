@@ -17,6 +17,8 @@ The initial scope is limited to the Billing and Payments capabilities below. Oth
 
 For compatibility changes and release preparation, follow the [release policy](release-policy.md), including the first-release evidence gates.
 
+First-release feature completion follows the [documentation-based rule](release-policy.md#documentation-based-completion): verified provider contracts, implemented interfaces, meaningful deterministic tests and package checks. Account-specific Sandbox validation and provider confirmations are supplemental. This makes SDK delivery independent of a particular Sandbox account's activation or timing while retaining its known limitations.
+
 ## Initial Billing and Payments scope
 
 The initial release covers both subscription billing and standalone Payments ([issue #1](https://github.com/jojeringnax/airwallex-php-sdk/issues/1)).
@@ -32,7 +34,7 @@ The initial release covers both subscription billing and standalone Payments ([i
 | Payment status retrieval and refunds | Required |
 | Invoice retrieval | Required, including provider PDF and hosted links; see [Billing capability boundaries](billing-capabilities.md) |
 | Webhooks | SDK verification and event contracts required; state synchronization and reconciliation belong to consumers |
-| Connected-account support | Both platform billing of connected accounts and connected merchants billing their buyers; subject to independent provider-eligibility verification per family |
+| Connected-account support | Both platform billing of connected accounts and connected merchants billing their buyers through the documented authorization/linkage model; live use requires the applicable Billing and Payments account eligibility |
 | Authentication | Client ID and API key exchanged for bearer tokens; OAuth deferred |
 | Discounts/coupons, tax and usage-based billing | Deferred beyond the initial release |
 | Countries and currencies | No SDK-specific restrictions; expose provider-supported combinations for the applicable contract and account |
