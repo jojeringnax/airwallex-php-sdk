@@ -312,12 +312,9 @@ final class WebhookEventTest extends TestCase
     {
         foreach (
             [
-            ['subscription.created', '"org_id":"org_example"',
-                '{"status":"ACTIVE","recurring":{"period":2},"days_until_due":3}',
-                ['status' => 'ACTIVE', 'recurring' => ['period' => '2'], 'days_until_due' => '3']],
-            ['invoice.created', '"org_id":"org_example"',
-                '{"status":"DRAFT","days_until_due":3,"past_payment_attempt_count":2}',
-                ['status' => 'DRAFT', 'days_until_due' => '3', 'past_payment_attempt_count' => '2']],
+            ['payment_consent.verified', '"account_id":"account_example"',
+                '{"status":"VERIFIED","terms_of_use":{"total_billing_cycles":2}}',
+                ['status' => 'VERIFIED', 'terms_of_use' => ['total_billing_cycles' => '2']]],
             ['payment_intent.created', '"account_id":"account_example"',
                 '{"status":"REQUIRES_PAYMENT_METHOD","order":{"products":[{"quantity":3}]}}',
                 ['status' => 'REQUIRES_PAYMENT_METHOD', 'order' => ['products' => [['quantity' => '3']]]]],
@@ -327,6 +324,216 @@ final class WebhookEventTest extends TestCase
                 . '"name":"' . $name . '",' . $owner . ',"data":' . $data . '}';
             self::assertSame($expected, WebhookEvent::fromJson($raw)->toArray()['data']);
         }
+    }
+
+    /** @return iterable<string,array{string,string}> */
+    public static function subscriptionRepresentations(): iterable
+    {
+        yield 'created' => ['created', 'PENDING'];
+        yield 'in trial' => ['in_trial', 'IN_TRIAL'];
+        yield 'active' => ['active', 'ACTIVE'];
+        yield 'unpaid' => ['unpaid', 'UNPAID'];
+        yield 'modified' => ['modified', 'ACTIVE'];
+        yield 'cancelled zero duration' => ['cancelled', 'CANCELLED'];
+    }
+
+    #[DataProvider('subscriptionRepresentations')]
+    public function testSubscriptionsKeepTheirOriginalDirectOrGenericShape(string $event, string $status): void
+    {
+        $period = $event === 'cancelled' ? '0' : '1';
+        $resource = '{"id":"subscription_example","status":"' . $status . '","days_until_due":30,'
+            . '"duration":{"period":' . $period . ',"period_unit":"MONTH"},"recurring":{"period":1},'
+            . '"applied_discounts":[{"duration":{"period":2},"amount_off":1.2300},'
+            . '{"duration":{"period":3},"unknown_count":4}],"unknown_count":5,"amount":19.900000000000000001}';
+        foreach ([false, true] as $generic) {
+            $decoded = WebhookEvent::fromJson(self::subscriptionRaw($resource, $generic, $event))->toArray();
+            self::assertIsArray($decoded['data']);
+            self::assertSame($generic, array_key_exists('object', $decoded['data']));
+            $object = $generic ? $decoded['data']['object'] : $decoded['data'];
+            self::assertIsArray($object);
+            self::assertSame($status, $object['status']);
+            self::assertSame(30, $object['days_until_due']);
+            self::assertSame(
+                ['period' => $event === 'cancelled' ? 0 : 1, 'period_unit' => 'MONTH'],
+                $object['duration']
+            );
+            self::assertSame(['period' => 1], $object['recurring']);
+            self::assertSame([
+                ['duration' => ['period' => 2], 'amount_off' => '1.2300'],
+                ['duration' => ['period' => 3], 'unknown_count' => '4'],
+            ], $object['applied_discounts']);
+            self::assertSame('5', $object['unknown_count']);
+            self::assertSame('19.900000000000000001', $object['amount']);
+        }
+    }
+
+    #[DataProvider('checkoutIntegerTokens')]
+    public function testSubscriptionIntegerPathsKeepExactTokenBoundaries(string $token, int|string $expected): void
+    {
+        $resource = '{"status":"CANCELLED","days_until_due":' . $token . ',"duration":{"period":' . $token
+            . '},"recurring":{"period":' . $token . '},"applied_discounts":[{"duration":{"period":' . $token
+            . '},"amount_off":19.9000}],"unknown_number":' . $token . '}';
+        foreach ([false, true] as $generic) {
+            $decoded = WebhookEvent::fromJson(self::subscriptionRaw($resource, $generic))->toArray();
+            self::assertIsArray($decoded['data']);
+            $object = $generic ? $decoded['data']['object'] : $decoded['data'];
+            self::assertIsArray($object);
+            self::assertSame($expected, $object['days_until_due']);
+            self::assertSame(['period' => $expected], $object['duration']);
+            self::assertSame(['period' => $expected], $object['recurring']);
+            self::assertSame(
+                [['duration' => ['period' => $expected], 'amount_off' => '19.9000']],
+                $object['applied_discounts']
+            );
+            self::assertSame(is_int($expected) ? $token : $expected, $object['unknown_number']);
+        }
+    }
+
+    public function testSubscriptionObjectKeyKeepsGenericSelectionWithoutDirectFallback(): void
+    {
+        $inner = '{"status":"CANCELLED","days_until_due":30,"duration":{"period":0}}';
+        foreach (['null', 'false', '2', '[]', '{}', $inner] as $candidate) {
+            $raw = self::subscriptionRaw('{"status":"PENDING","days_until_due":7,"duration":{"period":1},'
+                . '"object":' . $candidate . ',"extra":19.9000}');
+            $decoded = WebhookEvent::fromJson($raw)->toArray();
+            self::assertIsArray($decoded['data']);
+            self::assertSame('7', $decoded['data']['days_until_due']);
+            self::assertSame(['period' => '1'], $decoded['data']['duration']);
+            self::assertSame('19.9000', $decoded['data']['extra']);
+            if ($candidate === $inner) {
+                self::assertIsArray($decoded['data']['object']);
+                self::assertSame(30, $decoded['data']['object']['days_until_due']);
+                self::assertSame(['period' => 0], $decoded['data']['object']['duration']);
+            }
+        }
+        $raw = self::subscriptionRaw('{"status":"CANCELLED","days_until_due":30,"\\u006fbject":null}');
+        $decoded = WebhookEvent::fromJson($raw)->toArray();
+        self::assertIsArray($decoded['data']);
+        self::assertSame('30', $decoded['data']['days_until_due']);
+    }
+
+    public function testUnselectedDirectSubscriptionCountsStayText(): void
+    {
+        $base = self::subscriptionRaw('{"status":"CANCELLED","days_until_due":30,"duration":{"period":0}}');
+        foreach (['id', 'name', 'created_at', 'version', 'org_id'] as $field) {
+            $copy = json_decode($base, true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($copy);
+            unset($copy[$field]);
+            $decoded = WebhookEvent::fromJson(json_encode($copy, JSON_THROW_ON_ERROR))->toArray();
+            self::assertIsArray($decoded['data']);
+            self::assertSame('30', $decoded['data']['days_until_due']);
+            self::assertSame(['period' => '0'], $decoded['data']['duration']);
+        }
+        foreach (
+            [['2026-08-21', '2025-01-01'], ['subscription.cancelled', 'subscription.updated'],
+            ['subscription.cancelled', 'subscription.future'], ['"CANCELLED"', '"FUTURE"'],
+            ['"org_example"', '""'], ['"org_example"', 'null'], ['"org_example"', 'false'],
+            ['"org_example"', '[]'], ['"org_id":"org_example"', '"org_id":"org_example","account_id":"other"'],
+            ['"org_id":"org_example"', '"org_id":"org_example","accountId":"other"']] as [$from, $to]
+        ) {
+            $decoded = WebhookEvent::fromJson(str_replace($from, $to, $base))->toArray();
+            self::assertIsArray($decoded['data']);
+            self::assertSame('30', $decoded['data']['days_until_due']);
+            self::assertSame(['period' => '0'], $decoded['data']['duration']);
+        }
+        $list = self::subscriptionRaw('[{"status":"CANCELLED","days_until_due":30}]');
+        $decoded = WebhookEvent::fromJson($list)->toArray();
+        self::assertSame([['status' => 'CANCELLED', 'days_until_due' => '30']], $decoded['data']);
+    }
+
+    public function testDirectSubscriptionRetainsDecodedIdentityAndLastWinsSemantics(): void
+    {
+        $raw = self::subscriptionRaw('{"status":"CANCELLED","duration":{"period":1,"period":0}}');
+        $raw = str_replace('"id":"evt_example"', '"id":123', $raw);
+        $raw = str_replace('"org_id":"org_example"', '"org_id":456', $raw);
+        $decoded = WebhookEvent::fromJson($raw)->toArray();
+        self::assertSame('123', $decoded['id']);
+        self::assertSame('456', $decoded['org_id']);
+        self::assertIsArray($decoded['data']);
+        self::assertSame(['period' => 0], $decoded['data']['duration']);
+    }
+
+    /** @return iterable<string,array{string,string,string}> */
+    public static function invoiceRepresentations(): iterable
+    {
+        yield 'created' => ['created', 'DRAFT', 'UNPAID'];
+        yield 'finalized' => ['finalized', 'FINALIZED', 'UNPAID'];
+        yield 'updated schema-derived' => ['updated', 'FINALIZED', 'UNPAID'];
+        yield 'paid' => ['payment.paid', 'FINALIZED', 'PAID'];
+        yield 'voided schema-derived' => ['voided', 'VOIDED', 'UNPAID'];
+    }
+
+    #[DataProvider('invoiceRepresentations')]
+    public function testInvoicesKeepTheirOriginalDirectOrGenericShape(
+        string $event,
+        string $status,
+        string $paymentStatus,
+    ): void {
+        $resource = '{"id":"invoice_example","status":"' . $status . '","payment_status":"' . $paymentStatus
+            . '","days_until_due":30,"past_payment_attempt_count":2,"remaining_payment_attempt_count":0,'
+            . '"applied_discounts":[{"duration":{"period":2},"amount_off":1.2300},'
+            . '{"duration":{"period":3},"unknown_count":4}],"unknown_count":5,"amount_due":0.00}';
+        foreach ([false, true] as $generic) {
+            $decoded = WebhookEvent::fromJson(self::invoiceRaw($resource, $generic, $event))->toArray();
+            self::assertIsArray($decoded['data']);
+            self::assertSame($generic, array_key_exists('object', $decoded['data']));
+            $object = $generic ? $decoded['data']['object'] : $decoded['data'];
+            self::assertIsArray($object);
+            self::assertSame($status, $object['status']);
+            self::assertSame($paymentStatus, $object['payment_status']);
+            self::assertSame(30, $object['days_until_due']);
+            self::assertSame(2, $object['past_payment_attempt_count']);
+            self::assertSame(0, $object['remaining_payment_attempt_count']);
+            self::assertSame([
+                ['duration' => ['period' => 2], 'amount_off' => '1.2300'],
+                ['duration' => ['period' => 3], 'unknown_count' => '4'],
+            ], $object['applied_discounts']);
+            self::assertSame('5', $object['unknown_count']);
+            self::assertSame('0.00', $object['amount_due']);
+        }
+    }
+
+    #[DataProvider('checkoutIntegerTokens')]
+    public function testInvoiceIntegerPathsKeepExactTokenBoundaries(string $token, int|string $expected): void
+    {
+        $resource = '{"status":"FINALIZED","days_until_due":' . $token . ',"past_payment_attempt_count":'
+            . $token . ',"remaining_payment_attempt_count":' . $token
+            . ',"applied_discounts":[{"duration":{"period":' . $token
+            . '},"amount_off":19.9000}],"unknown_number":' . $token . '}';
+        foreach ([false, true] as $generic) {
+            $decoded = WebhookEvent::fromJson(self::invoiceRaw($resource, $generic))->toArray();
+            self::assertIsArray($decoded['data']);
+            $object = $generic ? $decoded['data']['object'] : $decoded['data'];
+            self::assertIsArray($object);
+            self::assertSame($expected, $object['days_until_due']);
+            self::assertSame($expected, $object['past_payment_attempt_count']);
+            self::assertSame($expected, $object['remaining_payment_attempt_count']);
+            self::assertSame(
+                [['duration' => ['period' => $expected], 'amount_off' => '19.9000']],
+                $object['applied_discounts']
+            );
+            self::assertSame(is_int($expected) ? $token : $expected, $object['unknown_number']);
+        }
+    }
+
+    private static function invoiceRaw(
+        string $resource,
+        bool $generic = false,
+        string $event = 'payment.paid',
+    ): string {
+        return '{"id":"evt_example","name":"invoice.' . $event . '","version":"2026-08-21",'
+            . '"org_id":"org_example","created_at":"2026-11-09T00:00:00Z","data":'
+            . ($generic ? '{"object":' . $resource . '}' : $resource) . '}';
+    }
+
+    private static function subscriptionRaw(
+        string $resource,
+        bool $generic = false,
+        string $event = 'cancelled',
+    ): string {
+        return '{"id":"evt_example","name":"subscription.' . $event . '","version":"2026-08-21",'
+            . '"org_id":"org_example","created_at":"2026-11-09T00:00:00Z","data":'
+            . ($generic ? '{"object":' . $resource . '}' : $resource) . '}';
     }
 
     private static function checkoutRaw(string $resource, bool $generic = false, string $event = 'created'): string
