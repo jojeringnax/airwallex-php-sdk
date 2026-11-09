@@ -133,9 +133,8 @@ final class BillingItemReadsTest extends HttpTestCase
             $client->billing()->invoices()->listLineItems(id: $id)];
     }
 
-    /** @param Closure(Client,string,array<string,mixed>):array<array-key,mixed> $list */
     #[DataProvider('lists')]
-    public function testExplicitPagesRetainParentQueryAndTokenAndSurfaceNextPageFailure(Closure $list): void
+    public function testExplicitPagesRetainParentQueryAndTokenAndSurfacePageFailure(string $resource): void
     {
         $http = $this->scenario([
             [201, self::LOGIN],
@@ -145,11 +144,11 @@ final class BillingItemReadsTest extends HttpTestCase
         ]);
         $client = $this->client($http);
         $query = ['page_size' => 1];
-        $first = $list($client, 'parent /+', $query);
+        $first = $this->listItems($client, $resource, 'parent /+', $query);
         self::assertSame(['items' => [['id' => 'item']], 'page_after' => 'next /+', 'page_before' => null], $first);
         self::assertCount(2, $http->requests);
         $nextQuery = $query + ['page' => $first['page_after']];
-        $last = $list($client, 'parent /+', $nextQuery);
+        $last = $this->listItems($client, $resource, 'parent /+', $nextQuery);
         self::assertSame(['items' => [], 'page_after' => null, 'page_before' => 'previous /+'], $last);
         self::assertCount(3, $http->requests);
         self::assertSame(['page_size' => 1], $query);
@@ -158,7 +157,7 @@ final class BillingItemReadsTest extends HttpTestCase
         self::assertStringEndsWith('?page_size=1', $firstUri);
         self::assertSame($firstUri . '&page=next%20%2F%2B', (string) $http->requests[2]->getUri());
         try {
-            $list($client, 'parent /+', $query + ['page' => $last['page_before']]);
+            $this->listItems($client, $resource, 'parent /+', $query + ['page' => $last['page_before']]);
             self::fail('Expected failed explicit previous page.');
         } catch (ApiException $error) {
             self::assertSame(403, $error->httpStatus());
@@ -172,41 +171,51 @@ final class BillingItemReadsTest extends HttpTestCase
         }
     }
 
-    /**
-     * @param Closure(Client,string,array<string,mixed>):array<array-key,mixed> $list
-     * @param array<string,mixed> $query
-     */
+    /** @param array<string,mixed> $query */
     #[DataProvider('invalidQueries')]
-    public function testInvalidPaginationOrUnsupportedFiltersFailBeforeAuthentication(Closure $list, array $query): void
-    {
+    public function testInvalidPaginationOrUnsupportedFiltersFailBeforeAuthentication(
+        string $resource,
+        array $query,
+    ): void {
         $http = $this->scenario([]);
         try {
-            $list($this->client($http), 'parent', $query);
+            $this->listItems($this->client($http), $resource, 'parent', $query);
             self::fail('Expected invalid list query rejection.');
         } catch (ValidationException) {
             self::assertSame([], $http->requests);
         }
     }
 
-    /** @return iterable<string,array{Closure(Client,string,array<string,mixed>):array<array-key,mixed>,array<string,mixed>}> */
+    /** @return iterable<string,array{string,array<string,mixed>}> */
     public static function invalidQueries(): iterable
     {
-        foreach (self::lists() as $name => [$list]) {
+        foreach (self::lists() as $name => [$resource]) {
             foreach (
                 [['page_size' => 0], ['page_size' => 1001], ['page_size' => '1'], ['page' => null],
                 ['status' => 'ACTIVE']] as $index => $query
             ) {
-                yield $name . '-' . $index => [$list, $query];
+                yield $name . '-' . $index => [$resource, $query];
             }
         }
     }
 
-    /** @return iterable<string,array{Closure(Client,string,array<string,mixed>):array<array-key,mixed>}> */
+    /** @return iterable<string,array{string}> */
     public static function lists(): iterable
     {
-        yield 'subscriptions' => [static fn (Client $client, string $id, array $query): array =>
-            $client->billing()->subscriptions()->listItems(id: $id, query: $query)];
-        yield 'invoices' => [static fn (Client $client, string $id, array $query): array =>
-            $client->billing()->invoices()->listLineItems(id: $id, query: $query)];
+        yield 'subscriptions' => ['subscriptions'];
+        yield 'invoices' => ['invoices'];
+    }
+
+    /**
+     * @param array<string,mixed> $query
+     * @return array<array-key,mixed>
+     */
+    private function listItems(Client $client, string $resource, string $id, array $query): array
+    {
+        return match ($resource) {
+            'subscriptions' => $client->billing()->subscriptions()->listItems(id: $id, query: $query),
+            'invoices' => $client->billing()->invoices()->listLineItems(id: $id, query: $query),
+            default => throw new \LogicException('Unknown test resource.'),
+        };
     }
 }
