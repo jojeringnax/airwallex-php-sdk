@@ -20,6 +20,8 @@ jobs:
         dependencies: [lowest, latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -37,6 +39,8 @@ jobs:
       - name: Verify resolved platform requirements
         run: composer check-platform-reqs
       - name: Run deterministic tests, style and static analysis
+        env:
+          COMPOSER_PROCESS_TIMEOUT: '1800'
         run: composer check
       - name: Install clean consumer with lowest dependencies
         if: matrix.dependencies == 'lowest'
