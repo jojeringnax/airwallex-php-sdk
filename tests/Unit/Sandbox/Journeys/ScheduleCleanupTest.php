@@ -223,9 +223,10 @@ final class ScheduleCleanupTest extends TestCase
         $this->http->objects[$this->path('prices')]['recurring'] = ['period' => 1, 'period_unit' => 'MONTH'];
     }
 
-    public function testImmediateTrialCatalogueOnlyRejectsDailyPriceBeforeAnyArchive(): void
+    #[DataProvider('monthlyCases')]
+    public function testMonthlyTrialCatalogueOnlyRejectsDailyPriceBeforeAnyArchive(string $case): void
     {
-        $this->catalogueOnly('immediate-oob-trial');
+        $this->catalogueOnly($case);
         $this->http->objects[$this->path('prices')]['recurring'] = ['period' => 1, 'period_unit' => 'DAY'];
         $options = $this->options();
         unset($options['mode']);
@@ -240,6 +241,7 @@ final class ScheduleCleanupTest extends TestCase
     {
         yield 'checkout trial' => ['checkout-trial'];
         yield 'immediate out-of-band trial' => ['immediate-oob-trial'];
+        yield 'basic-offset out-of-band trial' => ['immediate-oob-trial-basic-offset'];
     }
 
     #[DataProvider('monthlyCases')]

@@ -17,7 +17,7 @@ final class BillingScheduleEvidence
     public const array CASES = [
         'flag-one-day', 'flag-seven-days', 'finite-ends', 'finite-duration', 'finite-remaining',
         'clear-all-pending', 'cancel-all', 'cancel-prorated', 'checkout-trial',
-        'remaining-active-only', 'flag-restore-end', 'immediate-oob-trial',
+        'remaining-active-only', 'flag-restore-end', 'immediate-oob-trial', 'immediate-oob-trial-basic-offset',
     ];
     private ?string $trialEnd = null;
     private bool $ambiguous = false;
@@ -132,12 +132,12 @@ final class BillingScheduleEvidence
         $now = ($this->clock)();
         if (
             !is_int($now) || $now < 0
-            || ($this->case === 'immediate-oob-trial' && $now > PHP_INT_MAX - 172800)
+            || ($this->isImmediateTrial() && $now > PHP_INT_MAX - 172800)
         ) {
             throw new RuntimeException('A case requires a Unix-second clock.');
         }
         $this->catalogue();
-        if ($this->case === 'immediate-oob-trial') {
+        if ($this->isImmediateTrial()) {
             $this->immediateTrial($now);
             return;
         }
@@ -217,9 +217,15 @@ final class BillingScheduleEvidence
         }
     }
 
+    private function isImmediateTrial(): bool
+    {
+        return in_array($this->case, ['immediate-oob-trial', 'immediate-oob-trial-basic-offset'], true);
+    }
+
     private function immediateTrial(int $now): void
     {
-        $this->trialEnd = gmdate('Y-m-d\TH:i:s\Z', $now + 172800);
+        $format = $this->case === 'immediate-oob-trial-basic-offset' ? 'Y-m-d\TH:i:sO' : 'Y-m-d\TH:i:s\Z';
+        $this->trialEnd = gmdate($format, $now + 172800);
         $this->scope = ['billing_customer_id' => $this->customer, 'legal_entity_id' => $this->entity,
             'currency' => 'EUR', 'collection_method' => 'OUT_OF_BAND', 'metadata' => $this->metadata()];
         $body = $this->scope + ['days_until_due' => 30, 'duration' => ['period' => 1, 'period_unit' => 'MONTH'],
@@ -356,7 +362,7 @@ final class BillingScheduleEvidence
             'unit_amount' => '1.23', 'billing_type' => 'IN_ADVANCE', 'active' => true,
             'recurring' => ['period' => 1, 'period_unit' => in_array(
                 $this->case,
-                ['checkout-trial', 'immediate-oob-trial'],
+                ['checkout-trial', 'immediate-oob-trial', 'immediate-oob-trial-basic-offset'],
                 true
             ) ? 'MONTH' : 'DAY'],
             'metadata' => $this->metadata()];
@@ -688,7 +694,7 @@ final class BillingScheduleEvidence
                     $this->cancelVerified = true;
                 } elseif ($this->cancelAttempted) {
                     throw new ProtocolException('An attempted cancellation is not yet confirmed.');
-                } elseif ($this->case === 'immediate-oob-trial') {
+                } elseif ($this->isImmediateTrial()) {
                     $this->cancelImmediateTrial();
                 } elseif (in_array($resource['status'] ?? null, ['PENDING', 'IN_TRIAL', 'ACTIVE', 'UNPAID'], true)) {
                     $this->cancel('NONE', 'cleanup_cancel');
