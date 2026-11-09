@@ -554,4 +554,58 @@ final class ConsumerRecipesTest extends HttpTestCase
             static fn (): int => 1794132000000
         );
     }
+
+    public function testWebhookRecipeRetainsDirectSubscriptionZeroDurationAfterVerification(): void
+    {
+        $recipe = $this->recipe('verify-webhook.php');
+        $raw = '{"id":"event_example","name":"subscription.cancelled","version":"2026-08-21",'
+            . '"created_at":"2026-11-09T00:00:00Z","org_id":"org_example","data":{'
+            . '"id":"subscription_example","status":"CANCELLED","days_until_due":30,'
+            . '"duration":{"period":0,"period_unit":"MONTH"},"recurring":{"period":1},'
+            . '"amount":1.2300,"extra":9223372036854775808}}';
+        $timestamp = '1794132000000';
+        $signature = hash_hmac('sha256', $timestamp . $raw, 'synthetic-secret');
+        $event = $recipe('synthetic-secret', $raw, $timestamp, $signature, 0, static fn (): int => 1794132000000);
+        self::assertIsArray($event);
+        self::assertIsArray($event['data']);
+        self::assertArrayNotHasKey('object', $event['data']);
+        self::assertSame(30, $event['data']['days_until_due']);
+        self::assertSame(['period' => 0, 'period_unit' => 'MONTH'], $event['data']['duration']);
+        self::assertSame(['period' => 1], $event['data']['recurring']);
+        self::assertSame('1.2300', $event['data']['amount']);
+        self::assertSame('9223372036854775808', $event['data']['extra']);
+        $this->expectException(WebhookVerificationException::class);
+        $recipe(
+            'synthetic-secret',
+            $raw . 'invalid json',
+            $timestamp,
+            $signature,
+            0,
+            static fn (): int => 1794132000000
+        );
+    }
+
+    public function testWebhookRecipeRetainsDirectInvoiceCountsAndExactMoneyAfterVerification(): void
+    {
+        $recipe = $this->recipe('verify-webhook.php');
+        $raw = '{"id":"event_example","name":"invoice.payment.paid","version":"2026-08-21",'
+            . '"created_at":"2026-11-09T00:00:00Z","org_id":"org_example","data":{'
+            . '"id":"invoice_example","status":"FINALIZED","payment_status":"PAID","days_until_due":30,'
+            . '"remaining_payment_attempt_count":0,"amount_due":0.00,"amount":1.2300,"extra":2}}';
+        $timestamp = '1794132000000';
+        $signature = hash_hmac('sha256', $timestamp . $raw, 'synthetic-secret');
+        $event = $recipe('synthetic-secret', $raw, $timestamp, $signature, 0, static fn (): int => 1794132000000);
+        self::assertIsArray($event);
+        self::assertIsArray($event['data']);
+        self::assertArrayNotHasKey('object', $event['data']);
+        self::assertSame('FINALIZED', $event['data']['status']);
+        self::assertSame('PAID', $event['data']['payment_status']);
+        self::assertSame(30, $event['data']['days_until_due']);
+        self::assertSame(0, $event['data']['remaining_payment_attempt_count']);
+        self::assertSame('0.00', $event['data']['amount_due']);
+        self::assertSame('1.2300', $event['data']['amount']);
+        self::assertSame('2', $event['data']['extra']);
+        $this->expectException(WebhookVerificationException::class);
+        $recipe('synthetic-secret', $raw . ' ', $timestamp, $signature, 0, static fn (): int => 1794132000000);
+    }
 }
