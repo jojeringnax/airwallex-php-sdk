@@ -10,6 +10,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookDeliveryTransport;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookDeliveryEvents;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookManagementProfile;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\DataProviderExternal;
@@ -375,5 +376,110 @@ final class WebhookDeliveryTransportTest extends TestCase
             self::assertCount(1, $client->requests);
             self::assertTrue($transport->sent('create_webhook'));
         }
+    }
+    public function testSubscriptionPairRequiresExplicitDefaultManagementAndRejectsCrossedApiBinding(): void
+    {
+        $pair = WebhookDeliveryEvents::Subscription;
+        foreach ([false, true] as $managementOnly) {
+            try {
+                new WebhookDeliveryTransport('fixture', managementOnly: $managementOnly, eventPair: $pair);
+                self::fail('An ACCOUNT profile granted Subscription management.');
+            } catch (ProtocolException $error) {
+                self::assertNull($error->getPrevious());
+            }
+        }
+        $bound = new WebhookDeliveryTransport(
+            'fixture',
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::DefaultLogin,
+            eventPair: $pair
+        );
+        $bound->assertEventPair($pair);
+        try {
+            $bound->assertEventPair(WebhookDeliveryEvents::BillingCheckout);
+            self::fail('Crossed explicit pair accepted.');
+        } catch (ProtocolException $error) {
+            self::assertNull($error->getPrevious());
+        }
+        $old = new WebhookDeliveryTransport(
+            'fixture',
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::DefaultLogin
+        );
+        $old->assertEventPair(WebhookDeliveryEvents::BillingCheckout);
+        $this->expectException(ProtocolException::class);
+        $old->assertEventPair($pair);
+    }
+
+    public function testNewDefaultPairCannotUseOldCheckoutBodyAndOldDefaultCannotUseSubscriptionBody(): void
+    {
+        $pairs = WebhookDeliveryEvents::cases();
+        foreach ($pairs as $selected) {
+            if ($selected === WebhookDeliveryEvents::Payments) {
+                continue;
+            }
+            $other = $selected === WebhookDeliveryEvents::Subscription
+                ? WebhookDeliveryEvents::BillingCheckout
+                : WebhookDeliveryEvents::Subscription;
+            $http = new WebhookConfigFixtureClient([]);
+            $transport = new WebhookDeliveryTransport(
+                'fixture',
+                $http,
+                managementOnly: true,
+                managementProfile: WebhookManagementProfile::DefaultLogin,
+                eventPair: $selected
+            );
+            $body = self::defaultBody();
+            $body['events'] = $other->names();
+            try {
+                $transport->sendRequest(new Request(
+                    'POST',
+                    self::HOST . '/api/v1/webhooks/create',
+                    self::defaultHeaders(),
+                    json_encode($body, JSON_THROW_ON_ERROR)
+                ));
+                self::fail('Wrong event pair reached delegate.');
+            } catch (ProtocolException) {
+                self::assertSame([], $http->requests);
+            }
+        }
+    }
+
+    public function testSubscriptionOnlyManagementHeaderCapDoesNotRetroactivelyChangeOldDefault(): void
+    {
+        foreach ([false, true] as $subscription) {
+            $stream = new WebhookConfigFixtureStream('{"token":"private","expires_at":"2099-01-01T00:00:00Z"}');
+            $http = new WebhookConfigFixtureClient([new Response(201, ['X' => str_repeat('v', 16378)], $stream)]);
+            $transport = new WebhookDeliveryTransport(
+                'fixture',
+                $http,
+                managementOnly: true,
+                managementProfile: WebhookManagementProfile::DefaultLogin,
+                eventPair: $subscription ? WebhookDeliveryEvents::Subscription : null
+            );
+            try {
+                $transport->sendRequest(new Request(
+                    'POST',
+                    self::HOST . '/api/v1/authentication/login',
+                    self::defaultHeaders(true)
+                ));
+                self::assertFalse($subscription);
+                self::assertGreaterThan(0, $stream->bytesRead);
+            } catch (ProtocolException) {
+                self::assertTrue($subscription);
+                self::assertSame(0, $stream->bytesRead);
+            }
+            self::assertTrue($stream->closed);
+        }
+    }
+    public function testAnExplicitPairCannotBroadenDefaultManagementToPayments(): void
+    {
+        $this->expectException(ProtocolException::class);
+        new WebhookDeliveryTransport(
+            'fixture',
+            managementOnly: true,
+            managementProfile: WebhookManagementProfile::DefaultLogin,
+            eventPair: WebhookDeliveryEvents::Payments
+        );
     }
 }
