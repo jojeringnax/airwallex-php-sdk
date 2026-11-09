@@ -93,6 +93,16 @@ final class BillingScheduleProvider implements ClientInterface
             }
             $metadata = $object['metadata'] ?? null;
             if (
+                is_array($metadata) && ($metadata['sdk_validation_case'] ?? null) === 'future-oob-trial-basic-offset'
+                && ($body['trial_ends_at'] ?? null) === 'NOW'
+            ) {
+                $body['trial_ends_at'] = '2028-01-01T00:00:01+0000';
+                $body['status'] = 'ACTIVE';
+                $body['current_period_starts_at'] = '2028-01-01T00:00:01Z';
+                $body['current_period_ends_at'] = '2028-02-01T00:00:01+0000';
+                $body['ends_at'] = $body['current_period_ends_at'];
+            }
+            if (
                 is_array($metadata) && ($metadata['sdk_validation_case'] ?? null) === 'flag-restore-end'
                 && ($body['cancel_at_period_end'] ?? null) === true
             ) {

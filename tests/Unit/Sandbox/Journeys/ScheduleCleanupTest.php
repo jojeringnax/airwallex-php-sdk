@@ -242,6 +242,7 @@ final class ScheduleCleanupTest extends TestCase
         yield 'checkout trial' => ['checkout-trial'];
         yield 'immediate out-of-band trial' => ['immediate-oob-trial'];
         yield 'basic-offset out-of-band trial' => ['immediate-oob-trial-basic-offset'];
+        yield 'future basic-offset out-of-band trial' => ['future-oob-trial-basic-offset'];
     }
 
     #[DataProvider('monthlyCases')]

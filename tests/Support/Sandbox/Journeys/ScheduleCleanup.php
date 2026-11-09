@@ -350,6 +350,7 @@ final class ScheduleCleanup
                 'billing_type' => 'IN_ADVANCE', 'recurring' => ['period' => 1,
                     'period_unit' => in_array($this->case, [
                         'checkout-trial', 'immediate-oob-trial', 'immediate-oob-trial-basic-offset',
+                        'future-oob-trial-basic-offset',
                     ], true)
                         ? 'MONTH' : 'DAY']]);
             if (!ExactDecimal::equalsLiteral($object['unit_amount'] ?? null, '1.23')) {
