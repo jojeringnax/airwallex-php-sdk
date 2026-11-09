@@ -77,14 +77,8 @@ final class SubscriptionWebhookProbe
         try {
             self::validate($options);
             $caseStarted = $elapsed();
-            $deadline = $caseStarted + 300;
             $started = self::wall($clock);
-            if (
-                !is_finite($caseStarted) || $caseStarted < 0 || !is_finite($deadline)
-                || $deadline - $caseStarted !== 300.0
-            ) {
-                throw new ProtocolException('The original case clock is unavailable.');
-            }
+            $deadline = SubscriptionWebhookTransport::caseDeadline($caseStarted);
             $credentials = self::option($options, 'credentials-file');
             self::external($credentials);
             $directory = self::option($options, 'state-dir');
@@ -130,7 +124,8 @@ final class SubscriptionWebhookProbe
                 $deadline,
                 $elapsed,
                 $tools,
-                $ledger->evidence()['source']
+                $ledger->evidence()['source'],
+                $caseStarted
             );
             $safe['phase'] = 'account_prerequisite';
             $entity = $api->legalEntity();

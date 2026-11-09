@@ -408,7 +408,7 @@ final class SubscriptionWebhookTransportTest extends TestCase
         $http = new WebhookConfigFixtureClient([]);
         $transport = new SubscriptionWebhookTransport($http, static function () use (&$now): float {
             return $now;
-        }, 300);
+        }, 300, caseStarted: 0.0);
         $transport->reserve('archive_product', static function () use (&$now): void {
             $now = 256;
         });
@@ -525,7 +525,7 @@ final class SubscriptionWebhookTransportTest extends TestCase
         };
         $t = new SubscriptionWebhookTransport($http, static function () use (&$now): float {
             return $now;
-        }, 300);
+        }, 300, caseStarted: $start);
         $t->bind('customer', 'own');
         $this->expectException(ProtocolException::class);
         try {
@@ -737,5 +737,156 @@ final class SubscriptionWebhookTransportTest extends TestCase
             }
         }
         self::assertSame(0, $guards);
+    }
+
+    /** @return iterable<string,array{float,?float,bool}> */
+    public static function caseCeilings(): iterable
+    {
+        foreach ([0.0, 0.1, 100.1, 256.2, 874.1, 874.123456789, 1000.1, 1023.9, 900000.1] as $start) {
+            yield sprintf('valid %.17g', $start) => [$start, null, true];
+        }
+        yield 'negative' => [-0.1, null, false];
+        yield 'NAN' => [NAN, null, false];
+        yield 'INF' => [INF, null, false];
+        yield 'unrepresentable original span' => [PHP_FLOAT_MAX, null, false];
+        yield 'cannot represent three hundred' => [2.0 ** 60, null, false];
+        yield 'end above conservative ceiling' => [100.1, 400.1, false];
+        yield 'end is origin' => [100.1, 100.1, false];
+        yield 'nonfinite end' => [100.1, INF, false];
+        yield 'shorter end remains allowed' => [100.1, 399.0, true];
+    }
+
+    #[DataProvider('caseCeilings')]
+    public function testConservativeCeilingHasNoEpsilonGraceOrUnrepresentableWindow(
+        float $start,
+        ?float $suppliedEnd,
+        bool $valid
+    ): void {
+        $error = null;
+        $end = null;
+        try {
+            $end = SubscriptionWebhookTransport::caseDeadline($start, $suppliedEnd);
+        } catch (ProtocolException $caught) {
+            $error = $caught;
+        }
+        if (!$valid) {
+            self::assertInstanceOf(ProtocolException::class, $error);
+            return;
+        }
+        self::assertNull($error);
+        self::assertIsFloat($end);
+        self::assertGreaterThan($start, $end);
+        self::assertLessThanOrEqual(floor($start) + 300.0, $end);
+        self::assertLessThanOrEqual(300.0, $end - $start);
+        if ($suppliedEnd === null) {
+            self::assertLessThan(1.0, 300.0 - ($end - $start));
+        }
+    }
+
+    public function testOwnWindowCapturesExactlyOneActualFractionalSample(): void
+    {
+        $reads = 0;
+        $t = new SubscriptionWebhookTransport(
+            new WebhookConfigFixtureClient([]),
+            static function () use (&$reads): float {
+                ++$reads;
+                return 100.1;
+            }
+        );
+        self::assertSame(1, $reads);
+        self::assertSame(100.1, (new ReflectionProperty($t, 'caseStarted'))->getValue($t));
+        self::assertSame(400.0, (new ReflectionProperty($t, 'deadline'))->getValue($t));
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function fractionalStages(): iterable
+    {
+        foreach (
+            ['equal', 'rollback', 'reserve_exact', 'reserve_late', 'native_expiry',
+            'read_expiry', 'close_expiry', 'read_ten_seconds', 'close_ten_seconds', 'read_just_before'] as $stage
+        ) {
+            yield $stage => [$stage];
+        }
+    }
+
+    #[DataProvider('fractionalStages')]
+    public function testFractionalOriginKeepsOriginalRequestReadCloseAndCaseBounds(string $stage): void
+    {
+        $start = 100.1;
+        $now = $start;
+        $stream = new SimulationProbeStream(
+            '{"id":"own"}',
+            afterRead: static function () use (&$now, $stage, $start): void {
+                if ($stage === 'read_expiry') {
+                    $now = 400.0;
+                }
+                if ($stage === 'read_ten_seconds') {
+                    $now = $start + 10.0;
+                }
+                if ($stage === 'read_just_before') {
+                    $now = $start + 9.875;
+                }
+            },
+            afterClose: static function () use (&$now, $stage, $start): void {
+                if ($stage === 'close_expiry') {
+                    $now = 400.0;
+                }
+                if ($stage === 'close_ten_seconds') {
+                    $now = $start + 10.0;
+                }
+            }
+        );
+        $http = new WebhookConfigFixtureClient([new Response(200, [], $stream)]);
+        $http->intercept = static function () use (&$now, $stage): void {
+            if ($stage === 'native_expiry') {
+                $now = 400.0;
+            }
+        };
+        $t = new SubscriptionWebhookTransport(
+            $http,
+            static function () use (&$now): float {
+                return $now;
+            },
+            400.0,
+            caseStarted: $start
+        );
+        $t->bind('customer', 'own');
+        $now = match ($stage) {
+            'rollback' => 100.05, 'reserve_exact' => 355.0,
+            'reserve_late' => 355.000001, default => $start
+        };
+        $error = null;
+        try {
+            $t->sendRequest(self::read());
+        } catch (ProtocolException $caught) {
+            $error = $caught;
+        }
+        $allowed = in_array($stage, ['equal', 'reserve_exact', 'read_just_before'], true);
+        if ($allowed) {
+            self::assertNull($error);
+        } else {
+            self::assertInstanceOf(ProtocolException::class, $error);
+        }
+        $sent = !in_array($stage, ['rollback', 'reserve_late'], true);
+        self::assertCount($sent ? 1 : 0, $http->requests);
+        self::assertSame($sent, $stream->closed);
+    }
+
+    public function testExplicitWindowCannotLoseItsOriginalSample(): void
+    {
+        $reads = 0;
+        $this->expectException(ProtocolException::class);
+        try {
+            new SubscriptionWebhookTransport(
+                new WebhookConfigFixtureClient([]),
+                static function () use (&$reads): float {
+                    ++$reads;
+                    return 100.1;
+                },
+                400.0
+            );
+        } finally {
+            self::assertSame(0, $reads);
+        }
     }
 }

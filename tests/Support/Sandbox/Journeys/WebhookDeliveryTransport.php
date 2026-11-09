@@ -27,6 +27,7 @@ final class WebhookDeliveryTransport implements ClientInterface
     /** @var Closure():float */
     private readonly Closure $clock;
     private readonly float $overallDeadline;
+    private readonly ?float $subscriptionStarted;
 
     /**
      * @param ClientInterface|null $http Fixture or already-streaming seam; an arbitrary client may prebuffer.
@@ -40,6 +41,7 @@ final class WebhookDeliveryTransport implements ClientInterface
         private readonly bool $managementOnly = false,
         private readonly WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
         private readonly ?WebhookDeliveryEvents $eventPair = null,
+        ?float $subscriptionStarted = null,
     ) {
         if ($managementProfile === WebhookManagementProfile::DefaultLogin && !$managementOnly) {
             throw new ProtocolException('Default management cannot grant producer authority.');
@@ -62,9 +64,22 @@ final class WebhookDeliveryTransport implements ClientInterface
             'allow_redirects' => false, 'http_errors' => false, 'cookies' => false,
         ]);
         $this->clock = $clock ?? static fn (): float => hrtime(true) / 1_000_000_000;
-        $this->overallDeadline = $overallDeadline ?? ($this->clock)() + 300;
-        if (!is_finite($this->overallDeadline)) {
-            throw new ProtocolException('The delivery probe requires a finite elapsed deadline.');
+        if ($eventPair === WebhookDeliveryEvents::Subscription) {
+            if ($overallDeadline !== null && $subscriptionStarted === null) {
+                throw new ProtocolException('An explicit Subscription window requires its original clock sample.');
+            }
+            $this->subscriptionStarted = $subscriptionStarted ?? ($this->clock)();
+            $this->overallDeadline = SubscriptionWebhookTransport::caseDeadline(
+                $this->subscriptionStarted,
+                $overallDeadline
+            );
+        } else {
+            // Preserve all legacy clock observations and window construction exactly.
+            $this->subscriptionStarted = null;
+            $this->overallDeadline = $overallDeadline ?? ($this->clock)() + 300;
+            if (!is_finite($this->overallDeadline)) {
+                throw new ProtocolException('The delivery probe requires a finite elapsed deadline.');
+            }
         }
     }
 
@@ -167,7 +182,7 @@ final class WebhookDeliveryTransport implements ClientInterface
         $now = ($this->clock)();
         if (
             !is_finite($now) || $now + 45 > $this->overallDeadline
-            || ($this->eventPair === WebhookDeliveryEvents::Subscription && $now < $this->overallDeadline - 300)
+            || ($this->subscriptionStarted !== null && $now < $this->subscriptionStarted)
         ) {
             throw new ProtocolException('The delivery probe has insufficient bounded request time.');
         }

@@ -323,7 +323,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
             300,
             $clock,
             $tools,
-            SourceEvidence::capture()
+            SourceEvidence::capture(),
+            caseStarted: 0.0
         );
     }
 
@@ -1273,5 +1274,121 @@ final class SubscriptionWebhookProbeTest extends TestCase
         $raw = json_encode($safe, JSON_THROW_ON_ERROR);
         self::assertLessThan(65536, strlen($raw));
         self::assertStringNotContainsString('SYNTHETIC_PRIVATE', $raw);
+    }
+
+    /** @return iterable<string,array{float}> */
+    public static function decimalMonotonicOrigins(): iterable
+    {
+        foreach ([0.1, 100.1, 200.1, 256.2, 874.1, 874.123456789, 874.125, 1000.1, 1023.9] as $start) {
+            yield sprintf('original %.17g', $start) => [$start];
+        }
+    }
+
+    #[DataProvider('decimalMonotonicOrigins')]
+    public function testActualControllerAcceptsNonzeroDecimalOriginsAndClipsItsReceiver(float $start): void
+    {
+        $now = $start;
+        $receiverDuration = null;
+        $safe = SubscriptionWebhookProbe::run(
+            $this->options(),
+            $this->http,
+            function (array $config) use (&$receiverDuration): WebhookDeliveryFixtureRuntime {
+                $receiverDuration = $config['duration_ms'] ?? null;
+                $runtime = new WebhookDeliveryFixtureRuntime($config);
+                $this->http->runtime = $runtime;
+                $runtime->eventFilter = self::organizationEvent(...);
+                return $runtime;
+            },
+            static fn (): int => WebhookDeliveryFixtureRuntime::NOW,
+            static function (int $milliseconds): void {
+            },
+            elapsed: static function () use (&$now): float {
+                return $now;
+            }
+        );
+        self::assertSame('pass', $safe['result'], json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertTrue($safe['sdk_pending_verified']);
+        self::assertTrue($safe['sdk_cancelled_verified']);
+        self::assertTrue($safe['registration_deleted']);
+        self::assertIsInt($receiverDuration);
+        self::assertGreaterThan(0, $receiverDuration);
+        self::assertLessThanOrEqual(300000, $receiverDuration);
+        self::assertSame((int) floor((floor($start) + 300.0 - $start) * 1000), $receiverDuration);
+        self::assertLessThanOrEqual(39, count($this->http->requests));
+        self::assertIsArray($safe['process_cleanup']);
+        self::assertTrue($safe['process_cleanup']['receiver_closed']);
+    }
+
+    public function testActualControllerDoesNotRoundItsOriginalRollbackBoundaryDown(): void
+    {
+        $samples = 0;
+        $safe = SubscriptionWebhookProbe::run(
+            $this->options(),
+            $this->http,
+            static function (array $config): WebhookDeliveryFixtureRuntime {
+                self::fail('A clock rollback started the receiver.');
+            },
+            clock: static fn (): int => WebhookDeliveryFixtureRuntime::NOW,
+            elapsed: static function () use (&$samples): float {
+                return ++$samples === 1 ? 100.1 : 100.05;
+            }
+        );
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('account_prerequisite', $safe['phase']);
+        self::assertSame([], $this->http->requests);
+        self::assertFalse($safe['registration_created']);
+        self::assertFalse($safe['subscription_created']);
+    }
+
+    public function testApiRetainsTheSameActualSampleInEveryTransportWithoutReadingTheClockAgain(): void
+    {
+        $reads = 0;
+        $start = 100.1;
+        $end = 400.0;
+        $api = new SubscriptionWebhookApi(
+            Configuration::load('sandbox', $this->directory . '/credentials'),
+            $this->http,
+            $end,
+            static function () use (&$reads, $start): float {
+                ++$reads;
+                return $start;
+            },
+            caseStarted: $start
+        );
+        self::assertSame(0, $reads);
+        $prerequisite = (new ReflectionProperty($api, 'prerequisiteTransport'))->getValue($api);
+        self::assertInstanceOf(
+            \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SubscriptionWebhookTransport::class,
+            $prerequisite
+        );
+        foreach ([$prerequisite, $api->producerTransport] as $transport) {
+            self::assertSame($start, (new ReflectionProperty($transport, 'caseStarted'))->getValue($transport));
+            self::assertSame($end, (new ReflectionProperty($transport, 'deadline'))->getValue($transport));
+        }
+        self::assertSame($start, (new ReflectionProperty($api->managementTransport, 'subscriptionStarted'))
+            ->getValue($api->managementTransport));
+        self::assertSame($end, (new ReflectionProperty($api->managementTransport, 'overallDeadline'))
+            ->getValue($api->managementTransport));
+        self::assertSame([], $this->http->requests);
+    }
+
+    public function testApiRejectsALostOriginalSampleInsteadOfReconstructingOneFromTheEnd(): void
+    {
+        $reads = 0;
+        $this->expectException(\Jojeringnax\Airwallex\Exception\ProtocolException::class);
+        try {
+            new SubscriptionWebhookApi(
+                Configuration::load('sandbox', $this->directory . '/credentials'),
+                $this->http,
+                400.0,
+                static function () use (&$reads): float {
+                    ++$reads;
+                    return 100.1;
+                }
+            );
+        } finally {
+            self::assertSame(0, $reads);
+            self::assertSame([], $this->http->requests);
+        }
     }
 }

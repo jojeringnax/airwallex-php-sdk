@@ -25,6 +25,7 @@ final class SubscriptionWebhookTransport implements ClientInterface
     /** @var Closure():float */
     private readonly Closure $clock;
     private readonly float $deadline;
+    private readonly float $caseStarted;
     /** @var array<string,string> */
     private array $paths = [];
     /** @var array<string,int> */
@@ -46,6 +47,7 @@ final class SubscriptionWebhookTransport implements ClientInterface
         ?Closure $clock = null,
         ?float $deadline = null,
         #[SensitiveParameter] private readonly ?string $accountId = null,
+        ?float $caseStarted = null,
     ) {
         if ($accountId !== null && !WebhookDeliveryTransport::validIdentity($accountId)) {
             throw new ProtocolException('The separate account prerequisite identity is unavailable.');
@@ -56,10 +58,29 @@ final class SubscriptionWebhookTransport implements ClientInterface
             'allow_redirects' => false, 'http_errors' => false, 'cookies' => false,
         ]);
         $this->clock = $clock ?? static fn (): float => hrtime(true) / 1_000_000_000;
-        $this->deadline = $deadline ?? ($this->clock)() + 300;
-        if (!is_finite($this->deadline)) {
-            throw new ProtocolException('Subscription observation needs its finite original deadline.');
+        if ($deadline !== null && $caseStarted === null) {
+            throw new ProtocolException('An explicit Subscription window requires its original clock sample.');
         }
+        $this->caseStarted = $caseStarted ?? ($this->clock)();
+        $this->deadline = self::caseDeadline($this->caseStarted, $deadline);
+    }
+
+    /** A fixed conservative ceiling, never a duration or caller-selected timeout policy.
+     * @throws ProtocolException
+     */
+    public static function caseDeadline(float $caseStarted, ?float $deadline = null): float
+    {
+        $anchor = floor($caseStarted);
+        $ceiling = $anchor + 300.0;
+        $deadline ??= $ceiling;
+        if (
+            !is_finite($caseStarted) || $caseStarted < 0 || !is_finite($ceiling)
+            || $ceiling <= $caseStarted || $ceiling - $anchor !== 300.0
+            || !is_finite($deadline) || $deadline <= $caseStarted || $deadline > $ceiling
+        ) {
+            throw new ProtocolException('The original case clock is unavailable.');
+        }
+        return $deadline;
     }
 
     public function bind(string $kind, #[SensitiveParameter] string $id): void
@@ -551,7 +572,7 @@ final class SubscriptionWebhookTransport implements ClientInterface
     private function time(): void
     {
         $now = ($this->clock)();
-        if (!is_finite($now) || $now < $this->deadline - 300 || $now + 45 > $this->deadline) {
+        if (!is_finite($now) || $now < $this->caseStarted || $now + 45 > $this->deadline) {
             throw new ProtocolException('The original Subscription request reserve is unavailable.');
         }
     }

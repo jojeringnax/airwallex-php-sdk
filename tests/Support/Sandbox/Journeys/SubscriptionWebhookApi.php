@@ -38,8 +38,15 @@ final class SubscriptionWebhookApi
         private readonly array $tools = [],
         /** @var array<string,string> */
         private readonly array $source = [],
+        ?float $caseStarted = null,
     ) {
         $this->configuration = $configuration;
+        $clock ??= static fn (): float => hrtime(true) / 1_000_000_000;
+        if ($deadline !== null && $caseStarted === null) {
+            throw new ProtocolException('An explicit Subscription window requires its original clock sample.');
+        }
+        $caseStarted ??= $clock();
+        $deadline = SubscriptionWebhookTransport::caseDeadline($caseStarted, $deadline);
         $managementProfile = WebhookManagementProfile::DefaultLogin;
         $this->managementTransport = new WebhookDeliveryTransport(
             $configuration->accountId(),
@@ -49,6 +56,7 @@ final class SubscriptionWebhookApi
             managementOnly: true,
             managementProfile: $managementProfile,
             eventPair: WebhookDeliveryEvents::Subscription,
+            subscriptionStarted: $caseStarted,
         );
         $this->management = new WebhookDeliveryApi(
             $configuration,
@@ -60,9 +68,15 @@ final class SubscriptionWebhookApi
             $http,
             $clock,
             $deadline,
-            $configuration->accountId()
+            $configuration->accountId(),
+            $caseStarted
         );
-        $this->producerTransport = new SubscriptionWebhookTransport($http, $clock, $deadline);
+        $this->producerTransport = new SubscriptionWebhookTransport(
+            $http,
+            $clock,
+            $deadline,
+            caseStarted: $caseStarted
+        );
         $factory = new HttpFactory();
         $this->producer = new Client(
             Environment::Sandbox,
