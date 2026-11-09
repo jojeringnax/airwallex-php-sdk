@@ -169,9 +169,19 @@ final class BillingScheduleEvidenceTest extends TestCase
         self::assertNotNull($reserved);
     }
 
-    public function testImmediateOutOfBandTrialOmitsOnlyStartAndCancelsBeforeArchivesWithoutActivation(): void
+    /** @return iterable<string,array{string,string}> */
+    public static function immediateTrialCases(): iterable
     {
-        $result = $this->runCase('immediate-oob-trial');
+        yield 'original Z' => ['immediate-oob-trial', '2028-01-03T00:00:00Z'];
+        yield 'basic UTC offset' => ['immediate-oob-trial-basic-offset', '2028-01-03T00:00:00+0000'];
+    }
+
+    #[DataProvider('immediateTrialCases')]
+    public function testImmediateOutOfBandTrialOmitsOnlyStartAndCancelsBeforeArchivesWithoutActivation(
+        string $case,
+        string $end,
+    ): void {
+        $result = $this->runCase($case);
         self::assertSame('pass', $result['result']);
         self::assertTrue($result['cancellation_verified']);
         self::assertIsArray($result['observations']);
@@ -192,7 +202,9 @@ final class BillingScheduleEvidenceTest extends TestCase
         self::assertSame('EUR', $body['currency']);
         self::assertSame(30, $body['days_until_due']);
         self::assertSame(['period' => 1, 'period_unit' => 'MONTH'], $body['duration']);
-        self::assertSame('2028-01-03T00:00:00Z', $body['trial_ends_at']);
+        self::assertSame($end, $body['trial_ends_at']);
+        self::assertIsArray($body['metadata']);
+        self::assertSame($case, $body['metadata']['sdk_validation_case']);
         foreach (['starts_at', 'payment_source_id', 'linked_payment_account_id', 'payment_options'] as $field) {
             self::assertArrayNotHasKey($field, $body);
         }
@@ -235,6 +247,7 @@ final class BillingScheduleEvidenceTest extends TestCase
             yield 'invalid start ' . $i => ['starts_at', $start];
         }
         yield 'missing trial end' => ['trial_ends_at', null];
+        yield 'invalid trial end offset' => ['trial_ends_at', '2028-01-03T00:00:00+24:00'];
         yield 'changed fractional trial end' => ['trial_ends_at', '2028-01-03T00:00:00.0000000001Z'];
         yield 'wrong due days' => ['days_until_due', 31];
         yield 'wrong duration' => ['duration', ['period' => 1, 'period_unit' => 'DAY']];
@@ -246,8 +259,18 @@ final class BillingScheduleEvidenceTest extends TestCase
         yield 'unexpected source' => ['payment_source_id', 'PRIVATE_FOREIGN'];
     }
 
-    #[DataProvider('unsafeImmediateTrials')]
-    public function testUnsafeImmediateTrialNeverCancelsOrArchives(string $field, mixed $value): void
+    /** @return iterable<string,array{string,string,mixed}> */
+    public static function unsafeImmediateTrialVariants(): iterable
+    {
+        foreach (self::immediateTrialCases() as $profile => [$case]) {
+            foreach (self::unsafeImmediateTrials() as $name => [$field, $value]) {
+                yield $profile . '/' . $name => [$case, $field, $value];
+            }
+        }
+    }
+
+    #[DataProvider('unsafeImmediateTrialVariants')]
+    public function testUnsafeImmediateTrialNeverCancelsOrArchives(string $case, string $field, mixed $value): void
     {
         $this->http->intercept = static function (
             RequestInterface $request,
@@ -265,7 +288,7 @@ final class BillingScheduleEvidenceTest extends TestCase
             }
             return null;
         };
-        $result = $this->runCase('immediate-oob-trial');
+        $result = $this->runCase($case);
         self::assertNotSame('pass', $result['result']);
         self::assertFalse($result['cancellation_verified']);
         self::assertCount(0, $this->mutationsEnding('/cancel'));
@@ -273,7 +296,8 @@ final class BillingScheduleEvidenceTest extends TestCase
         self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
-    public function testImmediateTrialClockMustStillPrecedeEndAfterItemRead(): void
+    #[DataProvider('immediateTrialCases')]
+    public function testImmediateTrialClockMustStillPrecedeEndAfterItemRead(string $case, string $end): void
     {
         $time = new class {
             public int $now = 1830297600;
@@ -284,10 +308,12 @@ final class BillingScheduleEvidenceTest extends TestCase
             }
             return null;
         };
-        $result = $this->runCase('immediate-oob-trial', clock: static fn (): int => $time->now);
+        $result = $this->runCase($case, clock: static fn (): int => $time->now);
         self::assertNotSame('pass', $result['result']);
         self::assertCount(0, $this->mutationsEnding('/cancel'));
         self::assertCount(4, $this->http->mutations());
+        self::assertSame($end, BillingScheduleProvider::body($this->mutationsEnding('/subscriptions/create')[0])
+            ['trial_ends_at']);
     }
 
     /** @return iterable<string,array{string}> */
@@ -299,9 +325,21 @@ final class BillingScheduleEvidenceTest extends TestCase
         yield 'ack without terminal state' => ['unchanged'];
     }
 
-    #[DataProvider('immediateCancellationFailures')]
-    public function testImmediateTrialCancellationNeverRepeatsOrArchivesBeforeTerminalReadback(string $fault): void
+    /** @return iterable<string,array{string,string}> */
+    public static function immediateCancellationVariants(): iterable
     {
+        foreach (self::immediateTrialCases() as $profile => [$case]) {
+            foreach (self::immediateCancellationFailures() as $name => [$fault]) {
+                yield $profile . '/' . $name => [$case, $fault];
+            }
+        }
+    }
+
+    #[DataProvider('immediateCancellationVariants')]
+    public function testImmediateTrialCancellationNeverRepeatsOrArchivesBeforeTerminalReadback(
+        string $case,
+        string $fault,
+    ): void {
         $this->http->intercept = static function (RequestInterface $request) use ($fault): ?ResponseInterface {
             if (!str_ends_with($request->getUri()->getPath(), '/cancel')) {
                 return null;
@@ -319,12 +357,168 @@ final class BillingScheduleEvidenceTest extends TestCase
                 '{"code":"validation_error","message":"PRIVATE_MESSAGE"}'
             );
         };
-        $result = $this->runCase('immediate-oob-trial');
+        $result = $this->runCase($case);
         self::assertNotSame('pass', $result['result']);
         self::assertTrue($result['reconciliation_required']);
         self::assertCount(1, $this->mutationsEnding('/cancel'));
         self::assertCount(5, $this->http->mutations());
         self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testBasicOffsetTrialBindsChosenTextInDurableIntentBeforeSend(): void
+    {
+        $ledger = $this->ledger();
+        $checked = false;
+        $this->http->intercept = function (RequestInterface $request) use (&$checked): ?ResponseInterface {
+            if (!str_ends_with($request->getUri()->getPath(), '/subscriptions/create')) {
+                return null;
+            }
+            $wire = BillingScheduleProvider::body($request);
+            $identity = $wire['request_id'];
+            unset($wire['request_id']);
+            self::assertSame('2028-01-03T00:00:00+0000', $wire['trial_ends_at']);
+            self::assertStringContainsString(
+                '"trial_ends_at":"2028-01-03T00:00:00+0000"',
+                (string) $request->getBody()
+            );
+            $files = glob($this->directory . '/*/ledger.json') ?: [];
+            self::assertCount(1, $files);
+            $state = json_decode((string) file_get_contents($files[0]), true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($state);
+            self::assertIsArray($state['actions']);
+            self::assertIsArray($state['actions']['create_subscription']);
+            $action = $state['actions']['create_subscription'];
+            self::assertSame($identity, $action['request_id']);
+            $intent = ['resource_kind' => 'subscriptions', 'resource_id' => null, 'body' => $wire];
+            self::assertSame(hash('sha256', json_encode($intent, JSON_THROW_ON_ERROR)), $action['body_hash']);
+            $intent['body']['trial_ends_at'] = '2028-01-03T00:00:00Z';
+            self::assertNotSame(hash('sha256', json_encode($intent, JSON_THROW_ON_ERROR)), $action['body_hash']);
+            $checked = true;
+            return null;
+        };
+        $result = $this->runCase('immediate-oob-trial-basic-offset', $ledger);
+        self::assertSame('pass', $result['result']);
+        self::assertTrue($checked);
+    }
+
+    public function testBasicOffsetTrialAllowsEquivalentResponseTimeWithoutRewritingRequest(): void
+    {
+        $this->http->intercept = static function (
+            RequestInterface $request,
+            BillingScheduleProvider $http,
+        ): ?ResponseInterface {
+            $path = $request->getUri()->getPath();
+            if ($request->getMethod() === 'GET' && ($http->objects[$path]['status'] ?? null) === 'IN_TRIAL') {
+                return BillingScheduleProvider::response(array_replace($http->objects[$path], [
+                    'trial_ends_at' => '2028-01-03T01:00:00+01:00',
+                ]));
+            }
+            return null;
+        };
+        $result = $this->runCase('immediate-oob-trial-basic-offset');
+        self::assertSame('pass', $result['result']);
+        self::assertSame(
+            '2028-01-03T00:00:00+0000',
+            BillingScheduleProvider::body($this->mutationsEnding('/subscriptions/create')[0])['trial_ends_at']
+        );
+        self::assertTrue($result['cancellation_verified']);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function trialCreateFailures(): iterable
+    {
+        foreach (['400', '500', 'transport', 'missing_id'] as $fault) {
+            yield $fault => [$fault];
+        }
+    }
+
+    #[DataProvider('trialCreateFailures')]
+    public function testBasicOffsetTrialCreateFailureHasNoReplayOrDependentWrite(string $fault): void
+    {
+        $this->http->intercept = static function (RequestInterface $request) use ($fault): ?ResponseInterface {
+            if (!str_ends_with($request->getUri()->getPath(), '/subscriptions/create')) {
+                return null;
+            }
+            if ($fault === 'transport') {
+                throw new RuntimeException('PRIVATE_AFTER_SEND');
+            }
+            return $fault === 'missing_id' ? new Response(201, [], '{}')
+                : new Response(
+                    $fault === '400' ? 400 : 500,
+                    [],
+                    '{"code":"validation_error","message":"PRIVATE_MESSAGE"}'
+                );
+        };
+        $result = $this->runCase('immediate-oob-trial-basic-offset');
+        self::assertSame('fail', $result['result']);
+        self::assertTrue($result['reconciliation_required']);
+        self::assertCount(1, $this->mutationsEnding('/subscriptions/create'));
+        self::assertCount(4, $this->http->mutations());
+        self::assertCount(0, $this->mutationsEnding('/cancel'));
+        self::assertCount(0, $this->mutationsEnding('/update'));
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testBasicOffsetTrialRequiresHealthyDurableCreateIntentBeforeSending(): void
+    {
+        $ledger = $this->ledger(function ($stream): bool {
+            foreach (glob($this->directory . '/*/ledger.json.writing') ?: [] as $file) {
+                $json = file_get_contents($file);
+                if (!is_string($json) || str_contains($json, '"create_subscription"')) {
+                    return false;
+                }
+            }
+            return true;
+        });
+        $result = $this->runCase('immediate-oob-trial-basic-offset', $ledger);
+        self::assertSame('fail', $result['result']);
+        self::assertCount(0, $this->mutationsEnding('/subscriptions/create'));
+        self::assertCount(3, $this->http->mutations());
+        self::assertCount(0, $this->mutationsEnding('/cancel'));
+    }
+
+    public function testBasicOffsetTrialOverflowClockFailsBeforeCatalogueOrAuthentication(): void
+    {
+        $result = $this->runCase('immediate-oob-trial-basic-offset', clock: static fn (): int => PHP_INT_MAX);
+        self::assertSame('fail', $result['result']);
+        self::assertSame([], $this->http->requests);
+    }
+
+    public function testBasicOffsetTrialBadItemCannotUseGenericCleanupCancellation(): void
+    {
+        $this->http->intercept = static fn (RequestInterface $request): ?ResponseInterface
+            => str_ends_with($request->getUri()->getPath(), '/items')
+                ? BillingScheduleProvider::response(['items' => [['id' => 'PRIVATE_ITEM',
+                    'subscription_id' => 'PRIVATE_PARENT', 'quantity' => 1,
+                    'price' => ['id' => 'PRIVATE_PRICE', 'currency' => 'EUR']]], 'page_after' => null]) : null;
+        $result = $this->runCase('immediate-oob-trial-basic-offset');
+        self::assertSame('fail', $result['result']);
+        self::assertCount(0, $this->mutationsEnding('/cancel'));
+        self::assertCount(4, $this->http->mutations());
+        self::assertStringNotContainsString('PRIVATE_', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testBasicOffsetCaseUsesExistingFixedCommandAndOrganizationProfile(): void
+    {
+        $result = BillingScheduleCommand::run(
+            ['environment' => 'sandbox', 'context' => 'organization',
+            'credentials-file' => $this->directory . '/credentials', 'state-dir' => $this->directory,
+            'case' => 'immediate-oob-trial-basic-offset'],
+            $this->http,
+            static fn (): int => 1830297600,
+            static fn (int $s) => null
+        );
+        self::assertSame('pass', $result['result']);
+        self::assertSame('immediate-oob-trial-basic-offset', $result['case']);
+        self::assertSame('organization', $result['context']);
+        self::assertSame('fixture_account', $this->http->requests[0]->getHeaderLine('x-login-as'));
+        self::assertSame('/api/v1/account', $this->http->requests[1]->getUri()->getPath());
+        self::assertSame('', $this->http->requests[2]->getHeaderLine('x-login-as'));
+        self::assertSame(
+            '2028-01-03T00:00:00+0000',
+            BillingScheduleProvider::body($this->mutationsEnding('/subscriptions/create')[0])['trial_ends_at']
+        );
+        self::assertSame([], $result['diagnostics']);
     }
 
     public function testTrialOnlyUsesVerifiedCollectorAndNeverCreatesInstrumentOrPayment(): void
