@@ -24,16 +24,16 @@ Use resource-oriented synchronous methods with provider-shaped associative array
 
 These choices establish the future public surface before an initial release. Once shipped, changes follow the [compatibility and release policy](release-policy.md), including its release gates. Resource contracts determine operation coverage.
 
-## Provisional subordinate reads
+## Subordinate reads
 
-Billing item and line-item read capabilities are accepted. Their concrete signatures are provisional under [decision review #61](https://github.com/jojeringnax/airwallex-php-sdk/issues/61):
+Billing item and line-item reads use the direct methods accepted in [#61](https://github.com/jojeringnax/airwallex-php-sdk/issues/61#issuecomment-6749286212):
 
-| Resource | Provisional signatures |
+| Resource | Accepted signatures |
 | --- | --- |
 | `subscriptions()` | `retrieveItem(string $id, string $itemId): array`, `listItems(string $id, array $query = []): array` |
 | `invoices()` | `retrieveLineItem(string $id, string $itemId): array`, `listLineItems(string $id, array $query = []): array` |
 
-The parent resource ID is explicit in every subordinate call. The coordinator selected these method shapes to preserve native routes without introducing another resource hierarchy; they are not described as human-approved. The review issue records compatibility implications and reversal options. For implemented Billing operations, schema provenance and remaining provider evidence, see [Billing resources](billing-resources.md).
+The direct resource structure keeps item reads discoverable alongside the parent operations. Every call retains the explicit parent ID; individual reads also take the item ID. Responses remain native arrays, and list calls return one bookmark-paginated page. The names and parameter shapes follow the shared compatibility policy once released. See the [executed item-read recipe](../examples/billing-item-reads.php) for all four calls and [Billing resources](billing-resources.md) for schema provenance and remaining provider evidence.
 
 For implemented environment, token, transport, retry and diagnostic behavior, see [client configuration](client-configuration.md). Its optional clock and retry configuration remain a delegated provisional decision under [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60).
 
@@ -47,6 +47,7 @@ Read the relevant [consumer example](consumer-examples.md) when implementing or 
 | Customer linkage, checkout business/UI modes | [Customer and checkout](consumer-examples.md#customer-linkage-and-checkout) |
 | Saved instruments, direct subscriptions, provider/local trials | [Instrument and subscription](consumer-examples.md#saved-instrument-and-direct-subscription) |
 | Plan/quantity changes, cancellation, invoice links, recovery | [Subscription changes](consumer-examples.md#changes-cancellation-and-invoice-access) |
+| Individual Subscription/Invoice items and explicit pages | [Item reads](consumer-examples.md#subscription-items-and-invoice-line-items) |
 | Payment creation, authorization, capture, cancellation, refunds | [Standalone Payments](consumer-examples.md#standalone-payments) |
 | List envelopes, pagination and typed exceptions | [Pagination and failures](consumer-examples.md#pagination-and-failures) |
 | Raw-body verification and event decoding | [Webhook boundary](consumer-examples.md#webhook-boundary) |

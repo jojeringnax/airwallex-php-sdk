@@ -125,4 +125,14 @@ final class WebhookDeliveryStoreTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->store->write($name, 'SYNTHETIC_PRIVATE');
     }
+    public function testOnlyTheTwoNewSubscriptionSnapshotsArePrivateExclusiveAndReadable(): void
+    {
+        foreach (['subscription-pending.json', 'subscription-cancelled.json'] as $name) {
+            self::assertSame(hash('sha256', 'PRIVATE_SNAPSHOT'), $this->store->write($name, 'PRIVATE_SNAPSHOT'));
+            self::assertSame('PRIVATE_SNAPSHOT', $this->store->read($name));
+            self::assertSame(0600, fileperms($this->store->folder() . '/' . $name) & 0777);
+        }
+        $this->expectException(RuntimeException::class);
+        $this->store->read('subscription-active.json');
+    }
 }

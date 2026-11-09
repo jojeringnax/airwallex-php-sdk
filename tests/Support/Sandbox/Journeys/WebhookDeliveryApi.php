@@ -33,9 +33,10 @@ final class WebhookDeliveryApi
         WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
     ) {
         $transport->assertManagementProfile($managementProfile);
+        $transport->assertEventPair($events);
         if (
             $managementProfile === WebhookManagementProfile::DefaultLogin
-            && $events !== WebhookDeliveryEvents::BillingCheckout
+            && !in_array($events, [WebhookDeliveryEvents::BillingCheckout, WebhookDeliveryEvents::Subscription], true)
         ) {
             throw new ProtocolException('Default management is limited to the selected fresh Billing pair.');
         }

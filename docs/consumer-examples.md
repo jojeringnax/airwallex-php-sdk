@@ -178,7 +178,44 @@ The [observed provider case](billing-capabilities.md#trials-cancellation-and-gra
 
 A draft invoice may have null PDF; authorize document access before returning any link. Download, storage and email belong to consumers. Re-fetching current data does not promise expired-link renewal; preserve the [expiry evidence gap](billing-capabilities.md#invoice-access-and-delivery). No hosted Billing portal-session method is defined.
 
-Payment recovery uses an explicit `subscriptions()->update($id, ['request_id' => ..., 'payment_source_id' => ...])` after verifying the replacement source's ownership. This can immediately retry the last failed invoice. Retrieve subscription/invoice state afterwards; no automatic source replacement, dunning schedule or entitlement cutoff is implied.
+For an application-known expired instrument, first obtain and independently authorize its replacement through the applicable setup flow. Load the persisted buyer, Billing organization-client, legal-entity and collection-account mapping. The [executed recovery recipes](../examples/billing-lifecycle.php) use the existing Subscription and Payment Source reads to check that mapping before one explicit source change:
+
+```php
+$recipes = require 'examples/billing-lifecycle.php';
+$observed = $recipes['replace_source_and_observe'](
+    $billing, $subscriptionId, $authorizedReplacementSourceId,
+    $billingCustomerId, $legalEntityId, $collectionAccountId, '<persisted-recovery-request-id>',
+);
+// Persist the action outcome privately. After a rejection, lost response or failed read, use only reads:
+$later = $recipes['observe_recovery'](
+    $billing, $subscriptionId, $billingCustomerId, $legalEntityId, $collectionAccountId,
+);
+```
+
+The application authorizes the client and replacement instrument; the SDK cannot infer organization membership or merchant-initiated authorization from opaque IDs. The example checks the current Subscription's ID, Billing Customer, legal entity and linked collection account, then the replacement Source's ID, Customer and collector. Missing optional owner fields withhold this example's proof; they are not newly required API fields. These are SDK-decoded-field comparisons, not separate raw-JSON identity or duplicate-key validation. No Payment Source expiry field, instrument usability or current collector/product eligibility is inferred. Preconditions or Source-read failures throw before the update. Resolve those failures before choosing a deliberate action.
+
+Changing `payment_source_id` can immediately retry the last failed invoice under the selected `2026-08-21` [Subscription contract](../resources/contracts/billing/subscriptions.json). The application supplies one already-persisted `request_id`; the callable neither generates an identity nor retries the update. Record that the action was attempted before invoking it, and do not rerun the mutation recipe to reconcile an uncertain result. Application persistence supplies that cross-call discipline; this example is not an idempotency store.
+
+The return separates `update_response`/`update_error` from the later `subscription`, `invoice` and `read_error`. Provider API errors retain only the SDK's safe status/code fields; a transport/protocol failure remains `unconfirmed`. An unproved update response is withheld without implying that no effect occurred. Reconciliation reads return only matching owned Subscription/Invoice observations; a failed or unproved read leaves that resource null and a fixed error fact. The latest Invoice is followed only when a nonempty reference is supplied, and its ID, Customer and Subscription must match. Otherwise the unchanged Subscription preserves the missing/null/unknown reference. No list, alternate lookup or Invoice mutation is hidden in the recipe.
+
+Read-only observations preserve unknown, nonterminal, repeated and reordered provider states, exact monetary values and extra fields. They establish neither that the source change caused an observed state nor that payment, settlement or access entitlement succeeded. A response or later error never schedules another source change, collection retry or dunning action. Actual reusable-instrument/Source linkage, eligible collection accounts and account-configured recovery/dunning evidence remain under [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42); the [dunning conflict](api-contracts.md#payment-recovery-conflict) does not establish a universal retry schedule. These deterministic recipes do not depend on another browser diagnostic or promise a live recovery outcome.
+
+## Subscription items and Invoice line items
+
+Use the [item-read recipe](../examples/billing-item-reads.php) after authorizing the buyer and resolving stored parent/item IDs in the owning Billing organization and environment:
+
+```php
+$readItems = require $sdkDirectory . '/examples/billing-item-reads.php';
+$items = $readItems(
+    $billing,
+    '<subscription-id>',
+    '<subscription-item-id>',
+    '<invoice-id>',
+    '<invoice-line-item-id>',
+);
+```
+
+The recipe calls all four [accepted methods](consumer-interfaces.md#subordinate-reads), returning two individual items and one page per parent. Each list preserves the native `items`, `page_after` and `page_before` envelope. When choosing another page, pass its non-null bookmark as `page` to `listItems($subscriptionId, $query)` or `listLineItems($invoiceId, $query)`, retaining the original `page_size`, parent ID and authorized client. These subordinate lists support only `page` and `page_size` in API `2026-08-21`. Empty pages and provider failures remain visible; the recipe performs no automatic traversal.
 
 ## Standalone Payments
 
@@ -254,7 +291,7 @@ After successful verification, `WebhookEvent::fromJson($rawBody)` in the same na
 
 A valid JSON object with an unknown name, missing or unsupported version, conflicting envelope fields or unknown resource status remains unrecognized and available for consumer inspection; it receives no typed state transition. Preserve supplied fields without normalizing ownership or assigning the SDK version. Consumers retain the original `$rawBody` alongside the decoded fields when inspection or quarantine needs the exact bytes; storage and retention belong to the application. The [webhook catalogue](webhook-contracts.md#unknown-events-versions-and-reconciliation) defines interpretation and the remaining delivery evidence gates. Configure the provider webhook subscription to the SDK baseline independently of request headers.
 
-Selected `billing_checkout.*` observations can contain the Retrieve resource directly in `data`, while generic envelopes contain `data.object`. The decoder preserves both forms. For a direct Checkout without a competing `object` key, known integer fields now use the same selected-schema integer representation as generic Checkout fields. Existing generic selection and all other direct families remain unchanged. These fields were previously returned as numeric text in direct Checkout payloads; development consumers should remove string-only assumptions at those documented positions. Money, extra numbers, decimal/exponent forms, quoted numbers and overflow retain exact strings. This is a representation change before the initial release, not event acceptance or a state transition.
+Selected `billing_checkout.*`, `subscription.*` and `invoice.*` observations can contain the Retrieve resource directly in `data`, while generic envelopes contain `data.object`. The decoder preserves both forms. Without a competing `object` key, their known integer fields use the same selected-schema representation as generic resources. Existing generic selection and other direct families remain unchanged. Direct Subscription and Invoice development consumers should remove string-only assumptions at their [four known integer positions](payload-precision.md); direct Checkout retains its six known positions. Money, extra numbers, decimal/exponent forms, quoted numbers and overflow retain exact strings. This expands numeric representation before the initial release, not event acceptance or state transitions; public signatures are unchanged.
 
 After the existing raw-body verification, a consumer can inspect the original resource shape:
 
@@ -275,7 +312,37 @@ if (($envelope['version'] ?? null) === '2026-08-21'
 }
 ```
 
-A SETUP with no line items or an unrecognized representation may supply no usable quantity. Current numeric selection operates on lossless decoded values and is not native identity validation or duplicate-key rejection. The [catalogue conflict record](webhook-contracts.md#documentation-conflicts-and-interpretation) limits the observed evidence to the selected Checkout case. The executed verification recipe and source/archive consumer checks cover direct shape, exact amounts and integer representation; they do not establish a completed Billing instrument flow.
+A SETUP with no line items or an unrecognized representation may supply no usable quantity. A matching direct Subscription cancellation can likewise return `duration.period` as PHP integer zero:
+
+```php
+$subscription = is_array($data) && array_key_exists('object', $data) ? $data['object'] : $data;
+if (($envelope['version'] ?? null) === '2026-08-21'
+    && ($envelope['name'] ?? null) === 'subscription.cancelled'
+    && ($envelope['org_id'] ?? null) === $trustedOrganization
+    && is_array($subscription) && ($subscription['id'] ?? null) === $knownSubscriptionId) {
+    $period = $subscription['duration']['period'] ?? null;
+    if (is_int($period)) {
+        $observedDurationPeriod = $period; // Preserve zero; its type grants no financial or access decision.
+    }
+}
+```
+
+For a matching Invoice, the same boundary preserves zero remaining automatic attempts as an integer while money remains text:
+
+```php
+$invoice = is_array($data) && array_key_exists('object', $data) ? $data['object'] : $data;
+if (($envelope['version'] ?? null) === '2026-08-21'
+    && ($envelope['name'] ?? null) === 'invoice.payment.paid'
+    && ($envelope['org_id'] ?? null) === $trustedOrganization
+    && is_array($invoice) && ($invoice['id'] ?? null) === $knownInvoiceId) {
+    $remaining = $invoice['remaining_payment_attempt_count'] ?? null;
+    if (is_int($remaining)) {
+        $observedRemainingAttempts = $remaining; // A count grants no settlement or access decision.
+    }
+}
+```
+
+Current numeric selection operates on lossless decoded values and is not native identity validation, duplicate-key rejection or validation of numeric bounds. The [catalogue conflict record](webhook-contracts.md#documentation-conflicts-and-interpretation) distinguishes the scoped Checkout, historical Subscription and Invoice observations. The executed verification recipe covers all three direct shapes, exact amounts and integer representation; decoding alone establishes no instrument completion, collection or application entitlement.
 
 Consumer processing and persistence follow [state ownership](architecture.md#state-and-persistence-ownership) and the [webhook contract](api-contracts.md#webhook-contract). Verification and decoding complete the SDK call; application processing completes separately.
 

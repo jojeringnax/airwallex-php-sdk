@@ -135,7 +135,8 @@ final class WebhookSchema
         $resource = is_array($data) ? ($data['object'] ?? null) : null;
         $prefix = '/data/object';
         if (
-            $family === 'billing_checkout' && is_array($data) && !array_is_list($data)
+            in_array($family, ['billing_checkout', 'subscription', 'invoice'], true)
+            && is_array($data) && !array_is_list($data)
             && !array_key_exists('object', $data)
         ) {
             $resource = $data;

@@ -219,6 +219,7 @@ final class AlipayConsentReconciliationTest extends TestCase
     /** @return iterable<string,array{string}> */
     public static function badPrior(): iterable
     {
+        yield 'current-sdk-as-prior' => ['current-sdk-as-prior'];
         foreach (
             ['api', 'context', 'old-source', 'old-sdk', 'old-harness', 'inventory-extra', 'numeric-id',
             'repeat-uuid', 'action-extra', 'intent-hash', 'wire-body', 'wire-target', 'missing-possible',
@@ -259,6 +260,9 @@ final class AlipayConsentReconciliationTest extends TestCase
                 break;
             case 'old-sdk':
                 $n->source->sdk_digest = str_repeat('a', 64);
+                break;
+            case 'current-sdk-as-prior':
+                $n->source->sdk_digest = '184cbc2ac51ee6498f45b5aa50a8ec82c89e66231cb2fabacc862b8a579e48ae';
                 break;
             case 'old-harness':
                 $n->source->harness_digest = str_repeat('a', 64);

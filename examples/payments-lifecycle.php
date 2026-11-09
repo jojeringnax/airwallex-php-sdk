@@ -78,7 +78,6 @@ return [
         return $payments->payments()->paymentIntents()->confirm($intentId, [
             'request_id' => $requestId,
             'payment_consent_id' => $consentId,
-            'triggered_by' => 'customer',
             'payment_method_options' => ['card' => ['auto_capture' => false, 'authorization_type' => 'pre_auth']],
         ]);
     },

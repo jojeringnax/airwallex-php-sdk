@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 use Jojeringnax\Airwallex\Client;
+use Jojeringnax\Airwallex\Exception\ApiException;
+use Jojeringnax\Airwallex\Exception\ProtocolException;
+use Jojeringnax\Airwallex\Exception\SdkException;
+use Jojeringnax\Airwallex\Exception\TransportException;
 
 // These checks bound the finite restoration example to its observed ACTIVE EUR/OUT_OF_BAND owner context.
 $ownsFiniteSubscription = static function (mixed $value, string $id, string $customer, string $entity): bool {
@@ -36,6 +40,69 @@ $storedString = static function (mixed $value, string $key): string {
         throw new InvalidArgumentException('Load the durably saved finite restoration action first.');
     }
     return $value[$key];
+};
+
+// Recovery uses an already authorized organization client and the application's persisted buyer mapping.
+$ownsRecoverySubscription = static function (
+    array $value,
+    string $id,
+    string $customer,
+    string $entity,
+    string $collector,
+): bool {
+    return ($value['id'] ?? null) === $id && ($value['billing_customer_id'] ?? null) === $customer
+        && ($value['legal_entity_id'] ?? null) === $entity
+        && ($value['linked_payment_account_id'] ?? null) === $collector;
+};
+$recoveryError = static fn (SdkException $error): array => $error instanceof ApiException
+    ? ['kind' => 'api_error', 'http_status' => $error->httpStatus(), 'provider_code' => $error->providerCode()]
+    : ['kind' => 'unavailable']; // Never retain exception messages, bodies or request details.
+$observeRecovery = static function (
+    Client $billing,
+    string $subscriptionId,
+    string $customerId,
+    string $legalEntityId,
+    string $collectionAccountId,
+) use (
+    $ownsRecoverySubscription,
+    $recoveryError,
+): array {
+    foreach ([$subscriptionId, $customerId, $legalEntityId, $collectionAccountId] as $identity) {
+        if ($identity === '') {
+            throw new InvalidArgumentException('Load the authorized recovery mapping first.');
+        }
+    }
+    $result = ['subscription' => null, 'invoice' => null, 'read_error' => null];
+    try {
+        $subscription = $billing->billing()->subscriptions()->retrieve($subscriptionId);
+    } catch (SdkException $error) {
+        $result['read_error'] = ['stage' => 'subscription', ...$recoveryError($error)];
+        return $result;
+    }
+    if (!$ownsRecoverySubscription($subscription, $subscriptionId, $customerId, $legalEntityId, $collectionAccountId)) {
+        $result['read_error'] = ['stage' => 'subscription', 'kind' => 'ownership_not_established'];
+        return $result;
+    }
+    $result['subscription'] = $subscription;
+    $invoiceId = $subscription['latest_invoice_id'] ?? null;
+    if (!is_string($invoiceId) || $invoiceId === '') {
+        return $result; // The unchanged Subscription preserves whether this optional reference was absent or null.
+    }
+    try {
+        $invoice = $billing->billing()->invoices()->retrieve($invoiceId);
+    } catch (SdkException $error) {
+        $result['read_error'] = ['stage' => 'invoice', ...$recoveryError($error)];
+        return $result;
+    }
+    if (
+        ($invoice['id'] ?? null) !== $invoiceId || ($invoice['billing_customer_id'] ?? null) !== $customerId
+        || ($invoice['subscription_id'] ?? null) !== $subscriptionId
+    ) {
+        $result['read_error'] = ['stage' => 'invoice', 'kind' => 'ownership_not_established'];
+        return $result;
+    }
+    $result['invoice'] = $invoice;
+    return $result;
 };
 
 // Application recipes: load the stored buyer/organization/collector mapping and authorize each action first.
@@ -199,20 +266,65 @@ return [
         Client $billing,
         string $subscriptionId,
         string $replacementSourceId,
+        string $customerId,
+        string $legalEntityId,
+        string $collectionAccountId,
         string $requestId,
+    ) use (
+        $ownsRecoverySubscription,
+        $observeRecovery,
+        $recoveryError,
     ): array {
-        // Verify source/customer/collector ownership first: changing this field can retry a failed invoice now.
-        $billing->billing()->subscriptions()->update($subscriptionId, [
-            'request_id' => $requestId,
-            'payment_source_id' => $replacementSourceId,
-        ]);
-        $subscription = $billing->billing()->subscriptions()->retrieve($subscriptionId);
-        $invoiceId = $subscription['latest_invoice_id'] ?? null;
-        $invoice = is_string($invoiceId) && $invoiceId !== ''
-            ? $billing->billing()->invoices()->retrieve($invoiceId)
-            : null;
-        return ['subscription' => $subscription, 'invoice' => $invoice];
+        // The application knows the old instrument expired and has separately authorized this replacement.
+        // No PaymentSource expiry field or collector eligibility is inferred from these references.
+        $identities = [$subscriptionId, $replacementSourceId, $customerId, $legalEntityId,
+            $collectionAccountId, $requestId];
+        foreach ($identities as $identity) {
+            if ($identity === '') {
+                throw new InvalidArgumentException('Load the authorized mapping and persisted recovery action first.');
+            }
+        }
+        $before = $billing->billing()->subscriptions()->retrieve($subscriptionId);
+        if (!$ownsRecoverySubscription($before, $subscriptionId, $customerId, $legalEntityId, $collectionAccountId)) {
+            throw new RuntimeException('Subscription ownership is not established for this recovery action.');
+        }
+        $source = $billing->billing()->paymentSources()->retrieve($replacementSourceId);
+        if (
+            ($source['id'] ?? null) !== $replacementSourceId || ($source['billing_customer_id'] ?? null) !== $customerId
+            || ($source['linked_payment_account_id'] ?? null) !== $collectionAccountId
+        ) {
+            throw new RuntimeException('Replacement Source ownership is not established for this recovery action.');
+        }
+        $response = null;
+        $failure = null;
+        try {
+            // One explicit action. The selected contract says this can retry the last failed invoice immediately.
+            $response = $billing->billing()->subscriptions()->update($subscriptionId, [
+                'request_id' => $requestId,
+                'payment_source_id' => $replacementSourceId,
+            ]);
+            if (
+                !$ownsRecoverySubscription(
+                    $response,
+                    $subscriptionId,
+                    $customerId,
+                    $legalEntityId,
+                    $collectionAccountId
+                )
+            ) {
+                $response = null;
+                $failure = ['kind' => 'ownership_not_established'];
+            }
+        } catch (ApiException $error) {
+            $failure = $recoveryError($error);
+        } catch (TransportException | ProtocolException $error) {
+            $failure = ['kind' => 'unconfirmed'];
+        }
+        // A rejection, lost response or read failure never causes another update. Continue with observe_recovery.
+        $observed = $observeRecovery($billing, $subscriptionId, $customerId, $legalEntityId, $collectionAccountId);
+        return ['update_response' => $response, 'update_error' => $failure, ...$observed];
     },
+    'observe_recovery' => $observeRecovery,
     'read_invoice' => static function (Client $billing, string $invoiceId): array {
         // Authorize the buyer before returning any PDF/hosted link. Null links are valid observations.
         // Download, storage, delivery and expired-link recovery belong to the application.
