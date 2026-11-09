@@ -300,6 +300,11 @@ final class BillingWorkflowTest extends HttpTestCase
         self::assertStringContainsString('"default_proration_mode":"' . $proration . '"', $body);
         self::assertStringContainsString('"billing_action":"' . $action . '"', $body);
         self::assertStringContainsString('"proration_mode":"NONE"', $body);
+        self::assertSame(
+            '{"request_id":"item-change","items":[{"id":"item_test","quantity":3,"proration_mode":"NONE"}],'
+                . '"default_proration_mode":"' . $proration . '","billing_action":"' . $action . '"}',
+            $body,
+        );
     }
     public function testRejectedProrationActionPreservesIdentityAndErrorWithoutReplay(): void
     {
