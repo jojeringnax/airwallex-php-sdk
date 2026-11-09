@@ -30,7 +30,15 @@ final class WebhookDeliveryApi
         #[SensitiveParameter] Configuration $configuration,
         private readonly WebhookDeliveryTransport $transport,
         private readonly WebhookDeliveryEvents $events = WebhookDeliveryEvents::Payments,
+        WebhookManagementProfile $managementProfile = WebhookManagementProfile::Account,
     ) {
+        $transport->assertManagementProfile($managementProfile);
+        if (
+            $managementProfile === WebhookManagementProfile::DefaultLogin
+            && $events !== WebhookDeliveryEvents::BillingCheckout
+        ) {
+            throw new ProtocolException('Default management is limited to the selected fresh Billing pair.');
+        }
         $factory = new HttpFactory();
         $this->exchange = new HttpExchange(Environment::Sandbox, $transport, $factory, $factory);
         $this->decoder = new ResponseDecoder();
@@ -39,7 +47,7 @@ final class WebhookDeliveryApi
             $this->decoder,
             $configuration->credentials(),
             Environment::Sandbox,
-            $configuration->accountId(),
+            $managementProfile === WebhookManagementProfile::Account ? $configuration->accountId() : null,
             null,
             null,
             static fn (): int => time()
@@ -50,7 +58,9 @@ final class WebhookDeliveryApi
             $transport,
             $factory,
             $factory,
-            loginAccountId: $configuration->accountId(),
+            loginAccountId: $managementProfile === WebhookManagementProfile::Account
+                ? $configuration->accountId()
+                : null,
             retryPolicy: new RetryPolicy(maxAttempts: 1)
         );
     }
