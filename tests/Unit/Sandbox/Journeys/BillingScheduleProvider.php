@@ -65,7 +65,11 @@ final class BillingScheduleProvider implements ClientInterface
             if ($base === '/api/v1/billing/subscriptions') {
                 $object += ['status' => 'PENDING', 'cancel_at_period_end' => false];
                 $metadata = $object['metadata'] ?? null;
-                if (is_array($metadata) && ($metadata['sdk_validation_case'] ?? null) === 'immediate-oob-trial') {
+                if (
+                    is_array($metadata) && in_array($metadata['sdk_validation_case'] ?? null, [
+                        'immediate-oob-trial', 'immediate-oob-trial-basic-offset',
+                    ], true)
+                ) {
                     $object['status'] = 'IN_TRIAL';
                     $object['starts_at'] = '2028-01-01T00:00:00.125+0000';
                 }
