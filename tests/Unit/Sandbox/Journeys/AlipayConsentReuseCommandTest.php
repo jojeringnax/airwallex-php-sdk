@@ -249,6 +249,103 @@ final class AlipayConsentReuseCommandTest extends TestCase
         self::assertSame([], $provider->requests);
     }
 
+    /** @return iterable<string,array{string,string}> */
+    public static function finalProofFailures(): iterable
+    {
+        foreach (['intent_confirm_wire_prepared', 'intent_confirm_possible_send'] as $phase) {
+            foreach (['source', 'clock'] as $change) {
+                yield $phase . '-' . $change => [$phase, $change];
+            }
+        }
+    }
+
+    #[DataProvider('finalProofFailures')]
+    public function testFinalProofAfterFsyncStopsConfirmAndAllDependentCleanup(string $phase, string $change): void
+    {
+        $provider = new PaymentsProvider();
+        $provider->response = AlipayConsentReuseTest::normal(...);
+        $now = 0.0;
+        $fired = false;
+        $tool = dirname(__DIR__, 4) . '/tools/alipay-hk-consent-reuse.php';
+        $original = file_get_contents($tool);
+        self::assertIsString($original);
+        try {
+            $result = AlipayConsentReuseCommand::run(
+                $this->options(),
+                $provider,
+                static function (
+                    string $context,
+                    string $directory
+                ) use (
+                    $phase,
+                    $change,
+                    &$now,
+                    &$fired,
+                    $tool,
+                    $original,
+                ): RunLedger {
+                    return RunLedger::create($context, $directory, synchronize: static function ($stream) use (
+                        $directory,
+                        $phase,
+                        $change,
+                        &$now,
+                        &$fired,
+                        $tool,
+                        $original,
+                    ): bool {
+                        if (!$fired) {
+                            foreach (glob($directory . '/sdk-validation-*/*.writing') ?: [] as $path) {
+                                $raw = file_get_contents($path);
+                                self::assertIsString($raw);
+                                $state = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+                                self::assertIsArray($state);
+                                $observations = $state['observations'] ?? null;
+                                self::assertIsArray($observations);
+                                if (isset($observations[$phase])) {
+                                    $fired = true;
+                                    if ($change === 'source') {
+                                        file_put_contents($tool, $original . "\n// synthetic fsync proof change\n");
+                                    } else {
+                                        $now = 241.0;
+                                    }
+                                }
+                            }
+                        }
+                        return fsync($stream);
+                    });
+                },
+                static function (int $seconds): void {
+                },
+                static function () use (&$now): float {
+                    return $now;
+                },
+                attempts: 1
+            );
+        } finally {
+            file_put_contents($tool, $original);
+        }
+        self::assertTrue($fired);
+        self::assertSame('fail', $result['result']);
+        self::assertTrue($result['reconciliation_required']);
+        self::assertStringNotContainsString('PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+        foreach (['/confirm', '/refunds/create', '/cancel', '/disable'] as $suffix) {
+            self::assertCount(0, array_filter($provider->requests, static fn (RequestInterface $request): bool =>
+                str_ends_with($request->getUri()->getPath(), $suffix)));
+        }
+        $paths = glob($this->directory . '/sdk-validation-*/ledger.json') ?: [];
+        self::assertCount(1, $paths);
+        $raw = file_get_contents($paths[0]);
+        self::assertIsString($raw);
+        $state = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($state);
+        self::assertIsArray($state['observations']);
+        $possible = $state['observations']['intent_confirm_possible_send'] ?? null;
+        self::assertIsArray($possible);
+        self::assertSame('possible', $possible['invocation']);
+        self::assertIsArray($state['resources']);
+        self::assertNotEmpty($state['resources']['payment_intents'] ?? null);
+    }
+
     /** @return iterable<string,array{list<string>,bool}> */
     public static function cliNegatives(): iterable
     {

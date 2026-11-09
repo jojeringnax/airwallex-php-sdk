@@ -29,13 +29,25 @@ final class AlipayConsentReuseTransportTest extends TestCase
     private string $directory;
     private RunLedger $ledger;
     private string $context;
+    /** @var (Closure():void)|null */
+    private ?Closure $duringPersist = null;
+    private bool $persistMutated = false;
 
     protected function setUp(): void
     {
         $this->directory = sys_get_temp_dir() . '/consent-wire-' . bin2hex(random_bytes(8));
         mkdir($this->directory, 0700);
         $this->context = str_repeat('a', 64);
-        $this->ledger = RunLedger::create($this->context, $this->directory);
+        $this->ledger = RunLedger::create(
+            $this->context,
+            $this->directory,
+            synchronize: function ($stream): bool {
+                if ($this->duringPersist !== null) {
+                    ($this->duringPersist)();
+                }
+                return fsync($stream);
+            }
+        );
     }
 
     protected function tearDown(): void
@@ -580,5 +592,282 @@ final class AlipayConsentReuseTransportTest extends TestCase
         }
         $this->expectException(ProtocolException::class);
         $this->prepared($transport);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function journalBoundaries(): iterable
+    {
+        yield 'prepared' => ['customer_create_wire_prepared'];
+        yield 'possible-send' => ['customer_create_possible_send'];
+    }
+
+    /** @param Closure():void $mutate */
+    private function atBoundary(string $phase, Closure $mutate): void
+    {
+        $this->duringPersist = function () use ($phase, $mutate): void {
+            if ($this->persistMutated) {
+                return;
+            }
+            foreach (glob($this->directory . '/sdk-validation-*/*.writing') ?: [] as $path) {
+                $raw = file_get_contents($path);
+                self::assertIsString($raw);
+                $state = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+                self::assertIsArray($state);
+                $observations = $state['observations'] ?? null;
+                self::assertIsArray($observations);
+                if (isset($observations[$phase])) {
+                    $this->persistMutated = true;
+                    $mutate();
+                }
+            }
+        };
+    }
+
+    #[DataProvider('journalBoundaries')]
+    public function testPrivatePreparedPacketSurvivesOriginalRequestMutationDuringFsync(string $phase): void
+    {
+        $native = new class implements ClientInterface {
+            public ?RequestInterface $seen = null;
+            public int $calls = 0;
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                ++$this->calls;
+                $this->seen = $request;
+                return new Response(201, [], '{"id":"PRIVATE_CUSTOMER"}');
+            }
+        };
+        $transport = $this->transport($native);
+        $original = $this->prepared($transport);
+        $mutable = new class (
+            $original->getMethod(),
+            $original->getUri(),
+            $original->getHeaders(),
+            (string) $original->getBody()
+) extends Request {
+            public bool $tampered = false;
+            public function getMethod(): string
+            {
+                return $this->tampered ? 'DELETE' : parent::getMethod();
+            }
+            public function getUri(): \Psr\Http\Message\UriInterface
+            {
+                return $this->tampered ? new Uri('https://api.airwallex.com/PRIVATE_CHANGED') : parent::getUri();
+            }
+            /** @return array<string,list<string>> */
+            public function getHeaders(): array
+            {
+                if ($this->tampered) {
+                    return ['Host' => ['api.airwallex.com'], 'Authorization' => ['Bearer PRIVATE_CHANGED']];
+                }
+                $headers = [];
+                foreach (parent::getHeaders() as $name => $values) {
+                    if (!is_string($name)) {
+                        throw new \RuntimeException('The synthetic packet requires named headers.');
+                    }
+                    $headers[$name] = array_values($values);
+                }
+                return $headers;
+            }
+            public function getProtocolVersion(): string
+            {
+                return $this->tampered ? '2.0' : parent::getProtocolVersion();
+            }
+        };
+        $body = (string) $mutable->getBody();
+        $mutable->getBody()->rewind();
+        $headers = $mutable->getHeaders();
+        $uri = (string) $mutable->getUri();
+        $this->atBoundary($phase, static function () use ($mutable): void {
+            $mutable->tampered = true;
+            $stream = $mutable->getBody();
+            $stream->rewind();
+            $stream->write('PRIVATE_REPLACED_BODY');
+            $stream->seek(3);
+        });
+        $response = $transport->sendRequest($mutable);
+        self::assertTrue($this->persistMutated);
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(1, $native->calls);
+        self::assertInstanceOf(RequestInterface::class, $native->seen);
+        self::assertNotSame($mutable, $native->seen);
+        self::assertSame('POST', $native->seen->getMethod());
+        self::assertSame($uri, (string) $native->seen->getUri());
+        self::assertSame($headers, $native->seen->getHeaders());
+        self::assertSame('1.1', $native->seen->getProtocolVersion());
+        self::assertSame($body, (string) $native->seen->getBody());
+        $observations = $this->observations();
+        self::assertIsArray($observations['customer_create_wire_prepared']);
+        self::assertSame(hash('sha256', $body), $observations['customer_create_wire_prepared']['body_sha256']);
+        self::assertSame(hash('sha256', $uri), $observations['customer_create_wire_prepared']['target_sha256']);
+        self::assertArrayHasKey('customer_create_possible_send', $observations);
+        $this->expectException(ProtocolException::class);
+        $transport->sendRequest($mutable);
+    }
+
+    /** @return iterable<string,array{string,string}> */
+    public static function lateProofChanges(): iterable
+    {
+        foreach (['customer_create_wire_prepared', 'customer_create_possible_send'] as $phase) {
+            foreach (['source', 'context', 'clock'] as $change) {
+                yield $phase . '-' . $change => [$phase, $change];
+            }
+        }
+    }
+
+    #[DataProvider('lateProofChanges')]
+    public function testPostFsyncProofFailureCannotInvokeNativeOrReplay(string $phase, string $change): void
+    {
+        $native = new class implements ClientInterface {
+            public int $calls = 0;
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                ++$this->calls;
+                return new Response(201, [], '{"id":"PRIVATE_CUSTOMER"}');
+            }
+        };
+        $now = 0.0;
+        $transport = $this->transport($native, static function () use (&$now): float {
+            return $now;
+        });
+        $request = $this->prepared($transport);
+        $tool = dirname(__DIR__, 4) . '/tools/alipay-hk-consent-reuse.php';
+        $original = file_get_contents($tool);
+        self::assertIsString($original);
+        $this->atBoundary($phase, static function () use ($change, &$now, $tool, $original, $transport): void {
+            if ($change === 'source') {
+                file_put_contents($tool, $original . "\n// synthetic post-fsync source change\n");
+            } elseif ($change === 'context') {
+                (new \ReflectionProperty($transport, 'context'))->setValue($transport, str_repeat('b', 64));
+            } else {
+                $now = 241.0;
+            }
+        });
+        try {
+            $transport->sendRequest($request);
+            self::fail('Changed original proof authorized a native invocation.');
+        } catch (ProtocolException $error) {
+            self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+        } finally {
+            file_put_contents($tool, $original);
+        }
+        self::assertTrue($this->persistMutated);
+        self::assertSame(0, $native->calls);
+        self::assertSame(0, $transport->report()['http_invocations']);
+        self::assertFalse($transport->healthy());
+        $observations = $this->observations();
+        self::assertArrayHasKey('customer_create_wire_prepared', $observations);
+        if ($phase === 'customer_create_wire_prepared' && $change === 'context') {
+            // Context failure prevents the next durable phase itself; do not invent a possible-send record.
+            self::assertArrayNotHasKey('customer_create_possible_send', $observations);
+        } else {
+            self::assertIsArray($observations['customer_create_possible_send']);
+            self::assertSame('possible', $observations['customer_create_possible_send']['invocation']);
+        }
+        // Recover only the synthetic external conditions: permanent poison/one-use must still forbid replay.
+        $now = 0.0;
+        (new \ReflectionProperty($transport, 'context'))->setValue($transport, $this->context);
+        $this->expectException(ProtocolException::class);
+        $transport->sendRequest($request);
+    }
+
+    private static function headerBlock(RequestInterface $request): string
+    {
+        $lines = [];
+        foreach ($request->getHeaders() as $name => $values) {
+            foreach ($values as $value) {
+                $lines[] = $name . ': ' . $value;
+            }
+        }
+        return implode("\r\n", $lines) . "\r\n\r\n";
+    }
+
+    /** @return iterable<string,array{int,bool}> */
+    public static function aggregateHeaderBounds(): iterable
+    {
+        yield 'exact private PSR block' => [16384, true];
+        yield 'one byte over' => [16385, false];
+    }
+
+    #[DataProvider('aggregateHeaderBounds')]
+    public function testAggregatePrivateHeaderBoundaryBeforeNativeInvocation(int $bytes, bool $allowed): void
+    {
+        $native = new class implements ClientInterface {
+            public int $calls = 0;
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                ++$this->calls;
+                return new Response(201, [], '{"token":"PRIVATE","expires_at":"2100-01-01T00:00:00Z"}');
+            }
+        };
+        $transport = $this->transport($native);
+        $request = self::login()->withHeader('x-client-id', str_repeat('c', 8192))->withHeader('x-api-key', 'k');
+        $keyLength = 1 + $bytes - strlen(self::headerBlock($request));
+        self::assertGreaterThan(0, $keyLength);
+        self::assertLessThanOrEqual(8192, $keyLength);
+        $request = $request->withHeader('x-api-key', str_repeat('k', $keyLength));
+        self::assertSame($bytes, strlen(self::headerBlock($request)));
+        foreach ($request->getHeaders() as $values) {
+            self::assertCount(1, $values);
+            self::assertLessThanOrEqual(8192, strlen($values[0]));
+        }
+        if ($allowed) {
+            self::assertSame(201, $transport->sendRequest($request)->getStatusCode());
+        } else {
+            try {
+                $transport->sendRequest($request);
+                self::fail('An over-limit private header block reached native HTTP.');
+            } catch (ProtocolException $error) {
+                self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+            }
+        }
+        self::assertSame($allowed ? 1 : 0, $native->calls);
+        self::assertSame([], $this->observations()); // Login has no mutation wire journal; no false send proof.
+    }
+
+    public function testTwoIndividuallyValidCredentialValuesCannotExceedAggregateHeaderCap(): void
+    {
+        $transport = $this->transport();
+        $request = self::login()->withHeader('x-client-id', str_repeat('c', 8192))
+            ->withHeader('x-api-key', str_repeat('k', 8192));
+        self::assertSame(8192, strlen($request->getHeaderLine('x-client-id')));
+        self::assertSame(8192, strlen($request->getHeaderLine('x-api-key')));
+        self::assertGreaterThan(16384, strlen(self::headerBlock($request)));
+        try {
+            $transport->sendRequest($request);
+            self::fail('Two maximum values bypassed the aggregate limit.');
+        } catch (ProtocolException) {
+            self::assertSame(0, $transport->report()['http_invocations']);
+            self::assertSame([], $this->observations());
+        }
+    }
+
+    /** @return iterable<string,array{int,bool}> */
+    public static function bearerHeaderBounds(): iterable
+    {
+        yield 'maximum bearer value' => [8192, true];
+        yield 'over per-value maximum' => [8193, false];
+    }
+
+    #[DataProvider('bearerHeaderBounds')]
+    public function testBearerValueLimitRemainsIndependentOfAggregateCap(int $bytes, bool $allowed): void
+    {
+        $transport = $this->transport();
+        $request = $this->prepared($transport)->withHeader('Authorization', 'Bearer ' . str_repeat('x', $bytes - 7));
+        self::assertSame($bytes, strlen($request->getHeaderLine('Authorization')));
+        self::assertLessThan(16384, strlen(self::headerBlock($request)));
+        if ($allowed) {
+            self::assertSame(201, $transport->sendRequest($request)->getStatusCode());
+            self::assertArrayHasKey('customer_create_possible_send', $this->observations());
+        } else {
+            try {
+                $transport->sendRequest($request);
+                self::fail('An over-limit bearer reached native HTTP.');
+            } catch (ProtocolException $error) {
+                self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+            }
+            self::assertSame(0, $transport->report()['http_invocations']);
+            // Its operation intent was reserved, but invalid headers earn no prepared/possible-send record.
+            self::assertSame([], $this->observations());
+        }
     }
 }

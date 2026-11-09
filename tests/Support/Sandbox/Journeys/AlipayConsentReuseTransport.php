@@ -7,6 +7,7 @@ namespace Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys;
 use Closure;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\StreamHandler;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Utils;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Internal\Json\JsonCodec;
@@ -163,11 +164,19 @@ final class AlipayConsentReuseTransport implements ClientInterface
         try {
             $this->source();
             $this->remaining();
-            $path = $request->getUri()->getPath();
-            $login = $path === '/api/v1/authentication/login';
-            $this->request($request, $login);
             $raw = $this->body($request);
-            if ($request->getMethod() === 'GET' || $login) {
+            // Capture values into a private PSR implementation; no caller-owned stream/URI/getter survives fsync.
+            $prepared = new Request(
+                $request->getMethod(),
+                (string) $request->getUri(),
+                $request->getHeaders(),
+                $raw,
+                $request->getProtocolVersion()
+            );
+            $path = $prepared->getUri()->getPath();
+            $login = $path === '/api/v1/authentication/login';
+            $this->request($prepared, $login);
+            if ($prepared->getMethod() === 'GET' || $login) {
                 if ($raw !== '') {
                     throw new ProtocolException('A bodyless Consent request gained a body.');
                 }
@@ -187,7 +196,7 @@ final class AlipayConsentReuseTransport implements ClientInterface
                 $action = $armed['action'];
                 $this->note($action . '_wire_prepared', ['method' => 'POST', 'target_sha256' => hash(
                     'sha256',
-                    (string) $request->getUri()
+                    (string) $prepared->getUri()
                 ), 'body_sha256' => hash('sha256', $raw)]);
                 $this->used[$path] = true;
                 $this->armed = null;
@@ -197,13 +206,14 @@ final class AlipayConsentReuseTransport implements ClientInterface
             if ($this->requests >= 64) {
                 throw new ProtocolException('The Consent HTTP invocation budget is exhausted.');
             }
+            $this->source(); // Prepared/possible-send durability callbacks cannot replace the original source proof.
             $remaining = $this->remaining();
             ++$this->requests;
-            $response = $this->http instanceof Client ? $this->http->send($request, [
+            $response = $this->http instanceof Client ? $this->http->send($prepared, [
                 'timeout' => min(30, $remaining), 'connect_timeout' => min(10, $remaining),
                 'read_timeout' => min(5, $remaining), 'stream' => true, 'verify' => true,
                 'allow_redirects' => false, 'cookies' => false, 'http_errors' => false, 'decode_content' => false,
-            ]) : $this->http->sendRequest($request);
+            ]) : $this->http->sendRequest($prepared);
             $response = $this->response($response, $path);
             $status = $response->getStatusCode();
             if ($action !== null) {
@@ -241,15 +251,20 @@ final class AlipayConsentReuseTransport implements ClientInterface
             throw new ProtocolException('Only closed account Consent Sandbox routes are permitted.');
         }
         $headers = [];
+        $headerBytes = 2; // Final CRLF after the private prepared header block.
         foreach ($request->getHeaders() as $name => $values) {
             $headers[strtolower($name)] = $values;
+            foreach ($values as $value) {
+                $headerBytes += strlen($name) + 2 + strlen($value) + 2; // name + ': ' + value + CRLF.
+            }
         }
         $simulation = $uri->getPath() === '/api/v1/simulation/pa/shopper_actions/verify';
         $names = $login ? ['host', 'x-client-id', 'x-api-key', 'x-login-as', 'x-api-version', 'accept']
             : ['host', 'authorization', 'x-api-version', ...($simulation ? [] : ['accept']),
                 ...($request->getMethod() === 'POST' ? ['content-type'] : [])];
         if (
-            array_diff(array_keys($headers), $names) !== [] || array_diff($names, array_keys($headers)) !== []
+            $headerBytes > 16384
+            || array_diff(array_keys($headers), $names) !== [] || array_diff($names, array_keys($headers)) !== []
             || ($headers['host'] ?? null) !== ['api.sandbox.airwallex.com']
             || ($headers['x-api-version'] ?? null) !== ['2026-08-21']
             || (!$simulation && ($headers['accept'] ?? null) !== ['application/json'])
