@@ -9,6 +9,9 @@ use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Credentials;
 use Jojeringnax\Airwallex\Environment;
 use Jojeringnax\Airwallex\Exception\WebhookVerificationException;
+use Jojeringnax\Airwallex\Exception\ApiException;
+use Jojeringnax\Airwallex\RetryPolicy;
+use Throwable;
 use Jojeringnax\Airwallex\Tests\Support\HttpTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
@@ -115,31 +118,249 @@ final class ConsumerRecipesTest extends HttpTestCase
         yield 'immediate' => ['cancel_now', 'CANCELLED', '"proration_behavior":"NONE"'];
     }
 
-    public function testRecoveryMakesOneExplicitSourceChangeThenObservesSubscriptionAndInvoice(): void
+    /** @param array<string,mixed> $changes */
+    private static function recoverySubscription(array $changes = []): string
     {
-        $http = $this->scenario([
-            [201, self::LOGIN], [200, '{"status":"UNPAID"}'],
-            [200, '{"id":"sub","status":"ACTIVE","latest_invoice_id":"invoice"}'],
-            [200, '{"id":"invoice","payment_status":"PAID","amount_due":0,"pdf_url":null}'],
-        ]);
+        return json_encode(array_replace([
+            'id' => 'sub', 'billing_customer_id' => 'buyer', 'legal_entity_id' => 'entity',
+            'linked_payment_account_id' => 'collector', 'payment_source_id' => 'old-source',
+            'status' => 'UNPAID', 'latest_invoice_id' => 'invoice',
+        ], $changes), JSON_THROW_ON_ERROR);
+    }
+
+    private const string RECOVERY_SOURCE = '{"id":"new-source","billing_customer_id":"buyer",'
+        . '"linked_payment_account_id":"collector","external_id":"authorized-method"}';
+    private const string RECOVERY_INVOICE = '{"id":"invoice","billing_customer_id":"buyer",'
+        . '"subscription_id":"sub","payment_status":"PAID","amount_due":19.900000000000000001,'
+        . '"pdf_url":null,"future_number":1e100,"future_flag":false}';
+
+    /** @return array<array-key,mixed> */
+    private function recover(Client $client): array
+    {
         $result = ($this->recipe('billing-lifecycle.php', 'replace_source_and_observe'))(
-            $this->client($http),
+            $client,
             'sub',
             'new-source',
+            'buyer',
+            'entity',
+            'collector',
             'persisted-recovery'
         );
         self::assertIsArray($result);
+        return $result;
+    }
+
+    public function testRecoveryVerifiesBothOwnersMakesOneExplicitChangeThenPreservesObservedFacts(): void
+    {
+        $observed = self::recoverySubscription(['payment_source_id' => 'new-source', 'status' => 'ACTIVE']);
+        $http = $this->scenario([
+            [201, self::LOGIN], [200, self::recoverySubscription()], [200, self::RECOVERY_SOURCE],
+            [200, $observed], [200, $observed], [200, self::RECOVERY_INVOICE],
+        ]);
+        $result = $this->recover($this->client($http));
+        self::assertNull($result['update_error']);
+        self::assertNull($result['read_error']);
         self::assertIsArray($result['invoice']);
-        self::assertSame('0', $result['invoice']['amount_due']);
+        self::assertSame('19.900000000000000001', $result['invoice']['amount_due']);
+        self::assertSame('1e100', $result['invoice']['future_number']);
+        self::assertFalse($result['invoice']['future_flag']);
         self::assertNull($result['invoice']['pdf_url']);
-        self::assertSame('POST', $http->requests[1]->getMethod());
-        self::assertSame('GET', $http->requests[2]->getMethod());
-        self::assertSame('GET', $http->requests[3]->getMethod());
-        self::assertStringContainsString(
-            '"request_id":"persisted-recovery"',
-            (string) $http->requests[1]->getBody()
+        $methods = array_map(static fn ($r): string => $r->getMethod(), $http->requests);
+        self::assertSame(['POST', 'GET', 'GET', 'POST', 'GET', 'GET'], $methods);
+        self::assertStringEndsWith('/payment_sources/new-source', (string) $http->requests[2]->getUri());
+        self::assertSame(
+            '{"request_id":"persisted-recovery","payment_source_id":"new-source"}',
+            (string) $http->requests[3]->getBody()
         );
         self::assertArrayNotHasKey('access_granted', $result);
+        self::assertArrayNotHasKey('financial_success', $result);
+    }
+
+    /** @return iterable<string,array{string,string,int}> */
+    public static function recoveryOwnerMismatches(): iterable
+    {
+        foreach (['id', 'billing_customer_id', 'legal_entity_id', 'linked_payment_account_id'] as $key) {
+            yield 'subscription ' . $key => [self::recoverySubscription([$key => 'SYNTHETIC_PRIVATE']),
+                self::RECOVERY_SOURCE, 2];
+        }
+        yield 'optional entity absent' => [str_replace('"legal_entity_id":"entity",', '', self::recoverySubscription()),
+            self::RECOVERY_SOURCE, 2];
+        foreach (['id', 'billing_customer_id', 'linked_payment_account_id'] as $key) {
+            $source = json_decode(self::RECOVERY_SOURCE, true, flags: JSON_THROW_ON_ERROR);
+            $source[$key] = 'SYNTHETIC_PRIVATE';
+            yield 'source ' . $key => [self::recoverySubscription(), json_encode($source, JSON_THROW_ON_ERROR), 3];
+        }
+    }
+
+    #[DataProvider('recoveryOwnerMismatches')]
+    public function testRecoveryOwnershipMismatchStopsBeforeTheSourceUpdate(
+        string $subscription,
+        string $source,
+        int $calls,
+    ): void {
+        $http = $this->scenario([[201, self::LOGIN], [200, $subscription], [200, $source]]);
+        $this->expectException(RuntimeException::class);
+        try {
+            $this->recover($this->client($http));
+        } catch (RuntimeException $error) {
+            self::assertStringNotContainsString('SYNTHETIC_PRIVATE', $error->getMessage());
+            throw $error;
+        } finally {
+            self::assertCount($calls, $http->requests);
+            foreach (array_slice($http->requests, 1) as $request) {
+                self::assertSame('GET', $request->getMethod());
+            }
+        }
+    }
+
+    public function testUnavailableReplacementSourcePreservesSafeProviderErrorAndMakesNoUpdate(): void
+    {
+        $http = $this->scenario([[201, self::LOGIN], [200, self::recoverySubscription()],
+            [404, '{"code":"resource_not_found","message":"SYNTHETIC_PRIVATE"}']]);
+        try {
+            $this->recover($this->client($http));
+            self::fail('An unavailable Source cannot authorize an update.');
+        } catch (ApiException $error) {
+            self::assertSame(404, $error->httpStatus());
+            self::assertSame('resource_not_found', $error->providerCode());
+            self::assertStringNotContainsString('SYNTHETIC_PRIVATE', (string) $error);
+        }
+        self::assertCount(3, $http->requests);
+    }
+
+    /** @return iterable<string,array{array{int,string}|Throwable,string,?int}> */
+    public static function failedRecoveryUpdates(): iterable
+    {
+        yield 'decline' => [[400, '{"code":"issuer_declined","message":"SYNTHETIC_PRIVATE"}'], 'api_error', 400];
+        yield 'server uncertainty' => [[503, '{"code":"internal_error","message":"SYNTHETIC_PRIVATE"}'],
+            'api_error', 503];
+        yield 'transport uncertainty' => [new RuntimeException('SYNTHETIC_PRIVATE'), 'unconfirmed', null];
+        yield 'invalid success body' => [[200, '{'], 'unconfirmed', null];
+    }
+
+    /** @param array{int,string}|Throwable $failure */
+    #[DataProvider('failedRecoveryUpdates')]
+    public function testFailedOrUnconfirmedUpdateNeverReplaysAndOnlyReadsObservedState(
+        array | Throwable $failure,
+        string $kind,
+        ?int $status,
+    ): void {
+        $observed = self::recoverySubscription(['status' => 'FUTURE_UNKNOWN', 'payment_source_id' => 'new-source']);
+        $http = $this->scenario([[201, self::LOGIN], [200, self::recoverySubscription()],
+            [200, self::RECOVERY_SOURCE], $failure, [200, $observed], [200, self::RECOVERY_INVOICE]]);
+        $result = $this->recover($this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3)));
+        self::assertNull($result['update_response']);
+        self::assertIsArray($result['update_error']);
+        self::assertSame($kind, $result['update_error']['kind']);
+        self::assertSame($status, $result['update_error']['http_status'] ?? null);
+        self::assertIsArray($result['subscription']);
+        self::assertSame('FUTURE_UNKNOWN', $result['subscription']['status']);
+        self::assertSame('new-source', $result['subscription']['payment_source_id']);
+        self::assertCount(6, $http->requests);
+        self::assertSame('POST', $http->requests[3]->getMethod());
+        self::assertSame('GET', $http->requests[4]->getMethod());
+        self::assertSame('GET', $http->requests[5]->getMethod());
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testReadbackFailureRetainsUpdateResponseAndDoesNotInventRecovery(): void
+    {
+        $updated = self::recoverySubscription(['payment_source_id' => 'new-source']);
+        $http = $this->scenario([[201, self::LOGIN], [200, self::recoverySubscription()],
+            [200, self::RECOVERY_SOURCE], [200, $updated],
+            [503, '{"code":"internal_error","message":"SYNTHETIC_PRIVATE"}']]);
+        $result = $this->recover($this->client($http));
+        self::assertSame(json_decode($updated, true, flags: JSON_THROW_ON_ERROR), $result['update_response']);
+        self::assertNull($result['subscription']);
+        self::assertNull($result['invoice']);
+        self::assertIsArray($result['read_error']);
+        self::assertSame('subscription', $result['read_error']['stage']);
+        self::assertCount(5, $http->requests);
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function testUnprovedUpdateOrReadOwnerNeverBecomesAnOwnedResourceFact(): void
+    {
+        foreach (['update', 'read'] as $phase) {
+            $owned = self::recoverySubscription(['payment_source_id' => 'new-source']);
+            $foreign = self::recoverySubscription(['billing_customer_id' => 'SYNTHETIC_PRIVATE']);
+            $http = $this->scenario([[201, self::LOGIN], [200, self::recoverySubscription()],
+                [200, self::RECOVERY_SOURCE], [200, $phase === 'update' ? $foreign : $owned],
+                [200, $phase === 'read' ? $foreign : $owned], [200, self::RECOVERY_INVOICE]]);
+            $result = $this->recover($this->client($http));
+            $error = $result[$phase === 'update' ? 'update_error' : 'read_error'];
+            self::assertIsArray($error);
+            self::assertSame('ownership_not_established', $error['kind']);
+            self::assertNull($result[$phase === 'update' ? 'update_response' : 'subscription']);
+            self::assertCount($phase === 'update' ? 6 : 5, $http->requests);
+            self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($result, JSON_THROW_ON_ERROR));
+        }
+    }
+
+    public function testMissingPersistedRecoveryIdentityStopsBeforeAnyRequest(): void
+    {
+        $http = $this->scenario([]);
+        $this->expectException(\InvalidArgumentException::class);
+        try {
+            ($this->recipe('billing-lifecycle.php', 'replace_source_and_observe'))(
+                $this->client($http),
+                'sub',
+                'new-source',
+                'buyer',
+                'entity',
+                'collector',
+                ''
+            );
+        } finally {
+            self::assertSame([], $http->requests);
+        }
+    }
+
+    public function testReadOnlyRecoveryKeepsUnknownNonterminalAndReorderedStatesWithoutSourceChanges(): void
+    {
+        $states = ['PENDING', 'FUTURE_UNKNOWN', 'ACTIVE', 'UNPAID', 'UNPAID'];
+        $responses = [[201, self::LOGIN]];
+        foreach ($states as $state) {
+            $responses[] = [200, self::recoverySubscription(['status' => $state, 'latest_invoice_id' => null])];
+        }
+        $http = $this->scenario($responses);
+        $client = $this->client($http);
+        $observe = $this->recipe('billing-lifecycle.php', 'observe_recovery');
+        foreach ($states as $state) {
+            $result = $observe($client, 'sub', 'buyer', 'entity', 'collector');
+            self::assertIsArray($result);
+            self::assertIsArray($result['subscription']);
+            self::assertSame($state, $result['subscription']['status']);
+            self::assertArrayHasKey('latest_invoice_id', $result['subscription']);
+            self::assertNull($result['subscription']['latest_invoice_id']);
+            self::assertNull($result['invoice']);
+        }
+        self::assertCount(6, $http->requests);
+        foreach (array_slice($http->requests, 1) as $request) {
+            self::assertSame('GET', $request->getMethod());
+        }
+    }
+
+    public function testInvoiceFailureOrUnprovedOwnerWithholdsInvoiceButKeepsOwnedSubscription(): void
+    {
+        $responses = [[404, '{"code":"resource_not_found"}'],
+            [200, '{"id":"invoice","billing_customer_id":"other"}']];
+        foreach ($responses as $response) {
+            $http = $this->scenario([[201, self::LOGIN], [200, self::recoverySubscription()], $response]);
+            $result = ($this->recipe('billing-lifecycle.php', 'observe_recovery'))(
+                $this->client($http),
+                'sub',
+                'buyer',
+                'entity',
+                'collector'
+            );
+            self::assertIsArray($result);
+            self::assertIsArray($result['subscription']);
+            self::assertNull($result['invoice']);
+            self::assertIsArray($result['read_error']);
+            self::assertSame('invoice', $result['read_error']['stage']);
+            self::assertCount(3, $http->requests);
+        }
     }
 
     public function testInvoiceRecipePreservesUnavailableAndExpiredLinksWithoutRenewalRequests(): void
