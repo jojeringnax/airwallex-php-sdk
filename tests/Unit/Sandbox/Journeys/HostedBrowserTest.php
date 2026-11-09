@@ -120,6 +120,97 @@ final class HostedBrowserTest extends TestCase
         }
     }
 
+    public function testTelemetryFactsAreSparseClosedAndRequireTheirObservedRole(): void
+    {
+        $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false];
+        $facts = ['security_preflight_validation' => 'matched', 'risk_preflight_attempts' => 1,
+            'risk_preflight_client_invocations' => 1, 'risk_preflight_delivered' => 0,
+            'risk_preflight_http_status' => 200, 'security_visitor_validation' => 'exception',
+            'risk_visitor_attempts' => 1, 'risk_visitor_client_invocations' => 1,
+            'security_event_validation' => 'withheld', 'risk_event_attempts' => 8,
+            'risk_event_client_invocations' => 2, 'security_telemetry_first_failure_phase' => 'response_validation',
+            'security_telemetry_first_failure_gate' => 'operation_failed',
+            'security_telemetry_first_failure_role' => 'event',
+            'security_telemetry_shutdown_failure_stage' => 'prior_cleanup_failed'];
+        $project = static fn (array $data): array => HostedBrowser::sanitize(
+            $data,
+            true,
+            true,
+            true,
+            true,
+            mode: HostedSecurityMode::InstrumentSecurity
+        );
+        $safe = $project($base + $facts + ['SYNTHETIC_PRIVATE_KEY' => 'SYNTHETIC_PRIVATE_VALUE']);
+        foreach ($facts as $key => $value) {
+            self::assertSame($value, $safe[$key]);
+        }
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertSame(0, $safe['risk_preflight_delivered']);
+        self::assertFalse($safe['financial_permission']);
+        $absent = $project($base);
+        foreach (array_keys($facts) as $key) {
+            self::assertArrayNotHasKey($key, $absent);
+        }
+        self::assertSame(
+            HostedBrowser::sanitize($base, true, true, true, true),
+            HostedBrowser::sanitize(
+                $base + array_filter(
+                    $facts,
+                    static fn (string $key): bool => str_starts_with($key, 'security_'),
+                    ARRAY_FILTER_USE_KEY
+                ),
+                true,
+                true,
+                true,
+                true
+            )
+        );
+        $queued = $project($base + ['security_telemetry_first_failure_phase' => 'queued_guard',
+            'security_telemetry_first_failure_gate' => 'admission_closed']);
+        self::assertArrayNotHasKey('security_telemetry_first_failure_role', $queued);
+    }
+
+    /** @param array<string,mixed> $facts */
+    #[DataProvider('invalidTelemetryFacts')]
+    public function testInvalidTelemetryFactsCannotBecomePrivateEvidence(array $facts): void
+    {
+        $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false];
+        $this->expectException(RuntimeException::class);
+        HostedBrowser::sanitize($base + $facts, true, true, true, true, mode: HostedSecurityMode::InstrumentSecurity);
+    }
+
+    /** @return iterable<string,array{array<string,mixed>}> */
+    public static function invalidTelemetryFacts(): iterable
+    {
+        foreach (['SYNTHETIC_PRIVATE', 1, true, null, [], new \stdClass()] as $index => $bad) {
+            yield 'validation type ' . $index => [['security_preflight_validation' => $bad]];
+            yield 'shutdown type ' . $index => [['security_telemetry_shutdown_failure_stage' => $bad]];
+        }
+        yield 'no observed callback' => [['security_event_validation' => 'matched']];
+        yield 'zero invocations' => [['security_event_validation' => 'withheld',
+            'risk_event_attempts' => 1, 'risk_event_client_invocations' => 0]];
+        yield 'too many callbacks' => [['security_event_validation' => 'withheld',
+            'risk_event_attempts' => 9, 'risk_event_client_invocations' => 9]];
+        yield 'bad success status' => [['security_event_validation' => 'matched',
+            'risk_event_attempts' => 1, 'risk_event_client_invocations' => 1, 'risk_event_http_status' => 403]];
+        yield 'role without phase' => [['security_telemetry_first_failure_role' => 'visitor']];
+        yield 'gate without phase' => [['security_telemetry_first_failure_gate' => 'operation_failed']];
+        yield 'queued role backfill' => [['security_telemetry_first_failure_phase' => 'queued_guard',
+            'security_telemetry_first_failure_gate' => 'admission_closed',
+            'security_telemetry_first_failure_role' => 'event']];
+        yield 'private phase' => [['security_telemetry_first_failure_phase' => 'SYNTHETIC_PRIVATE',
+            'security_telemetry_first_failure_gate' => 'operation_failed']];
+        yield 'private gate' => [['security_telemetry_first_failure_phase' => 'relay',
+            'security_telemetry_first_failure_gate' => 'SYNTHETIC_PRIVATE']];
+        yield 'private role' => [['security_telemetry_first_failure_phase' => 'relay',
+            'security_telemetry_first_failure_gate' => 'operation_failed',
+            'security_telemetry_first_failure_role' => 'SYNTHETIC_PRIVATE']];
+    }
+
     public function testNativeRetentionFactsRequireTheSeparateSelectionAndRemainClosed(): void
     {
         $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,

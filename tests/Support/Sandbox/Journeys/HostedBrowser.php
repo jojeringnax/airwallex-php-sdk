@@ -965,6 +965,71 @@ final readonly class HostedBrowser
         if (in_array($data['security_bound_document_cleanup'] ?? null, ['complete', 'unavailable'], true)) {
             $safe['security_bound_document_cleanup'] = $data['security_bound_document_cleanup'];
         }
+        return [...$safe, ...self::telemetryEvidence($data)];
+    }
+
+    /**
+     * @param array<array-key,mixed> $data
+     * @return array<string,string>
+     */
+    private static function telemetryEvidence(array $data): array
+    {
+        $safe = [];
+        foreach (['preflight' => 1, 'visitor' => 1, 'event' => 8] as $role => $cap) {
+            $key = 'security_' . $role . '_validation';
+            if (!array_key_exists($key, $data)) {
+                continue;
+            }
+            $value = $data[$key];
+            $attempts = $data['risk_' . $role . '_attempts'] ?? null;
+            $invocations = $data['risk_' . $role . '_client_invocations'] ?? null;
+            $status = $data['risk_' . $role . '_http_status'] ?? null;
+            if (
+                !in_array($value, ['matched', 'withheld', 'exception'], true)
+                || !is_int($attempts) || $attempts < 1 || $attempts > $cap
+                || !is_int($invocations) || $invocations < 1 || $invocations > $attempts
+                || ($value === 'matched' && (!is_int($status) || $status < 200 || $status > 299
+                    || ($role === 'visitor' && $status !== 200)))
+            ) {
+                throw new RuntimeException('Invalid sparse telemetry validation evidence.');
+            }
+            $safe[$key] = $value;
+        }
+        $phaseKey = 'security_telemetry_first_failure_phase';
+        $gateKey = 'security_telemetry_first_failure_gate';
+        $roleKey = 'security_telemetry_first_failure_role';
+        if (array_intersect([$phaseKey, $gateKey, $roleKey], array_keys($data)) !== []) {
+            $phase = $data[$phaseKey] ?? null;
+            $gate = $data[$gateKey] ?? null;
+            if (
+                !in_array($phase, ['queued_guard', 'prepare_ack', 'invoke_guard', 'relay',
+                    'response_validation', 'result_ack', 'before_delivery', 'delivery', 'abort'], true)
+                || !in_array($gate, ['operation_failed', 'observer_closed', 'caller_closing',
+                    'admission_closed', 'original_source_unavailable', 'policy_unavailable'], true)
+                || ($phase === 'queued_guard' && array_key_exists($roleKey, $data))
+            ) {
+                throw new RuntimeException('Invalid first telemetry failure evidence.');
+            }
+            $safe[$phaseKey] = $phase;
+            $safe[$gateKey] = $gate;
+            if (array_key_exists($roleKey, $data)) {
+                $role = $data[$roleKey];
+                if (!in_array($role, ['preflight', 'visitor', 'event'], true)) {
+                    throw new RuntimeException('Invalid first telemetry role evidence.');
+                }
+                $safe[$roleKey] = $role;
+            }
+        }
+        $key = 'security_telemetry_shutdown_failure_stage';
+        if (array_key_exists($key, $data)) {
+            if (
+                !in_array($data[$key], ['relay_close', 'chain_drain', 'handler_drain', 'response_disposal',
+                'public_context', 'journal_close', 'prior_cleanup_failed'], true)
+            ) {
+                throw new RuntimeException('Invalid observer shutdown evidence.');
+            }
+            $safe[$key] = $data[$key];
+        }
         return $safe;
     }
 

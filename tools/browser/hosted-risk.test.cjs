@@ -125,10 +125,16 @@ async function tlsFixture(mode = 'matched') {
         response.writeHead(200); const timer = setInterval(() => response.write('x'), 5);
         response.on('close', () => clearInterval(timer)); return;
       }
-      response.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*',
-        ...(mode === 'instrument_pair' ? { 'access-control-allow-methods': 'POST',
+      const eventOrdinal = requests.filter(value => value.path.startsWith('/bws/v1/')).length;
+      const respond = () => {
+      response.writeHead(mode === 'instrument_events' && eventOrdinal === 2 ? 400 : 200,
+        { 'content-type': 'application/json', 'access-control-allow-origin': '*',
+        ...(mode.startsWith('instrument_') ? { 'access-control-allow-methods': 'POST',
           'access-control-allow-headers': 'content-type' } : {}) });
       response.end(mode === 'large_body' ? 'x'.repeat(65537) : '{"data":{"visitorID":"PRIVATE_VISITOR"}}');
+      };
+      if (mode === 'instrument_events' && eventOrdinal === 1) setTimeout(respond, 30);
+      else respond();
     });
   });
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
@@ -755,5 +761,473 @@ test('instrument observer journals loader before release, then preserves preflig
     assert.deepEqual(durable.messages.map(value => value.sequence), [1, 2, 3, 4, 5, 6, 7, 8]);
     assert.equal(upstream.requests.length, 3);
     assert.equal(observer.evidence().risk_telemetry_poisoned, false);
+    for (const role of ['preflight', 'visitor', 'event']) assert.equal(observer.evidence()['security_' + role + '_validation'], 'matched');
   } finally { HostedRiskRelay.prototype.send = original; await observer.close(); await upstream.close(); }
+});
+
+test('eight concurrent real-journal event admissions retain first withheld result and never send queued work after poison', async () => {
+  const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+  const upstream = await tlsFixture('instrument_events'), fixture = policyFixture(), durable = journalFixture();
+  const original = HostedRiskRelay.prototype.send;
+  HostedRiskRelay.prototype.send = async function (url, method, role, headers, body, deadline, allowed) {
+    if (role !== 'loader') return original.call(this, url, method, role, headers, body, deadline, allowed);
+    assert.equal(allowed(), true);
+    return { status: 200, fields: [], body: fixture.body };
+  };
+  const observer = new HostedRiskObserver(fixture.parent, durable.client, {}, { origin: 'http://127.0.0.1:1234',
+    bwsOrigin: upstream.origin, loaderHash: digest(fixture.body), ca: upstream.cert }, performance.now() + 5000, true);
+  observer.start(upstream.proxy);
+  const frame = { isDetached: () => false, url: () => sourceDocument, evaluate: async () => ({
+    id: 'airwallex-fraud-api', orderSession: privateSession, tenant: null, project: null, disableTracking: null }) };
+  let delivered = 0, aborted = 0;
+  try {
+    await observer.handle({ request: () => ({ frame: () => frame,
+      url: () => 'http://127.0.0.1:1234/fingerprint.js?sessionId=' + privateSession + '&hasScriptId=false&disable3rdTracking=false',
+      method: () => 'GET', resourceType: () => 'script' }), fulfill: async () => {},
+      abort: async () => assert.fail('Synthetic loader withheld') }, { cookies: async () => [] }, null, frame, () => false);
+    await Promise.all(Array.from({ length: 8 }, (_, index) => observer.handle({ request: () => ({ frame: () => frame,
+      url: () => upstream.origin + '/bws/v1/' + privateSession, method: () => 'POST', resourceType: () => 'ping',
+      allHeaders: async () => eventHeaders, postDataBuffer: () => eventBody({ eventId: (index + 1).toString(16).padStart(40, '0') }) }),
+      fulfill: async () => { delivered++; }, abort: async () => { aborted++; } },
+    { cookies: async () => [] }, null, frame, () => false)));
+    const evidence = observer.evidence();
+    assert.equal(evidence.risk_event_attempts, 8); assert.equal(evidence.risk_event_client_invocations, 2);
+    assert.equal(evidence.risk_event_delivered, 1); assert.equal(delivered, 1); assert.equal(aborted, 7);
+    assert.equal(upstream.requests.length, 2); assert.equal(evidence.security_event_validation, 'withheld');
+    assert.equal(evidence.security_telemetry_first_failure_role, 'event');
+    assert.equal(evidence.security_telemetry_first_failure_phase, 'response_validation');
+    assert.deepEqual(durable.messages.filter(value => value.role === 'event').map(value => value.phase),
+      ['prepare', 'observed', 'prepare', 'observed']);
+    assert.equal(durable.messages.at(-1).response_validation, 'withheld');
+    assert.equal(evidence.risk_journal_poisoned, true);
+    assert.equal(await observer.close(), false); // The existing bounded failed response marks cleanup unsuccessful.
+    assert.equal(observer.evidence().security_event_validation, 'withheld');
+    assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE|synthetic_bound_session/u);
+  } finally { HostedRiskRelay.prototype.send = original; await observer.close(); await upstream.close(); }
+});
+
+// Immutable pre-diagnostic flow: property/clock/ACK/guard order is the compatibility oracle.
+const referenceTelemetryFlow = String.raw`    let delivered = false;
+    let queued = false;
+    try {
+      // Exactly the admitted visitor plus eight finite events may wait; sends remain serial.
+      if (this.#waiting >= 9) { this.#policy.poison('budget'); return true; }
+      this.#waiting++;
+      queued = true;
+      const task = this.#chain.then(async () => {
+        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+          this.#policy.poison('document_changed'); throw new Error('Risk scope is unavailable.');
+        }
+        const deadline = Math.min(this.#caseDeadline, this.#deadline, performance.now() + this.#parent.normalWindowRemaining());
+        const forward = async selected => this.#journal.run(selected, async () => {
+          if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+            throw new Error('Risk scope is unavailable.');
+          }
+          this.#policy.invoke(selected.role);
+          const response = await this.#relay.send(selected.url, selected.role === 'preflight' ? 'OPTIONS' : 'POST',
+            selected.role, selected.headers, selected.body, deadline, this.#instrumentSecurity
+              ? () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound) : null);
+          this.#policy.status(selected.role, response.status);
+          return response;
+        }, response => this.#policy.validateResponse(selected, response), deadline);
+        // Browser route interception omits automatic CORS OPTIONS: perform the exact grant check before the body.
+        if (claim.role === 'visitor') {
+          const preflight = this.#policy.preflightFor(claim);
+          if (preflight !== null) await forward(preflight);
+        }
+        const response = await forward(claim);
+        if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+          throw new Error('Risk scope is unavailable.');
+        }
+        await this.#value(route.fulfill({ status: response.status,
+          headers: this.#policy.responseHeaders(response), body: response.body }));
+        delivered = true;
+        this.#policy.delivered(claim.role);
+      });
+      this.#chain = task.catch(() => {});
+      await this.#value(task);
+    } catch { this.#policy.poison('journal'); }
+    finally {
+      if (queued) this.#waiting--;
+      if (!delivered && !await this.#bounded(Promise.resolve().then(() => route.abort('blockedbyclient')))) {
+        this.#cleanupFailed = true; this.#policy.poison('shutdown');
+      }
+    }
+    return true;
+  }
+`;
+const referenceTelemetryClose = String.raw`  async close() {
+    this.#closed = true;
+    // New-profile teardown can reap completed work inside the case reserve; it grants no send/release.
+    const bounded = !this.#instrumentSecurity ? value => this.#bounded(value) : async value => {
+      let timer;
+      try { return await Promise.race([Promise.resolve(value).then(result => result !== false, () => false),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false),
+          Math.max(0, Math.min(1000, this.#caseDeadline - performance.now()))); })]); }
+      finally { clearTimeout(timer); }
+    };
+    let clean = this.#relay === undefined || this.#relay === null || await bounded(this.#relay.close());
+    clean = await bounded(this.#chain) && clean;
+    clean = await bounded(Promise.all([...this.#handlers])) && clean;
+    clean = await bounded(Promise.all([...this.#responseDisposals.values()]).then(values => values.every(Boolean))) && clean;
+    if (this.#publicClient) {
+      clean = await bounded(this.#publicClient.then(client => this.#disposePublic(client))) && clean;
+    }
+    if (this.#journal) clean = await bounded(this.#journal.close()) && clean;
+    if (!clean || this.#cleanupFailed) this.#policy.poison('shutdown');
+    return clean && !this.#cleanupFailed;
+  }
+`;
+
+function diagnosticObserver(overrides, reference = false, mutate = value => value) {
+  const Module = require('node:module'), filename = path.join(__dirname, 'hosted-risk-observer.cjs');
+  let source = fs.readFileSync(filename, 'utf8');
+  if (reference) {
+    const a = source.indexOf('    let delivered = false;\n    let queued = false;'), b = source.indexOf('\n  async drainSent()', a);
+    source = source.slice(0, a) + referenceTelemetryFlow + source.slice(b);
+    const c = source.indexOf('  async close()'), d = source.indexOf('\n  toJSON()', c);
+    source = source.slice(0, c) + referenceTelemetryClose + source.slice(d);
+  }
+  source = source.replace("'use strict';", "'use strict';\nconst performance = require('fixture:clock');");
+  source = source.replace(/this\.#cleanupFailed(?!\s*=)/gu, 'this.fixtureCleanup()');
+  source = source.replace('  toJSON() {', '  fixtureCleanup() { performance.cleanup(); return this.#cleanupFailed; }\n  toJSON() {');
+  source = source.replace('  toJSON() {', `  fixtureValidation(values) {
+    const operation = {role:'event',phase:'response_validation'};
+    return values.map(value => {this.#validated(operation,value);return this.evidence();});
+  }
+  toJSON() {`);
+  source = mutate(source);
+  const loaded = new Module(filename, module); loaded.filename = filename; loaded.paths = Module._nodeModulePaths(__dirname);
+  const normal = loaded.require.bind(loaded);
+  loaded.require = name => Object.hasOwn(overrides, name) ? overrides[name] : normal(name);
+  loaded._compile(source, filename); return loaded.exports.HostedRiskObserver;
+}
+
+async function telemetryScenario(fault = '', reference = false, instrument = true, mutate = value => value) {
+  const trace = [], values = policyFixture(); let closing = false, roleReads = 0, errorReads = 0;
+  const privateError = new Error();
+  for (const field of ['name', 'message', 'stack', 'cause', 'PRIVATE']) Object.defineProperty(privateError, field, {
+    get() { errorReads++; return 'SYNTHETIC_PRIVATE_ERROR'; },
+  });
+  const parent = new Proxy(values.parent, { get(target, key) {
+    const value = target[key]; return typeof value === 'function' ? (...args) => {
+      trace.push('parent.' + key); return value(...args);
+    } : value;
+  } });
+  class Policy extends HostedRiskPolicy {
+    constructor(...args) {
+      super(...args);
+      return new Proxy(this, { get(target, key) {
+        const value = target[key];
+        return typeof value !== 'function' ? value : (...args) => {
+          trace.push('policy.' + key);
+          if (key === 'validateResponse' && fault === 'validator_exception') throw privateError;
+          if (key === 'preflightFor' && fault === 'preflight_selection') throw privateError;
+          const result = Reflect.apply(value, target, args);
+          if (key !== 'claim' || !result) return result;
+          if (fault === 'queued') closing = true;
+          return new Proxy(result, { get(claim, field) {
+            trace.push('claim.' + String(field));
+            if (field === 'role') roleReads++;
+            return claim[field];
+          } });
+        };
+      } });
+    }
+  }
+  class Relay {
+    constructor() {} // Fixed synthetic relay only; native TLS coverage is separate below/inside smoke.
+    async send(_url, _method, role, _headers, _body, _deadline, allowed) {
+      trace.push('relay.' + role);
+      if (allowed) assert.equal(allowed(), true);
+      if (role === 'loader') return { status: 200, fields: [], body: values.body };
+      if (fault === 'relay') throw privateError;
+      return { status: 200, body: Buffer.from('{"data":{"visitorID":"SYNTHETIC_PRIVATE"}}'), fields: [
+        { name: 'access-control-allow-origin', value: '*' }, { name: 'content-type', value: 'application/json' },
+        ...(fault === 'cors' ? [] : [{ name: 'access-control-allow-methods', value: 'POST' },
+          { name: 'access-control-allow-headers', value: 'content-type' }]),
+      ] };
+    }
+    async close() {
+      trace.push('relay.close');
+      if (fault === 'shutdown_pending') return new Promise(resolve => setTimeout(() => resolve(true), 60));
+      return fault !== 'relay_close';
+    }
+  }
+  const journal = { evidence: () => ({}), close: async () => { trace.push('journal.close'); return fault !== 'journal_close'; },
+    async run(selected, invoke, validate) {
+      trace.push('prepare');
+      if (selected.role !== 'loader' && fault === 'prepare') throw privateError;
+      if (selected.role !== 'loader' && fault === 'invoke') closing = true;
+      let response;
+      try { response = await invoke(); } catch (error) { trace.push('failed'); throw error; }
+      let matched = false;
+      try { matched = validate(response) === true; } catch { /* Match the production journal's validator boundary. */ }
+      trace.push('observed.' + String(matched));
+      if (selected.role !== 'loader' && fault === 'result_ack') throw privateError;
+      if (!matched) throw privateError;
+      if (selected.role === 'preflight' && fault === 'after_preflight') closing = true;
+      return response;
+    } };
+  const Observer = diagnosticObserver({ './hosted-risk-policy.cjs': { HostedRiskPolicy: Policy, riskCookieNames: new Set() },
+    './hosted-risk-relay.cjs': { HostedRiskRelay: Relay }, 'fixture:clock': { now: () => { trace.push('clock'); return 0; }, cleanup: () => trace.push('cleanup.read') } }, reference, mutate);
+  const observer = new Observer(parent, journal, { request: { newContext: async () => ({
+    get: async () => ({ status: () => 200, body: async () => values.body, headers: () => ({}), dispose: async () => {} }),
+    dispose: async () => {},
+  }) } }, { origin: 'http://127.0.0.1:1234', bwsOrigin: 'https://127.0.0.1:1235', loaderHash: digest(values.body), ca: Buffer.from('fixture') }, fault === 'shutdown_pending' ? 25 : 10000, instrument);
+  observer.start('http://127.0.0.1:1236');
+  const frame = { isDetached: () => { trace.push('attached'); return false; }, url: () => { trace.push('frame.url'); return sourceDocument; },
+    evaluate: async () => ({ id: 'airwallex-fraud-api', orderSession: privateSession, tenant: null, project: null, disableTracking: null }) };
+  await observer.handle({ request: () => ({ frame: () => frame,
+    url: () => 'http://127.0.0.1:1234/fingerprint.js?sessionId=' + privateSession + '&hasScriptId=false&disable3rdTracking=false',
+    method: () => 'GET', resourceType: () => 'script' }), fulfill: async () => {}, abort: async () => {} },
+  { cookies: async () => [] }, null, frame, () => closing);
+  trace.length = 0;
+  await observer.handle({ request: () => ({ frame: () => frame, url: () => 'https://127.0.0.1:1235/bws/v3/visit',
+    method: () => 'POST', resourceType: () => 'fetch', allHeaders: async () => visitorHeaders, postDataBuffer: () => claim().body }),
+  fulfill: async () => { trace.push('fulfill'); if (fault === 'fulfill') throw privateError; },
+  abort: async () => { trace.push('abort'); if (fault === 'abort') throw privateError; } },
+  { cookies: async () => [] }, null, frame, () => { trace.push('closing'); return closing; });
+  const beforeClose = observer.evidence();
+  const clean = await observer.close(), evidence = observer.evidence();
+  assert.equal(errorReads, 0);
+  return { trace, beforeClose, evidence, clean, roleReads, observer };
+}
+
+const withoutTelemetryDiagnostics = value => Object.fromEntries(Object.entries(value)
+  .filter(([key]) => !key.startsWith('security_telemetry_') && !/^security_(preflight|visitor|event)_validation$/u.test(key)));
+for (const fault of ['', 'queued', 'prepare', 'invoke', 'cors', 'validator_exception', 'preflight_selection', 'result_ack', 'after_preflight', 'relay', 'fulfill', 'relay_close', 'journal_close']) {
+  test('telemetry diagnostics preserve immutable property/clock/control trace: ' + (fault || 'matched'), async () => {
+    const before = await telemetryScenario(fault, true), after = await telemetryScenario(fault);
+    assert.deepEqual(after.trace, before.trace);
+    assert.equal(after.clean, before.clean);
+    assert.deepEqual(withoutTelemetryDiagnostics(after.evidence), before.evidence);
+    if (fault === 'queued') {
+      assert.equal(after.roleReads, 0);
+      assert.equal(Object.hasOwn(after.evidence, 'security_telemetry_first_failure_role'), false);
+      assert.equal(after.evidence.security_telemetry_first_failure_gate, 'caller_closing');
+    }
+    assert.doesNotMatch(JSON.stringify(after.evidence), /SYNTHETIC_PRIVATE|PRIVATE_OPTIONS|synthetic_bound_session/u);
+  });
+}
+
+test('preflight200 distinguishes grant withholding from matched internal delivery0, without a visitor retry', async () => {
+  const pass = (await telemetryScenario()).evidence, fail = (await telemetryScenario('cors')).evidence;
+  assert.equal(pass.risk_preflight_http_status, 200); assert.equal(pass.risk_preflight_delivered, 0);
+  assert.equal(pass.security_preflight_validation, 'matched'); assert.equal(pass.security_visitor_validation, 'matched');
+  assert.equal(fail.risk_preflight_http_status, 200); assert.equal(fail.security_preflight_validation, 'withheld');
+  assert.equal(fail.risk_visitor_client_invocations, 0);
+  assert.equal(fail.security_telemetry_first_failure_role, 'preflight');
+  assert.equal(fail.security_telemetry_first_failure_phase, 'response_validation');
+});
+
+test('validation and coarse ACK intervals do not become storage or later cleanup causes', async () => {
+  const thrown = (await telemetryScenario('validator_exception')).evidence;
+  assert.equal(thrown.security_preflight_validation, 'exception');
+  assert.equal(thrown.security_telemetry_first_failure_phase, 'response_validation');
+  const ack = (await telemetryScenario('result_ack')).evidence;
+  assert.equal(ack.security_preflight_validation, 'matched');
+  assert.equal(ack.security_telemetry_first_failure_phase, 'result_ack');
+  const closed = (await telemetryScenario('after_preflight')).evidence;
+  assert.equal(closed.security_preflight_validation, 'matched');
+  assert.equal(closed.security_telemetry_first_failure_role, 'visitor');
+  assert.equal(closed.security_telemetry_first_failure_phase, 'invoke_guard');
+  assert.equal(closed.risk_visitor_client_invocations, 0);
+});
+
+test('per-role validation keeps first nonmatched across eight memo observations without reopening a journal', async () => {
+  for (const sequence of [
+    ['matched', 'withheld', 'matched', 'exception', 'matched', 'withheld', 'matched', 'exception'],
+    ['matched', 'exception', 'withheld', 'matched'], ['matched', 'matched'],
+  ]) {
+    const { observer } = await telemetryScenario();
+    const states = observer.fixtureValidation(sequence);
+    const first = sequence.findIndex(value => value !== 'matched');
+    for (let index = 0; index < states.length; index++) {
+      assert.equal(states[index].security_event_validation, first >= 0 && index >= first ? sequence[first] : 'matched');
+    }
+  }
+});
+
+test('legacy telemetry raw evidence stays byte-identical even when private callbacks fail', async () => {
+  for (const fault of ['', 'queued', 'cors', 'result_ack', 'relay_close']) {
+    const before = await telemetryScenario(fault, true, false), after = await telemetryScenario(fault, false, false);
+    assert.equal(JSON.stringify(after.evidence), JSON.stringify(before.evidence));
+    assert.deepEqual(after.trace, before.trace);
+  }
+});
+
+for (const [name, before, after] of [
+  ['latest result overwrites first nonmatch', "if (this.#validation[key] === undefined || this.#validation[key] === 'matched')", 'if (true)'],
+  ['first matched hides later failure', "if (this.#validation[key] === undefined || this.#validation[key] === 'matched')", 'if (this.#validation[key] === undefined)'],
+]) {
+  test('a compiled validation-latch mutant fails the mixed-sequence acceptance: ' + name, async () => {
+    const f = await telemetryScenario('', false, true, source => { assert.ok(source.includes(before)); return source.replace(before, after); });
+    assert.throws(() => {
+      const states = f.observer.fixtureValidation(['matched', 'withheld', 'matched', 'exception']);
+      assert.equal(states[1].security_event_validation, 'withheld');
+      assert.equal(states[3].security_event_validation, 'withheld');
+    }, { code: 'ERR_ASSERTION' });
+  });
+}
+
+test('a compiled early role-read mutant fails queued-failure privacy and ordering acceptance', async () => {
+  const f = await telemetryScenario('queued', false, true, source => {
+    const before = "const operation = { phase: 'queued_guard' };";
+    assert.ok(source.includes(before)); return source.replace(before, "const operation = { phase: 'queued_guard', role: claim.role };");
+  });
+  assert.throws(() => assert.equal(f.roleReads, 0), { code: 'ERR_ASSERTION' });
+});
+
+test('shutdown memo respects original short-circuit and never probes an unreached prior-cleanup flag', async () => {
+  const failed = await telemetryScenario('relay_close');
+  assert.equal(failed.evidence.security_telemetry_shutdown_failure_stage, 'relay_close');
+  assert.equal(failed.trace.filter(value => value === 'cleanup.read').length, 0);
+  const prior = await telemetryScenario('fulfill');
+  assert.equal(prior.evidence.security_telemetry_shutdown_failure_stage, 'prior_cleanup_failed');
+  assert.equal(prior.trace.filter(value => value === 'cleanup.read').length, 2);
+});
+
+test('unreached phase remains absent and later close cannot backfill it', async () => {
+  const f = await telemetryScenario('preflight_selection');
+  for (const key of ['phase', 'gate', 'role']) assert.equal(Object.hasOwn(f.evidence, 'security_telemetry_first_failure_' + key), false);
+  assert.equal(f.evidence.security_telemetry_shutdown_failure_stage, 'prior_cleanup_failed');
+});
+
+test('existing bounded shutdown reports stalled relay await without a new send or a larger bound', async () => {
+  const started = performance.now(), f = await telemetryScenario('shutdown_pending');
+  assert.equal(f.clean, false);
+  assert.equal(f.evidence.security_telemetry_shutdown_failure_stage, 'relay_close');
+  assert.equal(f.trace.filter(value => value === 'relay.visitor').length, 1);
+  assert.ok(performance.now() - started < 200);
+  await new Promise(resolve => setTimeout(resolve, 65)); // Settle the synthetic late close before returning.
+});
+
+test('compiled Error-property reader is rejected by the zero-read privacy assertion', async () => {
+  await assert.rejects(telemetryScenario('validator_exception', false, true, source => {
+    const original = "this.#validated(part, 'exception');";
+    assert.ok(source.includes(original));
+    return source.replace(original, "void error.message; this.#validated(part, 'exception');");
+  }), { code: 'ERR_ASSERTION' });
+});
+
+test('HTTP-only validation and overwritten-first-failure mutants fail the reached-outcome acceptance', async () => {
+  for (const [before, after, expected] of [
+    ['const matched = this.#policy.validateResponse(selected, response);',
+      'const matched = (this.#policy.validateResponse(selected, response), response.status === 200);',
+      evidence => assert.equal(evidence.security_preflight_validation, 'withheld')],
+    ['!this.#instrumentSecurity || this.#telemetryFailure !== null', '!this.#instrumentSecurity',
+      evidence => assert.equal(evidence.security_telemetry_first_failure_phase, 'response_validation')],
+  ]) {
+    const f = await telemetryScenario('cors', false, true, source => {
+      assert.ok(source.includes(before)); return source.replace(before, after);
+    });
+    assert.throws(() => expected(f.evidence), { code: 'ERR_ASSERTION' });
+  }
+});
+
+test('late-invocation and invented-cleanup mutants fail the original closed-scope assertions', async () => {
+  const late = await telemetryScenario('after_preflight', false, true, source => {
+    const before = "|| this.#telemetryReject(part, closing(), 'caller_closing')";
+    assert.ok(source.includes(before)); return source.replace(before, '|| false');
+  });
+  assert.throws(() => assert.equal(late.evidence.risk_visitor_client_invocations, 0), { code: 'ERR_ASSERTION' });
+  const cleanup = await telemetryScenario('relay_close', false, true, source => {
+    const before = 'return clean && !this.fixtureCleanup();';
+    assert.ok(source.includes(before)); return source.replace(before, 'return true;');
+  });
+  assert.throws(() => assert.equal(cleanup.clean, false), { code: 'ERR_ASSERTION' });
+});
+
+test('coherent selected-profile raw production outputs stay below8192 before PHP filtering', t => {
+  const { boundDocumentWorkerFixture, sanitizeBoundDocumentFixture } = require('./hosted-smoke.cjs');
+  const policy = fs.readFileSync(path.join(__dirname, 'hosted-policy.cjs'), 'utf8');
+  const names = source => [...source.matchAll(/'([^']+)'/gu)].map(value => value[1]);
+  const render = names(policy.match(/const renderCheckNames = Object.freeze\(\[([\s\S]*?)\]\);/u)[1]);
+  const reasonSource = policy.match(/const readDenialReasons = Object.freeze\(\{([\s\S]*?)\n\}\);/u)[1];
+  const reasons = Object.fromEntries([...reasonSource.matchAll(/(\w+): Object.freeze\(\[([\s\S]*?)\]\)/gu)]
+    .map(match => [match[1], Object.fromEntries(names(match[2]).map(name => [name, 1000000]))]));
+  assert.equal(Object.values(reasons).reduce((total, values) => total + Object.keys(values).length, 0), 56);
+  const normal = { normal_read_inspection_completed: true, normal_read_window_closed: true,
+    normal_checkout_status_poisoned: true, normal_consent_list_items: 100,
+    normal_consent_list_pagination_known: true, normal_consent_list_has_more: false,
+    normal_checkout_status_state: 'REQUESTED', normal_read_failure: {
+      role: 'checkout_status', phase: 'normal_response_dispose', deadline_fired: false, shutdown_started: false,
+      browser_context_close_started: false, browser_context_closed: false, request_context_dispose_started: false,
+      request_context_disposed: false, window_closed: false, window_remaining_ms: 1000,
+      elapsed_ms: 60000, request_timeout_ms: 8000, request_elapsed_ms: 60000,
+    } };
+  for (const [role, cap] of [['customer', 1], ['consent_list', 1], ['country', 1], ['checkout_status', 3]]) {
+    for (const count of ['attempts', 'sends', 'delivered']) normal['normal_' + role + '_' + count] = cap;
+    normal['normal_' + role + '_observation'] = 'matched'; normal['normal_' + role + '_http_status'] = 200;
+  }
+  // A completed normal/method snapshot precedes the final scoped stop. Generic diagnostic counters use
+  // their closed saturation ceiling; role counts respect1/3/8, and the last event is not page-delivered.
+  const risk = { instrument_security_requested: true, instrument_ready: false, financial_permission: false,
+    security_graph_complete: false, security_loader_candidate: true, security_loader_promoted: true,
+    security_loader_wait_reason: 'duplicate', security_source_first_stop: 'bound_navigated',
+    security_loader_validation: 'matched', security_same_document_requested: true,
+    security_same_document_retained: true, security_same_document_reason: 'retained_once',
+    security_bound_navigation_original_relation: 'fragment_only_change',
+    security_bound_navigation_previous_relation: 'fragment_only_change',
+    security_bound_document_reference: 'captured_before_stop', security_bound_document_continuity: 'same',
+    security_bound_document_cleanup: 'complete', risk_bootstrap_requested: true, risk_graph_complete: false,
+    risk_financial_ready: false, risk_loader_attempted: true, risk_loader_verified: true,
+    risk_telemetry_poisoned: true, risk_journal_poisoned: false, risk_journal_closed: true,
+    risk_partial_reason: 'unknown_dependency', risk_journal_prepared: 11, risk_journal_results: 11,
+    risk_denied_dependencies: Object.fromEntries(['risk_document', 'captcha', 'forter', 'sardine', 'monitoring', 'other'].map(name => [name, 1000000])),
+    security_preflight_validation: 'matched', security_visitor_validation: 'matched', security_event_validation: 'matched',
+    security_telemetry_first_failure_phase: 'before_delivery',
+    security_telemetry_first_failure_gate: 'original_source_unavailable', security_telemetry_first_failure_role: 'event',
+    security_telemetry_shutdown_failure_stage: 'prior_cleanup_failed' };
+  for (const [role, cap] of [['visitor', 1], ['preflight', 1], ['event', 8]]) {
+    risk['risk_' + role + '_attempts'] = cap; risk['risk_' + role + '_client_invocations'] = cap;
+    risk['risk_' + role + '_delivered'] = role === 'preflight' ? 0 : role === 'event' ? 7 : 1;
+    risk['risk_' + role + '_http_status'] = 200;
+  }
+  const rawFacts = { candidateOrigin: 'sandbox', methodSendStarted: true, useProductionResult: true, browserVersion: '999.9999.99999.9999', scopeStop: 'bound_navigated', firstFailure: 'normal_response_dispose',
+    result: { navigation_passed: true, test_mode_visible: true, sandbox_origin_verified: false,
+      checkout_token_matches: true, payer_request_scope_verified: true, browser_version: '999.9999.99999.9999' },
+    counts: Object.fromEntries(['blocked_requests', 'blocked_websockets', 'returns_intercepted',
+      'verified_static_assets', 'integrity_rejections', 'verified_render_assets', 'controller_replays_blocked'].map(name => [name, 1000000])),
+    proxy: { rejected: 1000000, connected: 1000000, externalConnected: 0 },
+    binding: { checkout_token_matches: true, payer_request_scope_verified: true, payer_get_attempted: true,
+      payer_customer_mapping_verified: false, payer_payload_delivered: true, financial_routing_verified: false,
+      render_requested: true, render_frame_binding_available: true },
+    payer: { payer_observation: 'matched', payer_response_observed: true, payer_mode_matches: true,
+      payer_currency_matches: true, payer_http_status: 200 },
+    normal, normalPolicy: { normal_reads_requested: true },
+    method: { method_config_response_observed: true, method_config_payload_delivered: true,
+      method_config_http_status: 200, method_config_observation: 'matched', method_config_items: 200,
+      method_config_pagination_known: true, method_config_has_more: false, method_config_card_advertised: true },
+    methods: { method_config_requested: true, method_config_get_attempted: true, read_denial_reasons: reasons,
+      read_denial_counts_capped: true, denied_read_families: Object.fromEntries(['method_config', 'country', 'customer', 'consent_list', 'checkout_status', 'other_pa'].map(name => [name, 1000000])) },
+    render: { render_frame_checks: Object.fromEntries(render.map(name => [name, ['qualified', 'fulfilled'].includes(name) ? 1 : 1000000])) },
+    readiness: { card_readiness_observed: true }, attachment: { readiness_attachment_field: 'cardnumber',
+      readiness_frame_detached_before_count: false, readiness_frame_detached_after_count: false } };
+  Object.assign(rawFacts.counts, { bound_render_frames: 1, controller_asset_requests: 1, verified_controller_assets: 1, controller_http_status: 200 });
+  for (const field of ['cardnumber', 'expiry', 'cvc']) for (const flag of ['unique', 'visible', 'enabled']) rawFacts.readiness[field + '_' + flag] = false;
+  Object.assign(rawFacts.result, rawFacts.binding, rawFacts.payer, rawFacts.method, rawFacts.readiness, rawFacts.attachment, { method_config_send_started: true });
+  const main = {}, page = { on() {}, mainFrame: () => main };
+  const worker = boundDocumentWorkerFixture(page, performance.now() + 40000, { rawFacts, journalFacts: risk });
+  const bound = value => { const bytes = Buffer.byteLength(JSON.stringify(value)); assert.ok(bytes <= 8192, 'RAW child output exceeds8192'); return bytes; };
+  for (const failure of [false, true]) {
+    const raw = worker.output(failure);
+    assert.equal(raw.security_event_validation, 'matched'); assert.equal(raw.read_denial_reasons.customer.header_trace, 1000000);
+    const bytes = bound(raw); assert.ok(bytes > 6000); // This measures the actual production expressions, not only PHP-safe output.
+    t.diagnostic((failure ? 'failure' : 'success') + '_raw_bytes=' + bytes);
+    const safe = sanitizeBoundDocumentFixture(raw, true);
+    assert.equal(safe.security_telemetry_first_failure_gate, 'original_source_unavailable');
+    // A conservative size envelope also includes mutually exclusive loader-failure fields and longer
+    // closed labels. It is not presented as another coherent observation or passed off as provider data.
+    const envelope = { ...raw, security_loader_validation: 'not_reached',
+      security_loader_first_failure_phase: 'response_validation', security_loader_first_failure_gate: 'scope_window_not_positive',
+      security_loader_scope_stop_at_failure: 'admission_loader_window_elapsed',
+      security_source_first_stop: 'admission_loader_window_elapsed', security_bound_document_cleanup: 'unavailable',
+      security_bound_document_continuity: 'not_captured', security_telemetry_first_failure_phase: 'response_validation' };
+    t.diagnostic((failure ? 'failure' : 'success') + '_conservative_envelope_bytes=' + bound(envelope));
+    const padded = { ...raw, SYNTHETIC_PRIVATE_UNUSED: 'x'.repeat(8192) };
+    assert.throws(() => bound(padded), { code: 'ERR_ASSERTION' });
+    assert.equal(Object.hasOwn(sanitizeBoundDocumentFixture(padded, true), 'SYNTHETIC_PRIVATE_UNUSED'), false);
+  }
 });
