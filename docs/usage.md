@@ -79,7 +79,7 @@ Replace every placeholder before provider use. `loginAccountId` is optional when
 
 Each operation must use the environment and owner stored with its opaque resource ID. Authenticate the local buyer before looking up that mapping. An incoming resource/account ID is not authorization. Billing fails locally on a delegated Payments client; login-account selection and delegation cannot be combined. For both accepted Billing models, use the [two-account walkthroughs](connected-account-contracts.md#two-account-walkthroughs) and their evidence gates.
 
-The [client reference](client-configuration.md) covers token expiration/reuse, optional PSR-16 caching, immutable contexts and transport configuration. Default token storage is in memory. The optional authentication clock/retry configuration is a delegated provisional interface decision under [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60); its timing units and bounded read-retry policy are documented there. SDK API requests pin `x-api-version: 2026-08-21`; configure webhook subscriptions to the same version separately.
+The [client reference](client-configuration.md) covers token expiration/reuse, optional PSR-16 caching, immutable contexts and transport configuration. Default token storage is in memory. It also defines the accepted optional authentication clock and opt-in read retries for [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60), including timing units and the default one-attempt policy. SDK API requests pin `x-api-version: 2026-08-21`; configure webhook subscriptions to the same version separately.
 
 ## Run a recipe for the intended workflow
 
@@ -184,7 +184,6 @@ Keep these delegated provisional choices visible before adopting the development
 
 | Review | Current implementation choice |
 | --- | --- |
-| [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60) | Optional authentication clock and configurable bounded read retries |
 | [#64](https://github.com/jojeringnax/airwallex-php-sdk/issues/64) | Initial `FLAT`/`PER_UNIT` creation subset pending non-metered tiered-model review |
 
 The [connected-account evidence](connected-account-contracts.md#evidence-still-needed), [Billing capability gates](billing-capabilities.md#delivery-and-evidence-gates) and [webhook integration evidence](webhook-contracts.md#remaining-integration-evidence) remain authoritative. [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) owns the applicable sandbox journeys/provider confirmations; [#44](https://github.com/jojeringnax/airwallex-php-sdk/issues/44) owns the release-readiness/artifact record. Blocked or unavailable evidence is not a pass. In particular, organization Billing authorization, eligible collection-account linkage, source-change collection, schedule reversal, document renewal and matching-version actual webhook envelopes are not established by synthetic examples.
