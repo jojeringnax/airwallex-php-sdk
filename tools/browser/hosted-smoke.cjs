@@ -320,7 +320,7 @@ async function smoke(playwright, instrumentOnly = false) {
       return { security_shared_runner_verified: true, security_normal_window_unchanged: true,
         security_financial_permission: false, security_external_connections: 0,
         ...await instrumentSecuritySmoke(playwright), ...await boundDocumentSmoke(playwright),
-        ...await sameDocumentRetentionSmoke(playwright) };
+        ...await sameDocumentRetentionSmoke(playwright), ...await riskSmoke(playwright, true) };
     }
     const result = await inspect(origin + '/page?s=SYNTHETIC_SECRET', playwright, origin, async (page, context) => {
       if (await page.evaluate(() => window.fixtureLoaded) !== true) throw new Error('Local smoke failed.');
@@ -706,7 +706,7 @@ async function smoke(playwright, instrumentOnly = false) {
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 
-async function riskSmoke(playwright) {
+async function riskSmoke(playwright, diagnostics = false) {
   const https = require('node:https');
   const fs = require('node:fs');
   const { PassThrough } = require('node:stream');
@@ -714,11 +714,13 @@ async function riskSmoke(playwright) {
   const { egressProxy } = require('./hosted-policy.cjs');
   const { RiskJournalClient } = require('./hosted-risk-journal.cjs');
   const { HostedRiskObserver } = require('./hosted-risk-observer.cjs');
+  const { HostedRiskRelay } = require('./hosted-risk-relay.cjs');
+  const originalSend = diagnostics ? HostedRiskRelay.prototype.send : null;
   const fixturePath = path.join(__dirname, '../../tests/fixtures/hosted-risk');
   const cert = fs.readFileSync(path.join(fixturePath, 'localhost-fixture.crt'));
   const key = fs.readFileSync(path.join(fixturePath, 'localhost-fixture.key'));
   const sockets = new Set(), requests = [];
-  let origin, bwsOrigin, tamper = false;
+  let origin, bwsOrigin, tamper = false, withholdCors = false;
   const session = 'synthetic_bound_session';
   const bws = https.createServer({ cert, key }, (request, response) => {
     const chunks = [];
@@ -726,8 +728,8 @@ async function riskSmoke(playwright) {
     request.on('end', () => {
       requests.push({ method: request.method, path: request.url, headers: request.headers, body: Buffer.concat(chunks) });
       const cors = { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'POST',
-        'access-control-allow-headers': 'content-type', 'set-cookie': 'UNTRUSTED_RESPONSE=PRIVATE_RESPONSE; Secure; SameSite=None' };
-      if (request.method === 'OPTIONS') response.writeHead(204, cors).end();
+        ...(withholdCors ? {} : { 'access-control-allow-headers': 'content-type' }), 'set-cookie': 'UNTRUSTED_RESPONSE=PRIVATE_RESPONSE; Secure; SameSite=None' };
+      if (request.method === 'OPTIONS') response.writeHead(diagnostics ? 200 : 204, cors).end();
       else if (request.url === '/bws/v3/visit') response.writeHead(200, { ...cors, 'content-type': 'application/json' })
         .end('{"data":{"visitorID":"PRIVATE_VISITOR","visitorToken":"PRIVATE_TOKEN"}}');
       else response.writeHead(204, cors).end();
@@ -761,9 +763,13 @@ async function riskSmoke(playwright) {
   let phase = 'configuration';
   let localDetails = {};
   try {
-    for (const mode of ['matched', 'tampered', 'disabled']) {
+    if (diagnostics) HostedRiskRelay.prototype.send = async function (...args) {
+      if (args[2] === 'loader') return { status: 200, fields: [], body: Buffer.from(syntheticLoader()) };
+      return Reflect.apply(originalSend, this, args);
+    };
+    for (const mode of (diagnostics ? ['matched', 'cors_withheld', 'disabled'] : ['matched', 'tampered', 'disabled'])) {
       const enabled = mode !== 'disabled';
-      tamper = mode === 'tampered';
+      tamper = mode === 'tampered'; withholdCors = mode === 'cors_withheld';
       const before = requests.length, messages = [];
       const deadline = performance.now() + 8000;
       const document = origin + '/page';
@@ -779,7 +785,8 @@ async function riskSmoke(playwright) {
       });
       phase = 'observer';
       observer = new HostedRiskObserver(parent, journal, playwright, { origin, bwsOrigin, ca: cert,
-        loaderHash: createHash('sha256').update(syntheticLoader()).digest('hex') });
+        loaderHash: createHash('sha256').update(syntheticLoader()).digest('hex') },
+      ...(diagnostics ? [performance.now() + 8000, true] : []));
       phase = 'proxy';
       proxy = await egressProxy({ allowsHttp: value => new URL(value).origin === origin,
         allowsAuthority: (host, port) => (host === '127.0.0.1' && String(port) === new URL(origin).port)
@@ -818,7 +825,7 @@ async function riskSmoke(playwright) {
             || observed.filter(value => value.path === '/bws/v3/visit' && value.method === 'POST').length !== 1
             || observed.some(value => value.headers.authorization || value.headers['client-secret']
               || (value.headers.cookie ?? '').includes('PRIVATE_APPLICATION'))
-            || messages.length !== 6 || blocked < 2
+            || messages.length !== (diagnostics ? 8 : 6) || blocked < 2
             || observer.evidence().risk_visitor_delivered !== 1 || observer.evidence().risk_event_delivered !== 1
             || (await context.cookies()).some(cookie => cookie.name === 'UNTRUSTED_RESPONSE')) {
           localDetails = { messages: messages.length, blocked,
@@ -828,14 +835,37 @@ async function riskSmoke(playwright) {
             visitor_posts: observed.filter(value => value.path === '/bws/v3/visit' && value.method === 'POST').length };
           throw new Error('Local risk scope or durability check failed.');
         }
+      } else if (diagnostics && mode === 'cors_withheld') {
+        const evidence = observer.evidence();
+        if (evidence.risk_preflight_http_status !== 200 || evidence.risk_visitor_client_invocations !== 0
+            || evidence.security_preflight_validation !== 'withheld'
+            || evidence.security_telemetry_first_failure_phase !== 'response_validation'
+            || evidence.security_telemetry_first_failure_role !== 'preflight') throw new Error('Local CORS withholding facts failed.');
       } else if (requests.length !== before || messages.length !== 0
           || await page.evaluate(() => window.syntheticTamper === true)) throw new Error('Default or tampered risk denial failed.');
+      if (diagnostics && enabled) {
+        const projected = sanitizeBoundDocumentFixture({ result: 'fail', reason: 'browser_preflight_failed',
+          card_entry_enabled: false, instrument_security_requested: true, instrument_ready: false,
+          financial_permission: false, security_graph_complete: false, candidate_origin: 'sandbox',
+          checkout_token_matches: true, payer_request_scope_verified: true, payer_get_attempted: true,
+          payer_response_observed: true, payer_mode_matches: true, payer_currency_matches: true,
+          payer_http_status: 200, payer_observation: 'matched', render_requested: true,
+          payer_payload_delivered: true, bound_render_frames: 1, ...observer.evidence(),
+          PRIVATE_URL: document, PRIVATE_BODY: 'SYNTHETIC_PRIVATE' });
+        if (projected.security_preflight_validation !== (mode === 'matched' ? 'matched' : 'withheld')
+            || projected.risk_preflight_delivered !== 0 || JSON.stringify(projected).includes('SYNTHETIC_PRIVATE')) {
+          throw new Error('Local telemetry projection failed.');
+        }
+      }
       phase = 'close';
       closing = true;
-      if (!await observer.close()) throw new Error('Local risk relay did not close.');
+      const clean = await observer.close();
+      if (clean !== !(diagnostics && mode === 'cors_withheld')) throw new Error('Local risk relay did not close.');
       await context.close(); await browser.close(); await Promise.all([...pending]); await proxy.close();
       context = browser = proxy = observer = null;
     }
+    if (diagnostics) return { security_telemetry_native_tls_verified: true,
+      security_telemetry_withholding_verified: true, security_telemetry_php_projection_verified: true };
     return { risk_bootstrap_local_verified: true, risk_cookie_isolation_verified: true,
       risk_cors_grant_verified: true, risk_default_denial_verified: true, risk_financial_denial_verified: true };
   } catch {
@@ -843,6 +873,7 @@ async function riskSmoke(playwright) {
     failure.fixedLocalEvidence = { phase, requests: requests.length, ...localDetails, ...observer?.evidence() };
     throw failure;
   } finally {
+    if (diagnostics) HostedRiskRelay.prototype.send = originalSend;
     if (observer) await observer.close();
     if (context) await context.close();
     if (browser) await browser.close();
@@ -958,38 +989,42 @@ function boundDocumentWorkerFixture(page, deadline, options = {}) {
   const teardown = section('    cardChoice.capture();\n    if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads()',
     '  if (failed || result === undefined)').replace(/\n  \}\n$/u, '');
   const capture = section('    cardChoice.capture(); // Fixed snapshot', '    if (observeConfig)');
+  const productionResult = section('    result = {', '  } catch {');
   const outputs = section('  if (failed || result === undefined)', '\n}\n\nasync function main');
   const trace = options.trace ?? [], clock = options.clock ?? (() => performance.now());
   class Observer extends BoundDocumentObservations {
     constructor(originalDeadline, generation) { super(originalDeadline, generation, clock); }
   }
   const factory = new Function('page', 'caseDeadline', 'BoundDocumentObservations', 'InstrumentSecurityScope',
-    'PendingLoader', 'trace', 'context', 'SameDocumentRetention', 'retainSameDocument', 'navigationRuntime', 'initial', 'journalFacts', 'normalRemaining', `
+    'PendingLoader', 'trace', 'context', 'SameDocumentRetention', 'retainSameDocument', 'navigationRuntime', 'initial', 'journalFacts', 'normalRemaining', 'rawFacts', `
     const instrumentSecurity = true, observeNormal = true, observeConfig = true; const mainPage = page;
-    let boundFrame, shuttingDown = false, failed = false, firstFailure, normalAdmissionClosed = false, fixtureBoundSource;
+    let boundFrame, shuttingDown = false, failed = false, firstFailure = rawFacts.firstFailure, normalAdmissionClosed = false, fixtureBoundSource;
     let browserContextCloseStarted = false, browserContextClosed = false;
-    const result = { result: 'blocked', reason: 'financial_sandbox_boundary_unverified', card_entry_enabled: false };
-    const counts = {}, payer = {}, normal = {}, method = {}, readiness = {}, readinessAttachment = {};
-    const methodSendStarted = false, normalWindowTimer = undefined, watchdog = undefined;
+    let result = { result: 'blocked', reason: 'financial_sandbox_boundary_unverified', card_entry_enabled: false, ...(rawFacts.result ?? {}) };
+    const counts = rawFacts.counts ?? {}, payer = rawFacts.payer ?? {}, normal = rawFacts.normal ?? {}, method = rawFacts.method ?? {}, readiness = rawFacts.readiness ?? {}, readinessAttachment = rawFacts.attachment ?? {};
+    const methodSendStarted = rawFacts.methodSendStarted ?? false, normalWindowTimer = undefined, watchdog = undefined;
     const pending = new Set(), normalClientPromises = new Set(), normalClientStates = new Map();
-    const publicClientPromise = undefined, methodClientPromise = undefined, browser = null;
+    const publicClientPromise = undefined, methodClientPromise = undefined;
+    const browser = rawFacts.browserVersion ? {version: () => rawFacts.browserVersion,close: async () => {}} : null;
+    const fixtureOrigin = null, visible = true;
     const empty = () => ({}), markFailure = phase => { failed = true; firstFailure ??= phase; };
     const track = async action => action(), drainSentNormalReads = async () => {};
     const dependency = { drainSent: async () => {}, close: async () => true, failed: () => false, evidence: empty };
     const parentCountry = dependency, currencySettings = dependency;
     const cardChoice = { capture: () => trace.push('capture_fields'), evidence: empty };
-    const policy = { markRenderFrameDelivered: () => trace.push('render_delivered'), candidateOrigin: () => null,
-      closeNormalWindow: () => trace.push('normal_close'), bindingEvidence: empty,
-      renderEvidence: empty, methodEvidence: empty, normalEvidence: empty, normalWindowRemaining: () => normalRemaining, normalSourceMatches: (value, main) => !retainSameDocument
+    const policy = { markRenderFrameDelivered: () => trace.push('render_delivered'), candidateOrigin: () => rawFacts.candidateOrigin ?? null,
+      closeNormalWindow: () => trace.push('normal_close'), bindingEvidence: () => rawFacts.binding ?? {},
+      renderEvidence: () => rawFacts.render ?? {}, methodEvidence: () => rawFacts.methods ?? {}, normalEvidence: () => rawFacts.normalPolicy ?? {}, normalWindowRemaining: () => normalRemaining, normalSourceMatches: (value, main) => !retainSameDocument
         || value === (main ? initial : fixtureBoundSource),
       riskSessionMatches: session => session === 'SYNTHETIC_SESSION' };
     const security = new InstrumentSecurityScope(policy, caseDeadline);
+    if (rawFacts.scopeStop) security.close(rawFacts.scopeStop);
     const originalClose = security.close.bind(security);
     security.close = reason => { trace.push('security_close:' + (reason ?? 'teardown')); originalClose(reason); };
     const risk = { close: async () => true, evidence: () => ({ ...journalFacts }) };
     const pendingLoader = new PendingLoader(risk, security), originalPendingClose = pendingLoader.close.bind(pendingLoader);
     pendingLoader.close = () => { trace.push('pending_close'); originalPendingClose(); };
-    const proxy = { counts: { rejected: 0, connected: 0, externalConnected: 0 }, close: async () => {} };
+    const proxy = { counts: { rejected: 0, connected: 0, externalConnected: 0, ...(rawFacts.proxy ?? {}) }, close: async () => {} };
     const fs = { rm: async () => { trace.push('directory_removed'); } }, directory = 'SYNTHETIC_PRIVATE_DIRECTORY';
     class PreflightFailure extends Error { #safe; constructor(safe) { super('Fixed fixture failure.'); this.#safe = safe; }
       evidence() { return this.#safe; } }
@@ -999,14 +1034,14 @@ function boundDocumentWorkerFixture(page, deadline, options = {}) {
     return {
       bind(request, renderFrameSource) { const renderFrame = true; fixtureBoundSource = renderFrameSource; ${binding} },
       async finish() { ${teardown} },
-      output(forceFailure = false) { failed = forceFailure; try { ${outputs} }
+      output(forceFailure = false) { failed = forceFailure; if (rawFacts.useProductionResult) { ${productionResult} } try { ${outputs} }
         catch (error) { if (error instanceof PreflightFailure) return error.evidence(); throw error; } },
       generation: () => sourceGeneration, snapshot() { ${capture} },
     };`);
   return factory(page, deadline, Observer, InstrumentSecurityScope, PendingLoader, trace, options.context ?? null,
     options.retentionClass ?? SameDocumentRetention, options.retainSameDocument ?? false, options.navigationRuntime ?? null,
     options.initial ?? null, options.journalFacts ?? { risk_journal_closed: false,
-      risk_journal_poisoned: false, risk_telemetry_poisoned: false }, options.normalRemaining ?? 8000);
+      risk_journal_poisoned: false, risk_telemetry_poisoned: false }, options.normalRemaining ?? 8000, options.rawFacts ?? {});
 }
 
 function sanitizeBoundDocumentFixture(evidence, retain = false) {

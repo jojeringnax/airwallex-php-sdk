@@ -28,6 +28,9 @@ class HostedRiskObserver {
   #loaderValidation = 'not_reached';
   #loaderFailure = null;
   #loaderPhase = 'pre_send';
+  #telemetryFailure = null;
+  #validation = {};
+  #shutdownFailure = null;
   constructor(parent, journal, playwright, fixture = null, caseDeadline = performance.now() + 40000, instrumentSecurity = false) {
     if (typeof instrumentSecurity !== 'boolean') throw new Error('Invalid security profile.');
     this.#instrumentSecurity = instrumentSecurity;
@@ -55,7 +58,46 @@ class HostedRiskObserver {
   noteDenied(value) { this.#policy.noteDenied(value); }
   evidence() { return { ...this.#policy.evidence(), ...(this.#journal?.evidence() ?? {}),
     ...(this.#instrumentSecurity ? { security_loader_validation: this.#loaderValidation,
-      ...(this.#loaderFailure ?? {}) } : {}) }; }
+      ...(this.#loaderFailure ?? {}), ...this.#validation, ...(this.#telemetryFailure ?? {}),
+      ...(this.#shutdownFailure === null ? {} : { security_telemetry_shutdown_failure_stage: this.#shutdownFailure }) } : {}) }; }
+
+  #telemetryRole(operation, role) {
+    if (this.#instrumentSecurity) {
+      if (operation.phase === 'queued_guard') operation.phase = undefined;
+      if (['preflight', 'visitor', 'event'].includes(role)) operation.role = role;
+    }
+    return role; // Tap an original operand; never read a claim to populate a diagnostic.
+  }
+
+  #telemetryFailed(operation, gate = 'operation_failed', phase = operation.phase) {
+    if (!this.#instrumentSecurity || this.#telemetryFailure !== null) return;
+    if (phase === undefined) { this.#telemetryFailure = {}; return; }
+    this.#telemetryFailure = { security_telemetry_first_failure_phase: phase,
+      security_telemetry_first_failure_gate: gate,
+      ...(operation.role === undefined ? {} : { security_telemetry_first_failure_role: operation.role }) };
+  }
+
+  #telemetryReject(operation, value, gate) {
+    if (value) this.#telemetryFailed(operation, gate);
+    return value;
+  }
+
+  #validated(operation, value) {
+    if (!this.#instrumentSecurity || operation.role === undefined) return;
+    const key = 'security_' + operation.role + '_validation';
+    if (this.#validation[key] === undefined || this.#validation[key] === 'matched') this.#validation[key] = value;
+    if (value !== 'matched') this.#telemetryFailed(operation);
+  }
+
+  #shutdownResult(stage, value) {
+    if (this.#instrumentSecurity && !value && this.#shutdownFailure === null) this.#shutdownFailure = stage;
+    return value;
+  }
+
+  #priorCleanup(value) {
+    if (value) this.#shutdownResult('prior_cleanup_failed', false);
+    return value;
+  }
 
   #loaderFailed(phase, gate) {
     if (!this.#instrumentSecurity || this.#loaderFailure !== null) return;
@@ -278,36 +320,69 @@ class HostedRiskObserver {
     if (claim === null) return false;
     let delivered = false;
     let queued = false;
+    const operation = { phase: 'queued_guard' };
+    let activeOperation = operation;
     try {
       // Exactly the admitted visitor plus eight finite events may wait; sends remain serial.
-      if (this.#waiting >= 9) { this.#policy.poison('budget'); return true; }
+      if (this.#waiting >= 9) { this.#telemetryFailed(operation); this.#policy.poison('budget'); return true; }
       this.#waiting++;
       queued = true;
       const task = this.#chain.then(async () => {
-        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+        if (this.#telemetryReject(operation, this.#closed, 'observer_closed')
+            || this.#telemetryReject(operation, closing(), 'caller_closing')
+            || this.#telemetryReject(operation, admissionClosed(), 'admission_closed')
+            || this.#telemetryReject(operation, !this.#original(frame, main, bound), 'original_source_unavailable')
+            || this.#telemetryReject(operation, !this.#policy.live(), 'policy_unavailable')) {
           this.#policy.poison('document_changed'); throw new Error('Risk scope is unavailable.');
         }
         const deadline = Math.min(this.#caseDeadline, this.#deadline, performance.now() + this.#parent.normalWindowRemaining());
-        const forward = async selected => this.#journal.run(selected, async () => {
-          if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound) || !this.#policy.live()) {
-            throw new Error('Risk scope is unavailable.');
-          }
-          this.#policy.invoke(selected.role);
-          const response = await this.#relay.send(selected.url, selected.role === 'preflight' ? 'OPTIONS' : 'POST',
-            selected.role, selected.headers, selected.body, deadline, this.#instrumentSecurity
-              ? () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound) : null);
-          this.#policy.status(selected.role, response.status);
-          return response;
-        }, response => this.#policy.validateResponse(selected, response), deadline);
+        const forward = async (selected, knownRole = operation.role) => {
+          const part = { phase: 'prepare_ack', ...(knownRole === undefined ? {} : { role: knownRole }) };
+          activeOperation = part;
+          return this.#journal.run(selected, async () => {
+            part.phase = 'invoke_guard';
+            if (this.#telemetryReject(part, this.#closed, 'observer_closed')
+                || this.#telemetryReject(part, closing(), 'caller_closing')
+                || this.#telemetryReject(part, admissionClosed(), 'admission_closed')
+                || this.#telemetryReject(part, !this.#original(frame, main, bound), 'original_source_unavailable')
+                || this.#telemetryReject(part, !this.#policy.live(), 'policy_unavailable')) {
+              throw new Error('Risk scope is unavailable.');
+            }
+            this.#policy.invoke(this.#telemetryRole(part, selected.role));
+            part.phase = 'relay';
+            const response = await this.#relay.send(selected.url, selected.role === 'preflight' ? 'OPTIONS' : 'POST',
+              selected.role, selected.headers, selected.body, deadline, this.#instrumentSecurity
+                ? () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound) : null);
+            this.#policy.status(selected.role, response.status);
+            return response;
+          }, response => {
+            part.phase = 'response_validation';
+            try {
+              const matched = this.#policy.validateResponse(selected, response);
+              this.#validated(part, matched === true ? 'matched' : 'withheld');
+              part.phase = 'result_ack';
+              return matched;
+            } catch (error) {
+              this.#validated(part, 'exception');
+              throw error; // The original journal receives the same exception; no property is inspected.
+            }
+          }, deadline);
+        };
         // Browser route interception omits automatic CORS OPTIONS: perform the exact grant check before the body.
-        if (claim.role === 'visitor') {
+        if (this.#telemetryRole(operation, claim.role) === 'visitor') {
           const preflight = this.#policy.preflightFor(claim);
-          if (preflight !== null) await forward(preflight);
+          if (preflight !== null) await forward(preflight, 'preflight');
         }
         const response = await forward(claim);
-        if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) {
+        activeOperation = operation;
+        operation.phase = 'before_delivery';
+        if (this.#telemetryReject(operation, this.#closed, 'observer_closed')
+            || this.#telemetryReject(operation, closing(), 'caller_closing')
+            || this.#telemetryReject(operation, !this.#original(frame, main, bound), 'original_source_unavailable')
+            || this.#telemetryReject(operation, !this.#policy.live(), 'policy_unavailable')) {
           throw new Error('Risk scope is unavailable.');
         }
+        operation.phase = 'delivery';
         await this.#value(route.fulfill({ status: response.status,
           headers: this.#policy.responseHeaders(response), body: response.body }));
         delivered = true;
@@ -315,10 +390,11 @@ class HostedRiskObserver {
       });
       this.#chain = task.catch(() => {});
       await this.#value(task);
-    } catch { this.#policy.poison('journal'); }
+    } catch { this.#telemetryFailed(activeOperation); this.#policy.poison('journal'); }
     finally {
       if (queued) this.#waiting--;
       if (!delivered && !await this.#bounded(Promise.resolve().then(() => route.abort('blockedbyclient')))) {
+        this.#telemetryFailed(activeOperation, 'operation_failed', 'abort');
         this.#cleanupFailed = true; this.#policy.poison('shutdown');
       }
     }
@@ -341,15 +417,15 @@ class HostedRiskObserver {
           Math.max(0, Math.min(1000, this.#caseDeadline - performance.now()))); })]); }
       finally { clearTimeout(timer); }
     };
-    let clean = this.#relay === undefined || this.#relay === null || await bounded(this.#relay.close());
-    clean = await bounded(this.#chain) && clean;
-    clean = await bounded(Promise.all([...this.#handlers])) && clean;
-    clean = await bounded(Promise.all([...this.#responseDisposals.values()]).then(values => values.every(Boolean))) && clean;
+    let clean = this.#relay === undefined || this.#relay === null || this.#shutdownResult('relay_close', await bounded(this.#relay.close()));
+    clean = this.#shutdownResult('chain_drain', await bounded(this.#chain)) && clean;
+    clean = this.#shutdownResult('handler_drain', await bounded(Promise.all([...this.#handlers]))) && clean;
+    clean = this.#shutdownResult('response_disposal', await bounded(Promise.all([...this.#responseDisposals.values()]).then(values => values.every(Boolean)))) && clean;
     if (this.#publicClient) {
-      clean = await bounded(this.#publicClient.then(client => this.#disposePublic(client))) && clean;
+      clean = this.#shutdownResult('public_context', await bounded(this.#publicClient.then(client => this.#disposePublic(client)))) && clean;
     }
-    if (this.#journal) clean = await bounded(this.#journal.close()) && clean;
-    if (!clean || this.#cleanupFailed) this.#policy.poison('shutdown');
+    if (this.#journal) clean = this.#shutdownResult('journal_close', await bounded(this.#journal.close())) && clean;
+    if (!clean || this.#priorCleanup(this.#cleanupFailed)) this.#policy.poison('shutdown');
     return clean && !this.#cleanupFailed;
   }
 
