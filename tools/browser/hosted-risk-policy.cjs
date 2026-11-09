@@ -76,7 +76,15 @@ class HostedRiskPolicy {
     this.#clock = clock;
   }
 
-  live() {
+  live(report = null) {
+    if (report !== null) {
+      const gate = (value, reason) => { if (!value) report(reason); return value; };
+      return gate(this.#enabled, 'disabled') && gate(!this.#poisoned, 'policy_poisoned')
+        && gate(this.#parent.renderEnabled(), 'render_unavailable')
+        && gate(this.#parent.bindingEvidence().payer_payload_delivered, 'payer_not_delivered')
+        && gate(this.#parent.normalEvidence().normal_reads_requested === true, 'normal_not_selected')
+        && gate(this.#parent.normalWindowRemaining() > 0, 'scope_window_not_positive');
+    }
     return this.#enabled && !this.#poisoned && this.#parent.renderEnabled()
       && this.#parent.bindingEvidence().payer_payload_delivered
       && this.#parent.normalEvidence().normal_reads_requested === true
@@ -129,7 +137,17 @@ class HostedRiskPolicy {
 
   telemetryMatches(document, role) { return this.#verified && this.loaderMatches(document, role); }
 
-  verifyLoader(body) {
+  verifyLoader(body, report = null) {
+    if (report !== null) {
+      const reject = (value, reason) => { if (value) report(reason); return value; };
+      if (reject(!this.#loader, 'claim_missing') || !this.live(report)
+          || reject(!Buffer.isBuffer(body), 'body_not_buffer') || reject(body.length > 262144, 'body_limit')
+          || reject(digest(body) !== this.#loader.expectedHash, 'body_hash')) {
+        this.poison('loader_integrity'); return false;
+      }
+      this.#verified = true;
+      return true;
+    }
     if (!this.#loader || !this.live() || !Buffer.isBuffer(body) || body.length > 262144
         || digest(body) !== this.#loader.expectedHash) { this.poison('loader_integrity'); return false; }
     this.#verified = true;

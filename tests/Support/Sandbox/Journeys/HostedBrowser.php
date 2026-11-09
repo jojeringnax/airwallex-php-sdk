@@ -810,6 +810,41 @@ final readonly class HostedBrowser
         if (in_array($reason, ['not_observed', 'duplicate', 'scope', 'promoted', 'expired'], true)) {
             $safe['security_loader_wait_reason'] = $reason;
         }
+        $stops = ['not_observed', 'document_frame_unavailable', 'main_document_request',
+            'bound_document_request', 'main_navigated', 'bound_navigated', 'bound_detached',
+            'admission_case_reserve_elapsed', 'admission_loader_window_elapsed',
+            'release_case_reserve_elapsed', 'release_loader_window_elapsed', 'watchdog_shutdown', 'teardown'];
+        foreach (['security_source_first_stop', 'security_loader_scope_stop_at_failure'] as $field) {
+            if (in_array($data[$field] ?? null, $stops, true)) {
+                $safe[$field] = $data[$field];
+            }
+        }
+        if (
+            in_array($data['security_loader_validation'] ?? null, [
+                'not_reached', 'matched', 'withheld', 'exception',
+            ], true)
+        ) {
+            $safe['security_loader_validation'] = $data['security_loader_validation'];
+        }
+        if (
+            in_array($data['security_loader_first_failure_phase'] ?? null, [
+            'pre_send', 'send_guard', 'response_validation', 'before_delivery', 'delivery', 'loader_abort',
+            ], true)
+        ) {
+            $safe['security_loader_first_failure_phase'] = $data['security_loader_first_failure_phase'];
+        }
+        if (
+            in_array($data['security_loader_first_failure_gate'] ?? null, [
+            'http_status', 'claim_missing', 'disabled', 'policy_poisoned', 'render_unavailable',
+            'payer_not_delivered', 'normal_not_selected', 'scope_window_not_positive',
+            'body_not_buffer', 'body_limit', 'body_hash', 'validator_exception', 'observer_closed',
+            'caller_closing', 'admission_closed', 'case_bound_failed', 'frame_detached', 'attachment_unavailable',
+            'main_source_mismatch', 'bound_source_mismatch', 'unrelated_frame', 'original_probe_exception',
+            'operation_failed',
+            ], true)
+        ) {
+            $safe['security_loader_first_failure_gate'] = $data['security_loader_first_failure_gate'];
+        }
         return $safe;
     }
 
