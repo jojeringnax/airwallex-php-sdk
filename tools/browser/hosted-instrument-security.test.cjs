@@ -193,6 +193,9 @@ function compiled(file, replacements = [], overrides = {}) {
     assert.ok(begin >= 0 && finish > begin);
     source = source.slice(0, begin) + replacement + source.slice(finish);
   }
+  if (Object.hasOwn(overrides, 'fixture:timers')) {
+    source = source.replace("'use strict';", "'use strict';\nconst { setTimeout, clearTimeout } = require('fixture:timers');");
+  }
   if (Object.hasOwn(overrides, 'fixture:performance')) {
     source = source.replace("'use strict';", "'use strict';\nconst performance = require('fixture:performance');");
   }
@@ -662,7 +665,7 @@ function eventTrace(reference, actions) {
   const source = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
   const start = source.indexOf('      let mainNavigations = 0;'), end = source.indexOf('    page.setDefaultTimeout', start);
   const body = reference ? referenceEvents : source.slice(start, end).slice(0, source.slice(start, end).lastIndexOf('    }'));
-  const run = new Function('page', 'boundFrame', 'security', 'pendingLoader', 'documents', `let sourceGeneration = 0;
+  const run = new Function('page', 'boundFrame', 'security', 'pendingLoader', 'documents', `const sameDocument = null; let sourceGeneration = 0;
     ${body} return () => sourceGeneration;`);
   const generation = run(page, boundFrame, security, pendingLoader, { navigated: () => {} });
   for (const action of actions) handlers[action === 'detach' ? 'framedetached' : 'framenavigated'](action === 'main' ? main : boundFrame);
@@ -691,14 +694,14 @@ for (const fault of ['matched', 'http_status', 'hash', 'fulfill']) {
 
 const { BoundDocumentObservations } = require('./hosted-browser.cjs');
 const flushDocuments = () => new Promise(resolve => setImmediate(resolve));
-function documentFixture(deadline = 1000) {
+function documentFixture(deadline = 1000, Observer = BoundDocumentObservations) {
   let generation = 0, now = 0, captures = 0, probes = 0, disposals = 0;
   let url = 'https://fixture.invalid/#/elements/dropin?options=SYNTHETIC_PRIVATE';
   let capture, probe, disposal;
   const handle = { asElement() { return this; }, dispose: async () => { disposals++; if (disposal) return disposal; } };
   const frame = { url: () => url, evaluateHandle: () => { captures++; return capture ?? handle; },
     evaluate: () => { probes++; return probe ?? true; } };
-  const observer = new BoundDocumentObservations(deadline, () => generation, () => now);
+  const observer = new Observer(deadline, () => generation, () => now);
   observer.bind(frame, url, generation);
   return { observer, frame, handle, first: () => observer.navigated(frame, generation, false),
     stop: () => { generation++; observer.navigated(frame, generation, true); },
@@ -760,17 +763,28 @@ for (const value of ['https://fixture.invalid/next', 'about:blank', 'https://fix
   });
 }
 
+async function documentErrorPrivacy(Observer = BoundDocumentObservations, faults = ['url', 'evaluation']) {
+  for (const fault of faults) {
+    const f = documentFixture(1000, Observer), privateError = new Error();
+    let errorReads = 0, evaluationCalls = 0;
+    for (const field of ['message', 'name', 'stack']) Object.defineProperty(privateError, field, {
+      get() { errorReads++; return 'SYNTHETIC_PRIVATE_ERROR'; },
+    });
+    f.first(); await flushDocuments();
+    if (fault === 'url') f.frame.url = () => { throw privateError; };
+    f.frame.evaluate = () => { evaluationCalls++; throw privateError; };
+    f.stop(); await flushDocuments(); await f.observer.finish(); f.observer.close();
+    assert.equal(f.observer.evidence().security_bound_navigation_original_relation,
+      fault === 'url' ? 'unavailable' : 'exact_repeat');
+    assert.equal(f.observer.evidence().security_bound_document_continuity, 'unavailable');
+    assert.equal(evaluationCalls, fault === 'url' ? 0 : 1);
+    assert.doesNotMatch(JSON.stringify(f.observer.evidence()), /SYNTHETIC_PRIVATE_ERROR/u);
+    assert.equal(errorReads, 0);
+  }
+}
+
 test('cached URL and native evaluation failures inspect no Error properties', async () => {
-  const f = documentFixture(), privateError = new Error();
-  for (const field of ['message', 'name', 'stack']) Object.defineProperty(privateError, field, {
-    get() { assert.fail('Private Error property read.'); },
-  });
-  f.first(); await flushDocuments();
-  f.frame.url = () => { throw privateError; };
-  f.frame.evaluate = () => { throw privateError; };
-  f.stop(); await flushDocuments(); await f.observer.finish();
-  assert.equal(f.observer.evidence().security_bound_navigation_original_relation, 'unavailable');
-  assert.equal(f.observer.evidence().security_bound_document_continuity, 'unavailable');
+  await documentErrorPrivacy();
 });
 
 for (const fault of ['stop', 'generation', 'close', 'case_deadline', 'operation_deadline']) {
@@ -995,3 +1009,300 @@ for (const [name, before, after] of [
     assert.throws(() => assertWiredSame(result), assert.AssertionError);
   });
 }
+
+// Isolated unit seam only: real runtime byte/export and native emitter order are tested in local Chrome.
+async function navigationFixture(options = {}) {
+  const modulePath = '/synthetic/native-runtime', runtime = {};
+  const api = compiled('hosted-browser.cjs', options.replace ?? [], {
+    [modulePath]: runtime,
+    './hosted-card-choice.cjs': { ...require('./hosted-card-choice.cjs'), verifyCardRuntime: async () => ({}) },
+  });
+  const proof = options.runtime === false ? null : await api.verifyNavigationRuntime(modulePath, runtime);
+  let generation = 0, current = 'https://fixture.invalid/frame#/elements/dropin?options='
+    + encodeURIComponent(JSON.stringify({ sessionId: 'SYNTHETIC_SESSION' })), active = true, reference = true;
+  const original = current, trace = [];
+  class EventEmitter2 extends require('node:events').EventEmitter {
+    constructor() { super(); this.on = this.addListener; this.off = this.removeListener; }
+    emit(...args) { return super.emit(...args); }
+  }
+  const main = { isDetached: () => false, url: () => 'https://fixture.invalid/main' }, page = { mainFrame: () => main };
+  class _Frame {
+    constructor() { this._eventEmitter = new EventEmitter2(); }
+    url() { return current; } parentFrame() { return main; } page() { return page; } isDetached() { return false; }
+  }
+  const frame = new _Frame();
+  const documents = { retentionReference: (f, g) => reference && f === frame && g === 0 };
+  const adapter = new api.SameDocumentRetention(proof, (f, m, session) => {
+    assert.equal(f, frame); assert.equal(m, main); assert.equal(session, 'SYNTHETIC_SESSION');
+    if (options.probe) return options.probe(frame, adapter);
+    return active;
+  }, documents, () => generation);
+  adapter.bind(frame, main, original);
+  const publicEvent = (value = frame) => {
+    trace.push('public');
+    if (!adapter.retain(value)) { generation++; trace.push('increment', 'close', 'pending_close'); return false; }
+    trace.push('retained'); return true;
+  };
+  const packet = () => ({ url: current, name: '' });
+  return { api, proof, adapter, frame, main, page, trace, packet, publicEvent,
+    emit: value => { const result = frame._eventEmitter.emit('navigated', value); assert.equal(typeof result, 'boolean'); },
+    event: value => { frame._eventEmitter.emit('navigated', value ?? packet()); return publicEvent(); },
+    generation: () => generation, navigate: () => { generation++; },
+    source: value => { current = value; }, original, closeScope: () => { active = false; },
+    noReference: () => { reference = false; } };
+}
+
+test('one synchronous private packet retains exactly once; public close still occurs on the second repeat', async () => {
+  const f = await navigationFixture();
+  assert.equal(f.event(), true); assert.equal(f.generation(), 0);
+  assert.equal(f.event(), false); assert.equal(f.generation(), 1);
+  assert.deepEqual(f.trace, ['public', 'retained', 'public', 'increment', 'close', 'pending_close']);
+  assert.equal(f.adapter.evidence().security_same_document_retained, true);
+  assert.equal(f.adapter.evidence().security_same_document_reason, 'already_used');
+  assert.throws(() => JSON.stringify(f.adapter));
+  assert.doesNotMatch(util.inspect(f.adapter), /fixture.invalid|SYNTHETIC_SESSION/u);
+  f.adapter.close(); assert.equal(f.frame._eventEmitter.listenerCount('navigated'), 0);
+});
+
+for (const fault of ['runtime', 'no_reference', 'generation', 'closed_scope', 'changed_hash', 'changed_query',
+  'new_document', 'null_marker', 'false_marker', 'missing_url', 'getter', 'extra', 'missing_packet', 'expired_packet',
+  'duplicate_packet', 'wrong_frame', 'closed_adapter']) {
+  test('native exception uncertainty retains the original public close: ' + fault, async () => {
+    const f = await navigationFixture({ runtime: fault !== 'runtime' });
+    if (fault === 'no_reference') f.noReference();
+    if (fault === 'generation') f.navigate();
+    if (fault === 'closed_scope') f.closeScope();
+    if (fault === 'closed_adapter') f.adapter.close();
+    if (fault === 'changed_hash') f.source(f.original + '&changed=1');
+    if (fault === 'changed_query') f.source(f.original.replace('/frame#', '/frame?changed=1#'));
+    let getterReads = 0;
+    const p = f.packet();
+    if (fault === 'new_document') p.newDocument = {};
+    if (fault === 'null_marker') p.newDocument = null;
+    if (fault === 'false_marker') p.newDocument = false;
+    if (fault === 'missing_url') delete p.url;
+    if (fault === 'getter') Object.defineProperty(p, 'url', { get() { getterReads++; return 'SYNTHETIC_PRIVATE'; } });
+    if (fault === 'extra') p.SYNTHETIC_PRIVATE = 'SYNTHETIC_PRIVATE';
+    if (fault !== 'missing_packet') f.emit(p);
+    if (fault === 'expired_packet') await Promise.resolve();
+    if (fault === 'duplicate_packet') f.emit(p);
+    assert.equal(f.publicEvent(fault === 'wrong_frame' ? {} : f.frame), false);
+    assert.deepEqual(f.trace, ['public', 'increment', 'close', 'pending_close']);
+    assert.equal(f.adapter.evidence().security_same_document_retained, false);
+    assert.equal(getterReads, 0);
+    assert.doesNotMatch(JSON.stringify(f.adapter.evidence()), /SYNTHETIC_PRIVATE|fixture.invalid/u);
+    f.adapter.close();
+  });
+}
+
+async function navigationErrorPrivacy(fault, replacements = []) {
+  let errorReads = 0;
+  const error = new Error();
+  for (const key of ['name', 'message', 'stack']) Object.defineProperty(error, key, {
+    get() { errorReads++; return 'SYNTHETIC_PRIVATE_ERROR'; },
+  });
+  let f;
+  f = await navigationFixture({ replace: replacements, probe: fault === 'proof_throw' ? () => { throw error; }
+    : fault === 'private_reentrant' ? frame => { frame._eventEmitter.emit('navigated', f.packet()); return true; }
+      : fault === 'public_reentrant' ? () => { f.publicEvent(); return true; } : undefined });
+  const packet = fault === 'descriptor_throw' ? new Proxy(f.packet(), {
+    getOwnPropertyDescriptor() { throw error; },
+  }) : f.packet();
+  assert.doesNotThrow(() => f.emit(packet));
+  assert.equal(f.publicEvent(), false);
+  assert.equal(f.adapter.evidence().security_same_document_retained, false);
+  assert.ok(f.trace.includes('increment') && f.trace.includes('close') && f.trace.includes('pending_close'));
+  f.adapter.close();
+  assert.doesNotMatch(JSON.stringify(f.adapter.evidence()), /SYNTHETIC_PRIVATE_ERROR/u);
+  assert.equal(errorReads, 0);
+}
+
+for (const fault of ['descriptor_throw', 'proof_throw', 'private_reentrant', 'public_reentrant']) {
+  test('own listener/proof faults cannot throw or suppress the subsequent public guard: ' + fault, async () => {
+    await navigationErrorPrivacy(fault);
+  });
+}
+
+const errorReadDetected = error => error?.code === 'ERR_ASSERTION' && error.actual > 0
+  && error.expected === 0 && error.operator === 'strictEqual';
+for (const [label, before, after, fault] of [
+  ['cached URL', 'catch { return null; }\n  }\n  #sameBase',
+    'catch (error) { void error.message; return null; }\n  }\n  #sameBase', 'url'],
+  ['native rejection', '() => ({ ok: false })),', 'error => { void error.message; return { ok: false }; }),', 'evaluation'],
+]) {
+  test('privacy sentinel rejects an in-memory Error-reading document mutant: ' + label, async () => {
+    const source = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+    const start = source.indexOf('class BoundDocumentObservations'), end = source.indexOf('\nconst navigationRuntimeProofs', start);
+    const body = source.slice(start, end); assert.ok(body.includes(before));
+    const Mutant = compiled('hosted-browser.cjs', [
+      ['class BoundDocumentObservations', '\nconst navigationRuntimeProofs', body.replace(before, after)],
+    ]).BoundDocumentObservations;
+    await assert.rejects(() => documentErrorPrivacy(Mutant, [fault]), errorReadDetected);
+  });
+}
+for (const [label, before, after, fault] of [
+  ['listener', "} catch { this.#disable('listener_failed'); }\n        finally",
+    "} catch (error) { void error.message; this.#disable('listener_failed'); }\n        finally", 'descriptor_throw'],
+  ['proof', "} catch { this.#disable('listener_failed'); return false; }",
+    "} catch (error) { void error.message; this.#disable('listener_failed'); return false; }", 'proof_throw'],
+]) {
+  test('privacy sentinel rejects an in-memory Error-reading navigation mutant: ' + label, async () => {
+    const source = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+    const start = source.indexOf('class SameDocumentRetention'), end = source.indexOf('\nasync function inspect', start);
+    const body = source.slice(start, end); assert.ok(body.includes(before));
+    await assert.rejects(() => navigationErrorPrivacy(fault, [
+      ['class SameDocumentRetention', '\nasync function inspect', body.replace(before, after)],
+    ]), errorReadDetected);
+  });
+}
+
+test('a native packet that arrives after an original close cannot resume the old scope', async () => {
+  const f = await navigationFixture();
+  assert.equal(f.publicEvent(), false);
+  assert.equal(f.event(), false);
+  assert.equal(f.adapter.evidence().security_same_document_retained, false);
+});
+
+async function wiredRetention(source, fault = '') {
+  const f = await navigationFixture(); f.adapter.close();
+  const handlers = {}, trace = [];
+  f.page.on = (event, callback) => { handlers[event] = callback; };
+  const handle = { asElement() { return this; }, dispose: async () => { trace.push('native_disposed'); } };
+  let release;
+  f.frame.evaluateHandle = fault === 'late_reference' ? () => new Promise(resolve => { release = resolve; })
+    : async () => handle;
+  f.frame.evaluate = async (_expression, previous) => previous === handle;
+  const worker = boundDocumentWorkerFixture(f.page, performance.now() + 40000, {
+    source, trace, initial: f.main.url(), retainSameDocument: true,
+    navigationRuntime: f.proof, retentionClass: f.api.SameDocumentRetention,
+    normalRemaining: fault === 'clock_snapshot' ? 2500 : 8000,
+    journalFacts: { risk_journal_closed: fault === 'closed_journal',
+      risk_journal_poisoned: fault === 'poisoned_journal', risk_telemetry_poisoned: fault === 'poisoned_policy' },
+  });
+  handlers.framenavigated(f.main); worker.bind({ frame: () => f.frame }, f.original);
+  handlers.framenavigated(f.frame); await flushDocuments(); await flushDocuments();
+  if (fault === 'snapshot') worker.snapshot();
+  if (fault === 'main_changed') handlers.framenavigated(f.main);
+  f.frame._eventEmitter.emit('navigated', f.packet()); handlers.framenavigated(f.frame);
+  await flushDocuments(); await flushDocuments();
+  if (release) { release(handle); await flushDocuments(); await flushDocuments(); }
+  const generation = worker.generation();
+  await worker.finish();
+  const values = [worker.output(), worker.output(true)].map(value => sanitizeBoundDocumentFixture({
+    ...value, raw_packet: 'SYNTHETIC_PRIVATE_PACKET', raw_document: f.original,
+  }, true));
+  return { values, generation, trace };
+}
+function assertWiredRetention(facts) {
+  assert.equal(facts.generation, 0);
+  for (const value of facts.values) {
+    assert.equal(value.security_same_document_retained, true);
+    assert.equal(value.security_same_document_reason, 'retained_once');
+    assert.equal(value.financial_permission, false);
+    assert.doesNotMatch(JSON.stringify(value), /SYNTHETIC_PRIVATE|fixture.invalid/u);
+  }
+  assert.equal(facts.trace.filter(value => value === 'native_disposed').length, 1);
+}
+test('actual production binding/guard/both evidence/finish paths retain once and survive real PHP privacy projection', async () => {
+  assertWiredRetention(await wiredRetention());
+});
+for (const fault of ['late_reference', 'closed_journal', 'poisoned_journal', 'poisoned_policy', 'snapshot', 'clock_snapshot', 'main_changed']) {
+  test('production worker keeps original invalidation for ' + fault, async () => {
+    const result = await wiredRetention(undefined, fault);
+    assert.ok(result.generation > 0);
+    for (const value of result.values) assert.equal(value.security_same_document_retained, false);
+    assert.equal(result.trace.filter(value => value === 'native_disposed').length, 1);
+  });
+}
+for (const [label, before, after] of [
+  ['native binding', 'sameDocument?.bind(boundFrame, mainPage.mainFrame(), renderFrameSource);', ''],
+  ['success projection', '...(sameDocument?.evidence() ?? {}), ...(documents?.evidence() ?? {}),', '...(documents?.evidence() ?? {}),'],
+  ['failure projection', '    ...(sameDocument?.evidence() ?? {}),\n', ''],
+  ['retention branch', 'if (!sameDocument?.retain(frame)) {', 'if (true) {'],
+]) {
+  test('native production wiring mutation is detected: ' + label, async () => {
+    const original = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+    assert.equal(original.split(before).length, 2);
+    let detected = false;
+    try { assertWiredRetention(await wiredRetention(original.replace(before, after))); }
+    catch { detected = true; }
+    assert.equal(detected, true);
+  });
+}
+for (const [label, before, after, fault] of [
+  ['runtime proof', 'this.#runtime = navigationRuntimeProofs.has(runtime);', 'this.#runtime = true;', 'runtime'],
+  ['native marker', 'if (!packet.same)', 'if (false)', 'new_document'],
+  ['exact URL', 'if (packet.url !== this.#source || frame.url() !== this.#source)', 'if (false)', 'url'],
+  ['reference', 'if (!this.#documents.retentionReference(frame, this.#boundGeneration))', 'if (false)', 'reference'],
+  ['generation', 'if (packet.generation !== this.#boundGeneration || this.#generation() !== this.#boundGeneration)',
+    'if (false)', 'generation'],
+  ['one use', 'if (this.#used)', 'if (false)', 'twice'],
+  ['live scope', 'if (this.#proof(frame, this.#main, this.#session) !== true || this.#disabled)', 'if (false)', 'scope'],
+]) {
+  test('isolated acceptance detects removal of the native ' + label + ' check', async () => {
+    const original = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+    const start = original.indexOf('class SameDocumentRetention'), end = original.indexOf('\nasync function inspect', start);
+    const body = original.slice(start, end); assert.equal(body.split(before).length, 2);
+    const f = await navigationFixture({ runtime: fault !== 'runtime', replace: [
+      ['class SameDocumentRetention', '\nasync function inspect', body.replace(before, after)],
+    ] });
+    if (fault === 'url') f.source(f.original + '&changed=1');
+    if (fault === 'reference') f.noReference();
+    if (fault === 'generation') f.navigate();
+    if (fault === 'scope') f.closeScope();
+    const p = f.packet(); if (fault === 'new_document') p.newDocument = {};
+    if (fault === 'twice') assert.equal(f.event(), true);
+    assert.equal(f.event(p), true, 'The mutant loses the original failing acceptance boundary.');
+    f.adapter.close();
+  });
+}
+
+test('the original Instrument case deadline is captured before awaited runtime setup and cannot be reset', async () => {
+  const modulePath = '/synthetic/native-runtime', runtime = {};
+  let now = 0, timerDelay, directories = 0, closedJournals = 0;
+  const api = compiled('hosted-browser.cjs', [], {
+    [modulePath]: runtime,
+    './hosted-card-choice.cjs': { ...require('./hosted-card-choice.cjs'),
+      verifyCardRuntime: () => new Promise(() => {}) },
+    'fixture:performance': { now: () => now },
+    'fixture:timers': { setTimeout: (callback, delay) => {
+      timerDelay = delay; queueMicrotask(() => { now += delay; callback(); }); return 1;
+    }, clearTimeout: () => {} },
+    'node:fs/promises': { ...require('node:fs/promises'), mkdtemp: async () => { directories++; } },
+  });
+  await assert.rejects(api.inspect('https://fixture.invalid/', runtime, null, null, null, true, true, true,
+    { close: () => { closedJournals++; return Promise.resolve(); } }, null, false, false, false,
+    null, true, true, modulePath), /case ended during runtime proof/u);
+  assert.equal(timerDelay, 40000); assert.equal(directories, 0); assert.equal(closedJournals, 1);
+});
+
+test('the added native listener returns undefined on success and own failure, never a Promise', async () => {
+  const f = await navigationFixture(), [listener] = f.frame._eventEmitter.listeners('navigated');
+  assert.equal(listener(f.packet()), undefined);
+  await Promise.resolve();
+  assert.equal(listener(new Proxy(f.packet(), { getOwnPropertyDescriptor() { throw new Error(); } })), undefined);
+  assert.equal(f.publicEvent(), false); assert.equal(f.adapter.evidence().security_same_document_retained, false);
+  f.adapter.close();
+});
+
+
+test('the exact production capture closes the exception before the later normal-admission latch', async () => {
+  const original = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+  const before = '    sameDocument?.close(); // The exception ends at this original capture, before field inspection.\n';
+  assert.equal(original.split(before).length, 2);
+  const originalResult = await wiredRetention(undefined, 'snapshot');
+  for (const value of originalResult.values) assert.equal(value.security_same_document_retained, false);
+  const mutant = await wiredRetention(original.replace(before, ''), 'snapshot');
+  for (const value of mutant.values) assert.equal(value.security_same_document_retained, true);
+});
+
+
+test('the original normal clock fences a late native notification even before the delayed capture task executes', async () => {
+  const original = fs.readFileSync(path.join(__dirname, 'hosted-browser.cjs'), 'utf8');
+  const before = '      && policy.normalWindowRemaining() > 2500\n';
+  assert.equal(original.split(before).length, 2);
+  const originalResult = await wiredRetention(undefined, 'clock_snapshot');
+  for (const value of originalResult.values) assert.equal(value.security_same_document_retained, false);
+  const mutant = await wiredRetention(original.replace(before, ''), 'clock_snapshot');
+  for (const value of mutant.values) assert.equal(value.security_same_document_retained, true);
+});

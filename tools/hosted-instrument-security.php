@@ -10,9 +10,9 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 $arguments = $argv ?? [];
 $options = getopt('', [
     'environment:', 'credentials-file:', 'state-dir:', 'node-bin:', 'playwright-module:',
-    'observe-first-party-security',
+    'observe-first-party-security', 'retain-one-exact-same-document',
 ], $lastArgument);
-$flags = ['observe-first-party-security'];
+$flags = ['observe-first-party-security', 'retain-one-exact-same-document'];
 $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin', 'playwright-module', ...$flags];
 if (is_array($options)) {
     $valid = $lastArgument === count($arguments);

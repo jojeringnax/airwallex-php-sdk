@@ -20,7 +20,7 @@ final class HostedSetupPreflight
      * @param array<string,mixed> $options
      * @param (Closure(Configuration,string):SandboxSession)|null $sessions
      * @param (Closure(
-     *     string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool,bool,HostedSecurityMode
+     *     string,Scope,bool,bool,bool,bool,?HostedRiskJournal,bool,bool,bool,HostedSecurityMode,bool
      * ):array<string,mixed>)|null $browser
      * Fixture-only private handoff.
      * @return array<string,mixed>
@@ -38,16 +38,21 @@ final class HostedSetupPreflight
         $ledger = null;
         $expected = null;
         $phase = 'configuration';
+        $retainSameDocument = false;
         try {
             if ($mode === HostedSecurityMode::InstrumentSecurity) {
                 if (
                     array_diff(array_keys($options), ['environment', 'credentials-file', 'state-dir', 'node-bin',
-                    'playwright-module', 'observe-first-party-security']) !== []
+                    'playwright-module', 'observe-first-party-security', 'retain-one-exact-same-document']) !== []
                     || ($options['observe-first-party-security'] ?? null) !== true
+                    || (array_key_exists('retain-one-exact-same-document', $options)
+                        && $options['retain-one-exact-same-document'] !== true)
                 ) {
                     throw new RuntimeException('Explicit no-input security observation is required.');
                 }
                 unset($options['observe-first-party-security']);
+                $retainSameDocument = ($options['retain-one-exact-same-document'] ?? false) === true;
+                unset($options['retain-one-exact-same-document']);
                 $options += ['create-one-hosted-setup' => true, 'render-owned-data' => true,
                     'observe-one-method-config' => true, 'observe-normal-reads' => true,
                     'observe-risk-bootstrap' => true];
@@ -155,7 +160,11 @@ final class HostedSetupPreflight
                     'security_stage_max_ms' => 15000, 'loader_limit_bytes' => 262144, 'loader_encoding' => 'identity',
                     'input_authority' => false, 'financial_authority' => false,
                     'browser_tools' => $safe['browser_tool_hashes'],
-                ], $session->contextFingerprint());
+                ] + ($retainSameDocument ? ['native_navigation' => [
+                    'profile' => 'one_exact_same_document', 'decision' => 120, 'limit' => 1,
+                    'playwright_version' => '1.62.1', 'core_bundle_bytes' => 3425603,
+                    'core_bundle_sha256' => '9393fa79e1c67c74edc26b610d65a4f7ed73d345a762465cc88340a33a2454ac',
+                ]] : []), $session->contextFingerprint());
             }
             $phase = 'account_prerequisite';
             $entity = $session->legalEntity();
@@ -263,6 +272,7 @@ final class HostedSetupPreflight
                     $observeCurrencySettings,
                     $selectCard,
                     $mode,
+                    $retainSameDocument,
                 ),
                 $render,
                 $observeConfig,
@@ -272,6 +282,7 @@ final class HostedSetupPreflight
                 $observeCurrencySettings,
                 $selectCard,
                 $mode,
+                $retainSameDocument,
             );
             $safe['result'] = $safe['browser']['result'];
             if (
