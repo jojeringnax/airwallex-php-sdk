@@ -35,6 +35,24 @@ final class AlipayConsentReconciliation
         #[SensitiveParameter] string $directory,
         SandboxSession $session,
     ): self {
+        return self::loadOriginal($path, $directory, $session, false);
+    }
+
+    /** Cleanup alone admits the reviewed current SDK; the historical GET-only source guard stays frozen. */
+    public static function loadForCleanup(
+        #[SensitiveParameter] string $path,
+        #[SensitiveParameter] string $directory,
+        SandboxSession $session,
+    ): self {
+        return self::loadOriginal($path, $directory, $session, true);
+    }
+
+    private static function loadOriginal(
+        #[SensitiveParameter] string $path,
+        #[SensitiveParameter] string $directory,
+        SandboxSession $session,
+        bool $cleanup,
+    ): self {
         if ($session->isOrganization()) {
             throw new RuntimeException('Only the original account profile is accepted.');
         }
@@ -59,6 +77,7 @@ final class AlipayConsentReconciliation
         if (
             !in_array(SourceEvidence::capture()['sdk_digest'], [
                 self::SDK, '184cbc2ac51ee6498f45b5aa50a8ec82c89e66231cb2fabacc862b8a579e48ae',
+                ...($cleanup ? ['92d43dc9c4f5f651c7c9fe92207f317eec8303b7945af437f2dd9220aef06508'] : []),
             ], true)
         ) {
             throw new RuntimeException('The approved SDK source has changed.');

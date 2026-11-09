@@ -87,7 +87,7 @@ final class AlipayConsentDisableCleanupCommand
             );
             $intakeSession = new SandboxSession($configuration, 'account', $intakeTransport, $unixClock);
             $safe['phase'] = 'prior_validation';
-            $prior = AlipayConsentReconciliation::load($priorPath, $directory, $intakeSession);
+            $prior = AlipayConsentReconciliation::loadForCleanup($priorPath, $directory, $intakeSession);
             $safe['phase'] = 'claim_precheck';
             $claimPath = $prior->cleanupClaimPath();
             if (file_exists($claimPath) || is_link($claimPath)) {

@@ -56,7 +56,7 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
             file_put_contents($f['prior'], $original);
             $reflection = new \ReflectionMethod(
                 \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation::class,
-                'load'
+                'loadForCleanup'
             );
             $configuration = \Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration::load(
                 'sandbox',

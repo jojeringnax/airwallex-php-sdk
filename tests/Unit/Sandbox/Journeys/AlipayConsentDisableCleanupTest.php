@@ -53,6 +53,53 @@ final class AlipayConsentDisableCleanupTest extends TestCase
         return $f;
     }
 
+    public function testCurrentSdkAdmissionIsCleanupOnlyAndUnknownSdkStillStopsBeforeAuthentication(): void
+    {
+        $f = self::fixture();
+        $this->bases[] = $f['base'];
+        $configuration = \Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration::load('sandbox', $f['credentials']);
+        $session = new \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SandboxSession(
+            $configuration,
+            'account',
+            $f['provider']
+        );
+        $rejected = false;
+        try {
+            \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation::load(
+                $f['prior'],
+                $f['state'],
+                $session
+            );
+        } catch (RuntimeException) {
+            $rejected = true;
+        }
+        self::assertTrue($rejected);
+        $prior = \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation::loadForCleanup(
+            $f['prior'],
+            $f['state'],
+            $session
+        );
+        self::assertInstanceOf(
+            \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation::class,
+            $prior
+        );
+        self::assertSame([], $f['provider']->requests);
+        $path = dirname(__DIR__, 4) . '/src/RetryPolicy.php';
+        $original = file_get_contents($path);
+        self::assertIsString($original);
+        $priorHash = hash_file('sha256', $f['prior']);
+        try {
+            file_put_contents($path, "\n", FILE_APPEND);
+            $r = AlipayConsentDisableCleanupCommand::run(self::options($f), $f['provider']);
+            self::assertSame('prior_validation', $r['phase']);
+            self::assertSame('unavailable', $r['cleanup_observation_result']);
+            self::assertSame([], $f['provider']->requests);
+            self::assertSame($priorHash, hash_file('sha256', $f['prior']));
+        } finally {
+            file_put_contents($path, $original);
+        }
+    }
+
     /**
      * @param array{state:string,credentials:string,prior:string} $f
      * @return array<string,mixed> */
