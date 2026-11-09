@@ -149,6 +149,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
   const watchdog = setTimeout(() => {
     markFailure('watchdog');
     shuttingDown = true;
+    security?.noteStop('watchdog_shutdown');
     if (context) { browserContextCloseStarted = true; void track(() => context.close()); }
     if (browser) void track(() => browser.close());
   }, Math.max(1, caseDeadline - performance.now()));
@@ -201,8 +202,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         let frame;
         try { frame = request.frame(); } catch { /* Unavailable navigation is withheld. */ }
         const main = mainPage?.mainFrame();
-        if (!frame || (frame === main && instrumentMainDocumentSeen) || frame === boundFrame) {
-          sourceGeneration++; security.close(); pendingLoader.close();
+        let stopReason;
+        const stopAt = (value, reason) => { if (value) stopReason = reason; return value; };
+        if (stopAt(!frame, 'document_frame_unavailable')
+            || stopAt(frame === main && instrumentMainDocumentSeen, 'main_document_request')
+            || stopAt(frame === boundFrame, 'bound_document_request')) {
+          sourceGeneration++; security.close(stopReason); pendingLoader.close();
           counts.blocked_requests++; await route.abort('blockedbyclient'); return;
         }
         if (frame === main) instrumentMainDocumentSeen = true;
@@ -633,16 +638,16 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       const frameNavigations = new WeakMap();
       page.on('framenavigated', frame => {
         if (frame === page.mainFrame() && ++mainNavigations > 1) {
-          sourceGeneration++; security.close(); pendingLoader.close();
+          sourceGeneration++; security.close('main_navigated'); pendingLoader.close();
         } else if (frame === boundFrame && (frameNavigations.get(frame) ?? 0) > 0) {
-          sourceGeneration++; security.close(); pendingLoader.close();
+          sourceGeneration++; security.close('bound_navigated'); pendingLoader.close();
         }
         if (frame === page.mainFrame() || frame === boundFrame) {
           frameNavigations.set(frame, (frameNavigations.get(frame) ?? 0) + 1);
         }
       });
       page.on('framedetached', frame => { if (frame === boundFrame) {
-        sourceGeneration++; security.close(); pendingLoader.close();
+        sourceGeneration++; security.close('bound_detached'); pendingLoader.close();
       } });
     }
     page.setDefaultTimeout(3000);

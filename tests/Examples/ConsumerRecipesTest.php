@@ -299,4 +299,31 @@ final class ConsumerRecipesTest extends HttpTestCase
         $this->expectException(WebhookVerificationException::class);
         $recipe('synthetic-secret', $raw . ' ', $timestamp, $signature, 0, static fn (): int => 1794132000000);
     }
+
+    public function testWebhookRecipeRetainsDirectCheckoutShapeAndExactNumbersAfterVerification(): void
+    {
+        $recipe = $this->recipe('verify-webhook.php');
+        $raw = '{"id":"event_example","name":"billing_checkout.created","version":"2026-08-21",'
+            . '"created_at":"2026-11-09T00:00:00Z","org_id":"org_example","data":{'
+            . '"id":"checkout_example","status":"ACTIVE","line_items":[{"quantity":2}],'
+            . '"amount":19.900000000000000001,"extra":9223372036854775808}}';
+        $timestamp = '1794132000000';
+        $signature = hash_hmac('sha256', $timestamp . $raw, 'synthetic-secret');
+        $event = $recipe('synthetic-secret', $raw, $timestamp, $signature, 0, static fn (): int => 1794132000000);
+        self::assertIsArray($event);
+        self::assertIsArray($event['data']);
+        self::assertArrayNotHasKey('object', $event['data']);
+        self::assertSame([['quantity' => 2]], $event['data']['line_items']);
+        self::assertSame('19.900000000000000001', $event['data']['amount']);
+        self::assertSame('9223372036854775808', $event['data']['extra']);
+        $this->expectException(WebhookVerificationException::class);
+        $recipe(
+            'synthetic-secret',
+            $raw . 'invalid json',
+            $timestamp,
+            $signature,
+            0,
+            static fn (): int => 1794132000000
+        );
+    }
 }
