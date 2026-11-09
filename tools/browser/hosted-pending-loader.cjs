@@ -1,21 +1,40 @@
 'use strict';
 
+const sourceStops = new Set(['not_observed', 'document_frame_unavailable', 'main_document_request',
+  'bound_document_request', 'main_navigated', 'bound_navigated', 'bound_detached',
+  'admission_case_reserve_elapsed', 'admission_loader_window_elapsed', 'release_case_reserve_elapsed',
+  'release_loader_window_elapsed', 'watchdog_shutdown', 'teardown']);
+
 // Only the separate fixed entry can select this profile. It never grants a new network role.
 class InstrumentSecurityScope {
-  #parent; #case; #start; #closed = false; #clock;
+  #parent; #case; #start; #closed = false; #clock; #firstStop = 'not_observed';
   constructor(parent, caseDeadline, clock = () => performance.now()) {
     if (!Number.isFinite(caseDeadline) || typeof clock !== 'function') throw new Error('Invalid security scope.');
     this.#parent = parent; this.#case = caseDeadline; this.#clock = clock;
   }
   enter() { this.#start ??= this.#clock(); }
-  close() { this.#closed = true; }
+  noteStop(reason) {
+    if (this.#firstStop === 'not_observed' && sourceStops.has(reason)) this.#firstStop = reason;
+  }
+  firstStop() { return this.#firstStop; }
+  close(reason = 'teardown') { this.#closed = true; this.noteStop(reason); }
   admissionRemaining() {
-    return this.#closed ? 0 : Math.max(0, Math.min(this.#case - 10000,
-      this.#start === undefined ? Infinity : this.#start + 15000) - this.#clock());
+    if (this.#closed) return 0;
+    let caseLimit, loaderLimit;
+    const remaining = Math.max(0, Math.min(caseLimit = this.#case - 10000,
+      loaderLimit = this.#start === undefined ? Infinity : this.#start + 15000) - this.#clock());
+    if (remaining <= 0) this.noteStop(caseLimit <= loaderLimit
+      ? 'admission_case_reserve_elapsed' : 'admission_loader_window_elapsed');
+    return remaining;
   }
   normalWindowRemaining() {
-    return this.#closed ? 0 : Math.max(0, Math.min(this.#case - 2000,
-      this.#start === undefined ? this.#case - 10000 : this.#start + 15000) - this.#clock());
+    if (this.#closed) return 0;
+    let caseLimit, loaderLimit, unstarted;
+    const remaining = Math.max(0, Math.min(caseLimit = this.#case - 2000,
+      loaderLimit = (unstarted = this.#start === undefined) ? this.#case - 10000 : this.#start + 15000) - this.#clock());
+    if (remaining <= 0) this.noteStop(unstarted || caseLimit <= loaderLimit
+      ? 'release_case_reserve_elapsed' : 'release_loader_window_elapsed');
+    return remaining;
   }
   renderEnabled() { return this.#parent.renderEnabled(); }
   bindingEvidence() { return this.#parent.bindingEvidence(); }
@@ -23,7 +42,7 @@ class InstrumentSecurityScope {
   normalSourceMatches(...args) { return this.#parent.normalSourceMatches(...args); }
   riskSessionMatches(...args) { return this.#parent.riskSessionMatches(...args); }
   evidence() { return { instrument_security_requested: true, instrument_ready: false,
-    financial_permission: false, security_graph_complete: false }; }
+    financial_permission: false, security_graph_complete: false, security_source_first_stop: this.#firstStop }; }
   toJSON() { throw new Error('Private security scope cannot be serialized.'); }
 }
 

@@ -7,7 +7,10 @@ namespace Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys;
 use RuntimeException;
 use SensitiveParameter;
 
-/** Private stdin handoff to development-only Node tooling; no URL enters argv or the environment. */
+/**
+ * Private stdin handoff to development-only Node tooling; no URL enters argv or the environment.
+ * @phpstan-type Evidence array<string,string|int|bool|array<string,string|int|bool>|array<string,array<string,int>>>
+ */
 final readonly class HostedBrowser
 {
     public function __construct(private string $node, private string $playwright)
@@ -43,7 +46,7 @@ final readonly class HostedBrowser
 
     /**
      * @param array{checkout_id:string,mode:string,currency:string} $expected SDK-verified own Checkout.
-     * @return array<string,string|int|bool|array<string,string|int|bool>> Counter maps and closed failure facts.
+     * @return Evidence Counter maps and closed failure facts.
      */
     public function inspect(
         #[SensitiveParameter] string $url,
@@ -212,7 +215,7 @@ final readonly class HostedBrowser
         return proc_get_status($process)['running'];
     }
 
-    /** @return array<string,string|int|bool|array<string,string|int|bool>> */
+    /** @return Evidence */
     public static function sanitize(
         #[SensitiveParameter] mixed $data,
         bool $render = false,
@@ -402,6 +405,7 @@ final readonly class HostedBrowser
                 }
                 $safe['denied_read_families'] = $families;
             }
+            $safe += self::readDenials($data);
         }
         if (
             in_array($data['payer_observation'] ?? null, [
@@ -786,6 +790,70 @@ final readonly class HostedBrowser
 
     /**
      * @param array<array-key,mixed> $data
+     * @return array{read_denial_reasons?:array<string,array<string,int>>,read_denial_counts_capped?:true}
+     */
+    private static function readDenials(#[SensitiveParameter] array $data): array
+    {
+        $roles = [
+            'method_config' => ['admission_closed', 'bound_frame_unavailable', 'initiator_unavailable',
+                'initiator_not_bound', 'render_scope_unavailable', 'payer_not_delivered', 'frame_not_delivered',
+                'reference_unavailable', 'slot_consumed', 'request_shape', 'query_shape', 'header_client_secret',
+                'header_api_version', 'header_trace', 'header_content_type', 'header_client_source',
+                'header_extra_or_forbidden', 'header_device', 'header_tracker'],
+            'customer' => ['admission_closed', 'observation_disabled', 'initiator_unavailable', 'initiator_detached',
+                'initiator_not_bound', 'initiator_document_mismatch', 'payer_not_delivered', 'window_unavailable',
+                'frame_not_delivered', 'reference_unavailable', 'request_shape', 'resource_binding', 'query_shape',
+                'slot_consumed', 'header_extra_or_forbidden', 'header_origin', 'header_client_secret',
+                'header_api_version', 'header_content_type', 'header_client_source', 'header_trace',
+                'header_device', 'header_tracker'],
+            'country' => ['admission_closed', 'observation_disabled', 'initiator_unavailable', 'initiator_detached',
+                'initiator_not_bound', 'initiator_document_mismatch', 'payer_not_delivered', 'window_unavailable',
+                'frame_not_delivered', 'reference_unavailable', 'request_shape', 'slot_consumed',
+                'header_extra_or_forbidden', 'header_origin'],
+        ];
+        $result = [];
+        $capped = false;
+        if (array_key_exists('read_denial_reasons', $data)) {
+            $observed = $data['read_denial_reasons'];
+            if (!is_array($observed)) {
+                throw new RuntimeException('Invalid sparse read-denial evidence.');
+            }
+            $safe = [];
+            foreach ($roles as $role => $reasons) {
+                if (!array_key_exists($role, $observed)) {
+                    continue;
+                }
+                $values = $observed[$role];
+                if (!is_array($values)) {
+                    throw new RuntimeException('Invalid sparse read-denial evidence.');
+                }
+                foreach ($reasons as $reason) {
+                    if (!array_key_exists($reason, $values)) {
+                        continue;
+                    }
+                    $count = $values[$reason];
+                    if (!is_int($count) || $count < 1 || $count > 1000000) {
+                        throw new RuntimeException('Invalid positive read-denial count.');
+                    }
+                    $safe[$role][$reason] = $count;
+                    $capped = $capped || $count === 1000000;
+                }
+            }
+            if ($safe !== []) {
+                $result['read_denial_reasons'] = $safe;
+            }
+        }
+        if (array_key_exists('read_denial_counts_capped', $data)) {
+            if ($data['read_denial_counts_capped'] !== true || !$capped) {
+                throw new RuntimeException('Invalid read-denial saturation evidence.');
+            }
+            $result['read_denial_counts_capped'] = true;
+        }
+        return $result;
+    }
+
+    /**
+     * @param array<array-key,mixed> $data
      * @return array<string,bool|string>
      */
     private static function instrumentEvidence(array $data, bool $observeRisk, bool $selectCard): array
@@ -809,6 +877,41 @@ final readonly class HostedBrowser
         $reason = $data['security_loader_wait_reason'] ?? null;
         if (in_array($reason, ['not_observed', 'duplicate', 'scope', 'promoted', 'expired'], true)) {
             $safe['security_loader_wait_reason'] = $reason;
+        }
+        $stops = ['not_observed', 'document_frame_unavailable', 'main_document_request',
+            'bound_document_request', 'main_navigated', 'bound_navigated', 'bound_detached',
+            'admission_case_reserve_elapsed', 'admission_loader_window_elapsed',
+            'release_case_reserve_elapsed', 'release_loader_window_elapsed', 'watchdog_shutdown', 'teardown'];
+        foreach (['security_source_first_stop', 'security_loader_scope_stop_at_failure'] as $field) {
+            if (in_array($data[$field] ?? null, $stops, true)) {
+                $safe[$field] = $data[$field];
+            }
+        }
+        if (
+            in_array($data['security_loader_validation'] ?? null, [
+                'not_reached', 'matched', 'withheld', 'exception',
+            ], true)
+        ) {
+            $safe['security_loader_validation'] = $data['security_loader_validation'];
+        }
+        if (
+            in_array($data['security_loader_first_failure_phase'] ?? null, [
+            'pre_send', 'send_guard', 'response_validation', 'before_delivery', 'delivery', 'loader_abort',
+            ], true)
+        ) {
+            $safe['security_loader_first_failure_phase'] = $data['security_loader_first_failure_phase'];
+        }
+        if (
+            in_array($data['security_loader_first_failure_gate'] ?? null, [
+            'http_status', 'claim_missing', 'disabled', 'policy_poisoned', 'render_unavailable',
+            'payer_not_delivered', 'normal_not_selected', 'scope_window_not_positive',
+            'body_not_buffer', 'body_limit', 'body_hash', 'validator_exception', 'observer_closed',
+            'caller_closing', 'admission_closed', 'case_bound_failed', 'frame_detached', 'attachment_unavailable',
+            'main_source_mismatch', 'bound_source_mismatch', 'unrelated_frame', 'original_probe_exception',
+            'operation_failed',
+            ], true)
+        ) {
+            $safe['security_loader_first_failure_gate'] = $data['security_loader_first_failure_gate'];
         }
         return $safe;
     }

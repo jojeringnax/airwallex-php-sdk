@@ -25,6 +25,9 @@ class HostedRiskObserver {
   #waiting = 0;
   #window = 8000;
   #instrumentSecurity = false;
+  #loaderValidation = 'not_reached';
+  #loaderFailure = null;
+  #loaderPhase = 'pre_send';
   constructor(parent, journal, playwright, fixture = null, caseDeadline = performance.now() + 40000, instrumentSecurity = false) {
     if (typeof instrumentSecurity !== 'boolean') throw new Error('Invalid security profile.');
     this.#instrumentSecurity = instrumentSecurity;
@@ -50,7 +53,26 @@ class HostedRiskObserver {
     return !this.#closed && performance.now() < this.#caseDeadline && this.#policy.authority(host, port);
   }
   noteDenied(value) { this.#policy.noteDenied(value); }
-  evidence() { return { ...this.#policy.evidence(), ...(this.#journal?.evidence() ?? {}) }; }
+  evidence() { return { ...this.#policy.evidence(), ...(this.#journal?.evidence() ?? {}),
+    ...(this.#instrumentSecurity ? { security_loader_validation: this.#loaderValidation,
+      ...(this.#loaderFailure ?? {}) } : {}) }; }
+
+  #loaderFailed(phase, gate) {
+    if (!this.#instrumentSecurity || this.#loaderFailure !== null) return;
+    let stop = 'not_observed';
+    try { stop = this.#parent.firstStop?.() ?? 'not_observed'; } catch { /* Diagnostic memo only. */ }
+    if (!['not_observed', 'document_frame_unavailable', 'main_document_request', 'bound_document_request',
+      'main_navigated', 'bound_navigated', 'bound_detached', 'admission_case_reserve_elapsed',
+      'admission_loader_window_elapsed', 'release_case_reserve_elapsed', 'release_loader_window_elapsed',
+      'watchdog_shutdown', 'teardown'].includes(stop)) stop = 'not_observed';
+    this.#loaderFailure = { security_loader_first_failure_phase: phase, security_loader_first_failure_gate: gate,
+      security_loader_scope_stop_at_failure: stop };
+  }
+
+  #loaderReject(value, phase, gate) {
+    if (value) this.#loaderFailed(phase, gate);
+    return value;
+  }
 
   #rememberDeadline() {
     const remaining = Math.min(this.#parent.normalWindowRemaining(), this.#caseDeadline - performance.now());
@@ -89,7 +111,23 @@ class HostedRiskObserver {
     return result;
   }
 
-  #original(frame, main, bound) {
+  #original(frame, main, bound, phase = null) {
+    if (this.#instrumentSecurity && phase !== null) {
+      try {
+        const inCase = performance.now() < this.#caseDeadline;
+        if (!inCase) { this.#loaderFailed(phase, 'case_bound_failed'); return inCase; }
+        const detached = frame.isDetached();
+        if (detached !== false) {
+          this.#loaderFailed(phase, detached === true ? 'frame_detached' : 'attachment_unavailable'); return false;
+        }
+        let reason = 'unrelated_frame';
+        const branch = (value, label) => { if (!value) reason = label; return value; };
+        const matched = (frame === main && branch(this.#parent.normalSourceMatches(frame.url(), true), 'main_source_mismatch'))
+          || (frame === bound && branch(this.#parent.normalSourceMatches(frame.url()), 'bound_source_mismatch'));
+        if (!matched) this.#loaderFailed(phase, reason);
+        return matched;
+      } catch { this.#loaderFailed(phase, 'original_probe_exception'); return false; }
+    }
     try {
       return performance.now() < this.#caseDeadline && frame.isDetached() === false
         && ((frame === main && this.#parent.normalSourceMatches(frame.url(), true))
@@ -131,12 +169,18 @@ class HostedRiskObserver {
         const claim = this.#policy.claimLoader(request.url(), request.method(), request.resourceType(),
           proof === null ? null : { ...proof, document, role,
             session: query.get('sessionId'), merchant: query.get('merchantId') });
-        if (!claim || this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)) return true;
+        if (!claim || this.#loaderReject(this.#closed, 'pre_send', 'observer_closed')
+            || this.#loaderReject(closing(), 'pre_send', 'caller_closing')
+            || this.#loaderReject(admissionClosed(), 'pre_send', 'admission_closed')
+            || !this.#original(frame, main, bound, 'pre_send')) return true;
         this.#beforeCookies = await this.#value(context.cookies());
         if (this.#beforeCookies.some(cookie => riskCookieNames.has(cookie.name))) {
           this.#policy.note('cookie_unbound'); return true;
         }
-        if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)) return true;
+        if (this.#loaderReject(this.#closed, 'pre_send', 'observer_closed')
+            || this.#loaderReject(closing(), 'pre_send', 'caller_closing')
+            || this.#loaderReject(admissionClosed(), 'pre_send', 'admission_closed')
+            || !this.#original(frame, main, bound, 'pre_send')) return true;
         // Retain construction before await; shutdown disposes every created public context.
         this.#rememberDeadline();
         if (this.#instrumentSecurity) {
@@ -147,12 +191,37 @@ class HostedRiskObserver {
           const deadline = Math.min(this.#deadline, this.#caseDeadline,
             performance.now() + this.#parent.normalWindowRemaining());
           const response = await this.#value(this.#journal.run(selected, async () => {
-            if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)
-                || !this.#policy.live()) throw new Error('Loader scope is unavailable.');
+            if (this.#loaderReject(this.#closed, 'pre_send', 'observer_closed')
+                || this.#loaderReject(closing(), 'pre_send', 'caller_closing')
+                || this.#loaderReject(admissionClosed(), 'pre_send', 'admission_closed')
+                || !this.#original(frame, main, bound, 'pre_send')
+                || !this.#policy.live(gate => this.#loaderFailed('pre_send', gate))) throw new Error('Loader scope is unavailable.');
+            this.#loaderPhase = 'send_guard';
             return this.#relay.send(target, 'GET', 'loader', selected.headers, selected.body, deadline,
-              () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound));
-          }, value => value.status === 200 && this.#policy.verifyLoader(value.body), deadline));
-          if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) return true;
+              () => !this.#loaderReject(this.#closed, 'send_guard', 'observer_closed')
+                && !this.#loaderReject(closing(), 'send_guard', 'caller_closing')
+                && !this.#loaderReject(admissionClosed(), 'send_guard', 'admission_closed')
+                && this.#original(frame, main, bound, 'send_guard'));
+          }, value => {
+            this.#loaderPhase = 'response_validation';
+            try {
+              const status = value.status === 200;
+              if (!status) this.#loaderFailed('response_validation', 'http_status');
+              const matched = status && this.#policy.verifyLoader(value.body,
+                gate => this.#loaderFailed('response_validation', gate));
+              this.#loaderValidation = matched ? 'matched' : 'withheld';
+              return matched;
+            } catch (error) {
+              this.#loaderValidation = 'exception'; this.#loaderFailed('response_validation', 'validator_exception');
+              throw error;
+            }
+          }, deadline));
+          this.#loaderPhase = 'before_delivery';
+          if (this.#loaderReject(this.#closed, 'before_delivery', 'observer_closed')
+              || this.#loaderReject(closing(), 'before_delivery', 'caller_closing')
+              || !this.#original(frame, main, bound, 'before_delivery')
+              || !this.#policy.live(gate => this.#loaderFailed('before_delivery', gate))) return true;
+          this.#loaderPhase = 'delivery';
           await this.#value(route.fulfill({ status: response.status,
             headers: this.#policy.responseHeaders(response), body: response.body }));
           delivered = true;
@@ -186,9 +255,10 @@ class HostedRiskObserver {
         } finally {
           if (!await this.#bounded(this.#disposeResponse(response))) this.#cleanupFailed = true;
         }
-      } catch { this.#policy.poison('response'); }
+      } catch { this.#loaderFailed(this.#loaderPhase, 'operation_failed'); this.#policy.poison('response'); }
       finally {
         if (!delivered && !await this.#bounded(Promise.resolve().then(() => route.abort('blockedbyclient')))) {
+          this.#loaderFailed('loader_abort', 'operation_failed');
           this.#cleanupFailed = true; this.#policy.poison('shutdown');
         }
       }
