@@ -96,6 +96,7 @@ The files below return a closure or a map of named application recipes. Load the
 | Preserve and restore an applicable finite end | [Billing lifecycle](../examples/billing-lifecycle.php): `schedule_finite_end`, then separately authorized `restore_finite_end`, with private durable snapshot callbacks |
 | Replace an expired source and observe recovery | [Billing lifecycle](../examples/billing-lifecycle.php): `replace_source_and_observe` |
 | Invoice PDF/hosted links | [Billing lifecycle](../examples/billing-lifecycle.php): `read_invoice` |
+| Subscription items and Invoice line items | [Item reads](../examples/billing-item-reads.php): individual reads and explicit first pages using the [accepted signatures](consumer-interfaces.md#subordinate-reads) |
 | Payments Customer/Consent setup and card verification | [Payments lifecycle](../examples/payments-lifecycle.php): `prepare_customer_consent`, then `verify_card_consent` after approved instrument collection |
 | Authorized charge using a verified saved Consent | [Saved Consent](../examples/payments-saved-consent.php) |
 | One-time customer-initiated card payment | [Payments lifecycle](../examples/payments-lifecycle.php): `one_time_card_payment` |
@@ -183,7 +184,6 @@ Keep these delegated provisional choices visible before adopting the development
 
 | Review | Current implementation choice |
 | --- | --- |
-| [#61](https://github.com/jojeringnax/airwallex-php-sdk/issues/61) | Subordinate Subscription/Invoice read method shapes |
 | [#64](https://github.com/jojeringnax/airwallex-php-sdk/issues/64) | Initial `FLAT`/`PER_UNIT` creation subset pending non-metered tiered-model review |
 
 The [connected-account evidence](connected-account-contracts.md#evidence-still-needed), [Billing capability gates](billing-capabilities.md#delivery-and-evidence-gates) and [webhook integration evidence](webhook-contracts.md#remaining-integration-evidence) remain authoritative. [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) owns the applicable sandbox journeys/provider confirmations; [#44](https://github.com/jojeringnax/airwallex-php-sdk/issues/44) owns the release-readiness/artifact record. Blocked or unavailable evidence is not a pass. In particular, organization Billing authorization, eligible collection-account linkage, source-change collection, schedule reversal, document renewal and matching-version actual webhook envelopes are not established by synthetic examples.
