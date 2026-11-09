@@ -949,7 +949,7 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         $priorPath = $this->fixture['prior'];
         $priorBytes = file_get_contents($priorPath);
         self::assertIsString($priorBytes);
-        $sourcePath = dirname(__DIR__, 4) . '/tests/Support/Sandbox/Journeys/AlipayConsentReconciliation.php';
+        $sourcePath = self::sdkRoot() . '/tests/Support/Sandbox/Journeys/AlipayConsentReconciliation.php';
         $source = file_get_contents($sourcePath);
         self::assertIsString($source);
         $sync = static function ($stream) use (
