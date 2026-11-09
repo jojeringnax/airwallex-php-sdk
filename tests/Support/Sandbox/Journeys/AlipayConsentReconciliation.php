@@ -273,6 +273,98 @@ final class AlipayConsentReconciliation
         return $safe + ['source' => $source, 'tool_sha256' => $toolHash, ...$transport->report()];
     }
 
+    /** A sensitive validated-object seam; no caller-supplied target array or inventory adoption. */
+    public function cleanupContext(string $toolHash): string
+    {
+        $this->unchanged();
+        return hash('sha256', json_encode(['profile' => 'original_consent_disable_once',
+            'auth_context' => $this->context, 'prior_sha256' => $this->digest,
+            'source' => SourceEvidence::capture(), 'tool_sha256' => $toolHash], JSON_THROW_ON_ERROR));
+    }
+
+    public function cleanupClaimPath(): string
+    {
+        $this->unchanged();
+        $key = hash('sha256', self::ORIGINAL . "\0" . $this->context . "\0" . $this->marker . "\0" . $this->consent);
+        return $this->directory . '/.consent-disable-' . $key . '.claim';
+    }
+
+    /** @return array<string,mixed> Private claim metadata contains no action UUID or raw resource target. */
+    public function cleanupClaim(RunLedger $ledger, string $toolHash): array
+    {
+        return ['profile' => 'original_consent_disable_once', 'run_id' => $ledger->runId(),
+            'prior_sha256' => $this->digest, 'original_source' => self::ORIGINAL,
+            'source' => $ledger->evidence()['source'], 'auth_context' => $this->context,
+            'case_context' => $this->cleanupContext($toolHash), 'tool_sha256' => $toolHash];
+    }
+
+    public function assertCleanupOriginal(SandboxSession $session): void
+    {
+        $this->unchanged();
+        if ($session->isOrganization() || $session->contextFingerprint() !== $this->context) {
+            throw new RuntimeException('The original ordinary account context changed.');
+        }
+    }
+
+    public function assertCleanupTargets(
+        #[SensitiveParameter] string $customer,
+        #[SensitiveParameter] string $consent
+    ): void {
+        $this->unchanged();
+        if ($customer !== $this->customer || $consent !== $this->consent) {
+            throw new RuntimeException('Cleanup targets must come from the validated original proof.');
+        }
+    }
+
+    public function bindCleanupTransport(
+        AlipayConsentReconciliationTransport $transport,
+        RunLedger $ledger,
+        string $context,
+        \Closure $gate,
+    ): void {
+        $this->unchanged();
+        $transport->bind($this->customer, $this->consent, $ledger, $context, $gate, $this);
+    }
+
+    public function assertCleanupResource(#[SensitiveParameter] stdClass $object, string $role): void
+    {
+        if (str_starts_with($role, 'customer_')) {
+            self::same($object, ['id' => $this->customer, 'merchant_customer_id' => $this->marker]);
+        } else {
+            self::same($object, ['id' => $this->consent, 'customer_id' => $this->customer,
+                'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled']);
+            if (property_exists($object, 'payment_method') && $object->payment_method !== null) {
+                $method = self::object($object->payment_method);
+                if (property_exists($method, 'type') && $method->type !== 'alipayhk') {
+                    throw new RuntimeException('The original method profile changed.');
+                }
+            }
+        }
+        $this->metadata($object);
+    }
+
+    public function readCleanupCustomer(SandboxSession $session): void
+    {
+        $this->assertCleanupOriginal($session);
+        $session->client->payments()->customers()->retrieve($this->customer);
+    }
+
+    public function readCleanupConsent(SandboxSession $session): void
+    {
+        $this->assertCleanupOriginal($session);
+        $session->client->payments()->paymentConsents()->retrieve($this->consent);
+    }
+
+    public function disableCleanupConsent(
+        SandboxSession $session,
+        AlipayConsentReconciliationTransport $transport,
+        string $uuid,
+    ): void {
+        $this->assertCleanupOriginal($session);
+        $transport->assertCleanupArmed($this, $uuid);
+        $session->client->payments()->paymentConsents()->disable($this->consent, ['request_id' => $uuid]);
+    }
+
     private function metadata(stdClass $object): void
     {
         $metadata = self::object($object->metadata ?? null);

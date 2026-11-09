@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys;
 
 use Closure;
+use DateTimeImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\StreamHandler;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Utils;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -39,6 +41,20 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
     private ?int $status = null;
     private ?stdClass $native = null;
     private string $nativeRole = '';
+    private ?AlipayConsentReconciliation $cleanupOriginal = null;
+    /** @var array<string,string> */
+    private array $cleanupCredentials = [];
+    /** @var (Closure():int)|null */
+    private ?Closure $cleanupUnixClock = null;
+    private int $cleanupLastUnix = 0;
+    private string $cleanupToken = '';
+    private int $cleanupExpiry = 0;
+    private int $cleanupStage = 0;
+    private bool $cleanupArmed = false;
+    private bool $cleanupInitialRpm = false;
+    private bool $cleanupPossible = false;
+    private int $disableInvocations = 0;
+    private ?string $cleanupUuid = null;
 
     /** @param (Closure():float)|null $clock Monotonic fixture only. */
     public function __construct(
@@ -56,6 +72,36 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
         $this->assertTime();
     }
 
+    /** Named closed mode; the original constructor and read-only profile remain unchanged.
+     * @param (Closure():float)|null $clock
+     * @param (Closure():int)|null $unixClock
+     */
+    public static function forCleanup(
+        #[SensitiveParameter] Configuration $configuration,
+        AlipayConsentReconciliation $original,
+        ?ClientInterface $http = null,
+        ?Closure $clock = null,
+        ?float $started = null,
+        ?Closure $unixClock = null,
+    ): self {
+        $original->assertCleanupOriginal(new SandboxSession($configuration, 'account', $http, $unixClock));
+        $baseClock = $clock ?? static fn (): float => hrtime(true) / 1_000_000_000;
+        $last = null;
+        $guardedClock = static function () use ($baseClock, &$last): float {
+            $now = $baseClock();
+            if (!is_finite($now) || ($last !== null && $now < $last)) {
+                throw new ProtocolException('The cleanup monotonic clock changed.');
+            }
+            $last = $now;
+            return $now;
+        };
+        $transport = new self($configuration->accountId(), $http, $guardedClock, $started);
+        $transport->cleanupOriginal = $original;
+        $transport->cleanupCredentials = $configuration->credentials()->headers();
+        $transport->cleanupUnixClock = $unixClock ?? time(...);
+        return $transport;
+    }
+
     /** @param Closure():void $gate Current source/context/prior/credential proof after durability. */
     public function bind(
         #[SensitiveParameter] string $customer,
@@ -63,9 +109,16 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
         RunLedger $ledger,
         string $context,
         Closure $gate,
+        ?AlipayConsentReconciliation $original = null,
     ): void {
-        if ($this->ledger !== null || $customer === $consent) {
+        if (
+            ($this->cleanupOriginal !== null && $this->cleanupOriginal !== $original)
+            || $this->ledger !== null || $customer === $consent
+        ) {
             throw new ProtocolException('One fresh read-only binding is required.');
+        }
+        if ($this->cleanupOriginal !== null) {
+            $this->cleanupOriginal->assertCleanupTargets($customer, $consent);
         }
         $this->customerPath = '/api/v1/pa/customers/' . AlipayConsentReuseTransport::identity($customer);
         $this->consentPath = '/api/v1/pa/payment_consents/' . AlipayConsentReuseTransport::identity($consent);
@@ -113,8 +166,12 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
             'transport_poisoned' => $this->poisoned];
     }
 
+    /** @throws ProtocolException */
     public function sendRequest(#[SensitiveParameter] RequestInterface $request): ResponseInterface
     {
+        if ($this->cleanupOriginal !== null) {
+            return $this->cleanupRequest($request);
+        }
         $this->native = null;
         $this->nativeRole = '';
         try {
@@ -157,6 +214,206 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
         }
     }
 
+    public function armCleanupDisable(string $uuid): void
+    {
+        $this->proof();
+        if (
+            $this->cleanupOriginal === null || !$this->cleanupInitialRpm || $this->cleanupUuid !== null
+            || $this->cleanupStage !== 4 || $this->cleanupArmed
+            || $this->cleanupPossible || $this->nativeRole !== 'consent_guard'
+            || ($this->native->status ?? null) !== 'REQUIRES_PAYMENT_METHOD'
+            || preg_match('/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/D', $uuid) !== 1
+        ) {
+            throw new ProtocolException('No fresh guarded Disable can be armed.');
+        }
+        $this->ledger?->reserveCleanupCompletion($this->context);
+        $this->cleanupUuid = $uuid;
+        $this->cleanupArmed = true;
+    }
+
+    public function assertCleanupArmed(AlipayConsentReconciliation $original, string $uuid): void
+    {
+        $this->proof();
+        if ($this->cleanupOriginal !== $original || !$this->cleanupArmed || $this->cleanupUuid !== $uuid) {
+            throw new ProtocolException('The Disable does not belong to the validated original proof.');
+        }
+    }
+
+    /** @return array{disable_possible:bool,disable_invocations:int} */
+    public function cleanupReport(): array
+    {
+        return ['disable_possible' => $this->cleanupPossible, 'disable_invocations' => $this->disableInvocations];
+    }
+
+    private function cleanupRequest(RequestInterface $request): ResponseInterface
+    {
+        $this->native = null;
+        $this->nativeRole = '';
+        try {
+            $this->proof();
+            $body = $request->getBody();
+            if (!$body->isReadable() || !$body->isSeekable() || $body->tell() !== 0) {
+                throw new ProtocolException('The exact cleanup packet must start at cursor zero.');
+            }
+            try {
+                $raw = $body->read(16385);
+                if (strlen($raw) > 16384 || !$body->eof()) {
+                    throw new ProtocolException('The cleanup request body exceeded its bound.');
+                }
+            } finally {
+                $body->seek(0);
+            }
+            $prepared = new Request(
+                $request->getMethod(),
+                (string) $request->getUri(),
+                $request->getHeaders(),
+                $raw,
+                $request->getProtocolVersion()
+            );
+            $uri = $prepared->getUri();
+            if (
+                $uri->getScheme() !== 'https' || $uri->getHost() !== 'api.sandbox.airwallex.com'
+                || $uri->getPort() !== null || $uri->getUserInfo() !== '' || $uri->getQuery() !== ''
+                || $uri->getFragment() !== '' || $prepared->getProtocolVersion() !== '1.1'
+            ) {
+                throw new ProtocolException('Only the exact cleanup Sandbox packet is admitted.');
+            }
+            $login = $prepared->getMethod() === 'POST' && $uri->getPath() === '/api/v1/authentication/login';
+            $disable = $prepared->getMethod() === 'POST' && $uri->getPath() === $this->consentPath . '/disable';
+            $this->headers($disable ? $prepared->withoutHeader('Content-Type') : $prepared, $login);
+            $headerBytes = 2;
+            foreach ($prepared->getHeaders() as $header => $values) {
+                foreach ($values as $value) {
+                    $headerBytes += strlen($header) + 2 + strlen($value) + 2;
+                    if ($headerBytes > 16384 || strlen($value) > 8192) {
+                        throw new ProtocolException('The exact prepared cleanup header block exceeded its bound.');
+                    }
+                }
+            }
+            if ($login) {
+                foreach ($this->cleanupCredentials as $name => $value) {
+                    if ($prepared->getHeader($name) !== [$value]) {
+                        throw new ProtocolException('The isolated cleanup credentials changed.');
+                    }
+                }
+                if ($raw !== '' || $this->logins >= 2) {
+                    throw new ProtocolException('The finite cleanup login role is exhausted.');
+                }
+                ++$this->logins;
+                $role = 'login';
+                $name = 'login_' . $this->logins;
+            } else {
+                $this->cleanupTokenValid();
+                if ($prepared->getHeader('Authorization') !== ['Bearer ' . $this->cleanupToken]) {
+                    throw new ProtocolException('Only the current isolated token is accepted.');
+                }
+                if ($disable) {
+                    $literal = KlarnaIntentReconciliation::assertUniqueJsonObject($raw);
+                    if (
+                        !$this->cleanupArmed || $this->cleanupPossible || $this->cleanupStage !== 4
+                        || get_object_vars($literal) !== ['request_id' => $this->cleanupUuid]
+                        || $prepared->getHeader('Content-Type') !== ['application/json']
+                    ) {
+                        throw new ProtocolException('The exact one-use Disable identity changed.');
+                    }
+                    $this->cleanupArmed = false;
+                    $role = $name = 'disable';
+                } else {
+                    $roles = ['customer_initial', 'consent_initial', 'customer_guard', 'consent_guard',
+                        'consent_readback'];
+                    $index = $this->cleanupStage === 5 ? 4 : $this->cleanupStage;
+                    $role = $name = $roles[$index] ?? '';
+                    $expected = str_starts_with($role, 'customer_') ? $this->customerPath : $this->consentPath;
+                    if (
+                        $prepared->getMethod() !== 'GET' || $raw !== '' || $role === ''
+                        || $this->cleanupStage === 4 || $this->cleanupStage > 5 || $uri->getPath() !== $expected
+                    ) {
+                        throw new ProtocolException('No repeated or unbound cleanup read is permitted.');
+                    }
+                    str_starts_with($role, 'customer_') ? ++$this->customerAttempts : ++$this->consentAttempts;
+                }
+            }
+            $facts = ['method' => $prepared->getMethod(), 'protocol' => $prepared->getProtocolVersion(),
+                'target_sha256' => hash('sha256', (string) $prepared->getUri()),
+                'prepared_headers_sha256' => hash('sha256', json_encode($prepared->getHeaders(), JSON_THROW_ON_ERROR)),
+                'body_sha256' => hash('sha256', $raw)];
+            $this->note($name . '_prepared', $facts);
+            if ($disable) {
+                $this->cleanupPossible = true;
+            }
+            $this->note($name . '_possible_invocation', $facts);
+            $this->proof();
+            if (!$login) {
+                $this->cleanupTokenValid();
+            }
+            $now = ($this->clock)();
+            $remaining = floor(120 - ($now - $this->started));
+            if (!is_finite($now) || $now < $this->started || $remaining < 1 || $this->invocations >= 8) {
+                throw new ProtocolException('The original cleanup invocation budget is unavailable.');
+            }
+            ++$this->invocations;
+            if ($disable) {
+                ++$this->disableInvocations;
+            }
+            $response = $this->http instanceof Client ? $this->http->send($prepared, [
+                'stream' => true, 'verify' => true, 'allow_redirects' => false, 'cookies' => false,
+                'http_errors' => false, 'decode_content' => false, 'proxy' => '',
+                'timeout' => min(10, $remaining), 'connect_timeout' => min(10, $remaining),
+                'read_timeout' => min(5, $remaining),
+            ]) : $this->http->sendRequest($prepared);
+            $response = $this->response($response, $role, $name, $now);
+            $this->proof();
+            if (
+                in_array($role, ['disable', 'consent_readback'], true)
+                && ($this->native->status ?? null) !== 'DISABLED'
+            ) {
+                throw new ProtocolException('The selected cleanup terminal state was not proven.');
+            }
+            if ($role === 'consent_initial') {
+                $this->cleanupInitialRpm = ($this->native->status ?? null) === 'REQUIRES_PAYMENT_METHOD';
+            }
+            if (!$login) {
+                ++$this->cleanupStage;
+            }
+            return $response;
+        } catch (Throwable) {
+            $this->poisoned = true;
+            throw new ProtocolException('The bounded cleanup packet or its durable proof failed.');
+        }
+    }
+
+    private function cleanupLogin(stdClass $native): void
+    {
+        $token = $native->token ?? null;
+        $expires = $native->expires_at ?? null;
+        if (
+            !is_string($token) || $token === '' || preg_match('/[\x00-\x20\x7f]/', $token) === 1
+            || !is_string($expires) || preg_match(
+                '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)$/D',
+                $expires
+            ) !== 1
+        ) {
+            throw new ProtocolException('The native cleanup token is unavailable.');
+        }
+        $date = new DateTimeImmutable($expires);
+        $errors = DateTimeImmutable::getLastErrors();
+        if ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)) {
+            throw new ProtocolException('The cleanup token expiration is invalid.');
+        }
+        $this->cleanupToken = $token;
+        $this->cleanupExpiry = $date->getTimestamp();
+        $this->cleanupTokenValid();
+    }
+
+    private function cleanupTokenValid(): void
+    {
+        $now = ($this->cleanupUnixClock ?? time(...))();
+        if ($now < 0 || $now < $this->cleanupLastUnix || $this->cleanupToken === '' || $this->cleanupExpiry <= $now) {
+            throw new ProtocolException('The cleanup token expired or its wall clock changed.');
+        }
+        $this->cleanupLastUnix = $now;
+    }
+
     private function proof(): void
     {
         $this->assertTime();
@@ -165,6 +422,9 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
         }
         ($this->gate)();
         $this->ledger->assertContext($this->context);
+        if ($this->cleanupOriginal !== null) {
+            $this->ledger->assertCleanupDurable($this->context);
+        }
         $this->assertTime();
     }
 
@@ -248,9 +508,13 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
         }
     }
 
-    private function response(ResponseInterface $response, string $role, string $name): ResponseInterface
-    {
-        $started = ($this->clock)();
+    private function response(
+        ResponseInterface $response,
+        string $role,
+        string $name,
+        ?float $invoked = null,
+    ): ResponseInterface {
+        $started = $invoked ?? ($this->clock)();
         $stream = $response->getBody();
         try {
             $status = $response->getStatusCode();
@@ -258,6 +522,10 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
                 throw new ProtocolException('The bounded HTTP status is unavailable.');
             }
             $this->status = $status;
+            if ($this->cleanupOriginal !== null && $status !== ($role === 'login' ? 201 : 200)) {
+                $this->note($name . '_result', ['http_status' => (string) $status]);
+                throw new ProtocolException('The selected cleanup HTTP role was rejected.');
+            }
             $headerBytes = 2; // Final CRLF in the private represented PSR response block.
             foreach ($response->getHeaders() as $key => $values) {
                 foreach ($values as $value) {
@@ -271,6 +539,7 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
             $media = $response->getHeader('Content-Type');
             if (
                 !in_array($response->getHeader('Content-Encoding'), [[], ['identity']], true)
+                || ($this->cleanupOriginal !== null && count($media) !== 1)
                 || count($length) > 1 || count($media) > 1
                 || ($media !== [] && preg_match('/^application\/json(?:\s*;\s*charset=utf-8)?$/iD', $media[0]) !== 1)
                 || ($length !== [] && (preg_match('/^[0-9]+$/D', $length[0]) !== 1
@@ -285,7 +554,7 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
                 $part = $stream->read(min(8192, 65537 - strlen($raw)));
                 $this->assertTime($started);
                 $this->bytes += strlen($part);
-                if ($this->bytes > 262144) {
+                if ($this->bytes > ($this->cleanupOriginal !== null ? 524288 : 262144)) {
                     throw new ProtocolException('The cumulative response bound failed.');
                 }
                 if ($part === '') {
@@ -307,6 +576,13 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
         }
         $this->assertTime($started); // Also reject late completion of close.
         $native = KlarnaIntentReconciliation::assertUniqueJsonObject($raw);
+        if ($this->cleanupOriginal !== null) {
+            if ($role === 'login') {
+                $this->cleanupLogin($native);
+            } else {
+                $this->cleanupOriginal->assertCleanupResource($native, $role);
+            }
+        }
         $facts = ['http_status' => (string) $status];
         if ($role !== 'login') {
             $facts += ['response_sha256' => hash('sha256', $raw), 'private_json' => $raw];
@@ -343,13 +619,15 @@ final class AlipayConsentReconciliationTransport implements ClientInterface
         if ($this->ledger === null) {
             throw new ProtocolException('The private journal is unavailable.');
         }
-        $this->ledger->recordObservation('consent_readonly_' . $name, $facts, $this->context);
+        $this->ledger->recordObservation(($this->cleanupOriginal !== null ? 'consent_cleanup_' : 'consent_readonly_')
+            . $name, $facts, $this->context);
     }
 
     /** @return array<string,string> */
     public function __debugInfo(): array
     {
-        return ['transport' => '[private GET-only Consent observation]'];
+        return ['transport' => $this->cleanupOriginal !== null
+            ? '[private bounded original Consent cleanup]' : '[private GET-only Consent observation]'];
     }
 
     /** @return array<string,never> */
