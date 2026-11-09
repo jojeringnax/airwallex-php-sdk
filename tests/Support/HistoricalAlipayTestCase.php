@@ -140,13 +140,9 @@ abstract class HistoricalAlipayTestCase extends TestCase
     /** @return resource */
     private static function outputPipe(mixed $pipes)
     {
-        if (!is_array($pipes)) {
-            throw new RuntimeException('Historical SDK source pipes are unavailable.');
+        if (!is_array($pipes) || !is_resource($pipes[1] ?? null)) {
+            throw new RuntimeException('Historical source extraction requires an output stream.');
         }
-        $output = $pipes[1] ?? null;
-        if (!is_resource($output)) {
-            throw new RuntimeException('Historical SDK source output is unavailable.');
-        }
-        return $output;
+        return $pipes[1];
     }
 }
