@@ -44,9 +44,9 @@ Both Billing models are included to cover platform service subscriptions and mer
 
 For invoice documents, self-service, checkout UI modes, trials and cancellation/grace boundaries, consult [Billing capability boundaries](billing-capabilities.md).
 
-## Provisional Price-model boundary
+## Price-model coverage
 
-Initial Price creation currently implements `FLAT` and `PER_UNIT`, following the selected work in [#19](https://github.com/jojeringnax/airwallex-php-sdk/issues/19). The coordinator provisionally retains this subset while [decision review #64](https://github.com/jojeringnax/airwallex-php-sdk/issues/64) determines whether non-metered `VOLUME`/`GRADUATED` pricing belongs in the initial release. This is not a human-approved reduction of broader capability scope, and those models are not automatically classified as deferred usage billing. The review issue records rationale, alternatives, compatibility and reversal options. [Billing resources](billing-resources.md) documents the implemented boundary and validation.
+Initial Price creation includes nonmetered `FLAT`, `PER_UNIT`, `VOLUME` and `GRADUATED` models, for one-time or recurring purchases. Quantity tiers are accepted initial-release scope under the [decision in #64](https://github.com/jojeringnax/airwallex-php-sdk/issues/64#issuecomment-6749373954): they support quantity-based catalogue pricing independently of metered usage. Metered billing, usage-event reporting and usage-priced Rate Cards remain deferred under [#40](https://github.com/jojeringnax/airwallex-php-sdk/issues/40) / [#41](https://github.com/jojeringnax/airwallex-php-sdk/issues/41). [Billing resources](billing-resources.md#price-models-and-tiers) owns the request rules and verified sources.
 
 ## Provisional Subscription Update additions boundary
 

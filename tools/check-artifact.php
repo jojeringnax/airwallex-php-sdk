@@ -62,7 +62,6 @@ try {
         'required_evidence' => ['https://github.com/jojeringnax/airwallex-php-sdk/issues/42'],
         'decision_reviews' => [
             'https://github.com/jojeringnax/airwallex-php-sdk/issues/60',
-            'https://github.com/jojeringnax/airwallex-php-sdk/issues/64',
             'https://github.com/jojeringnax/airwallex-php-sdk/issues/91',
             'https://github.com/jojeringnax/airwallex-php-sdk/issues/95',
             'https://github.com/jojeringnax/airwallex-php-sdk/issues/101',

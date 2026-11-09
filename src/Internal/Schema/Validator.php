@@ -124,7 +124,7 @@ final class Validator
             }
             foreach (['minimum', 'maximum'] as $bound) {
                 if (isset($schema[$bound]) && (is_int($schema[$bound]) || is_string($schema[$bound]))) {
-                    $comparison = self::compare($value, (string) $schema[$bound]);
+                    $comparison = self::compareDecimals($value, (string) $schema[$bound]);
                     if (($bound === 'minimum' && $comparison < 0) || ($bound === 'maximum' && $comparison > 0)) {
                         self::fail();
                     }
@@ -181,7 +181,8 @@ final class Validator
         }
     }
 
-    private static function compare(string $left, string $right): int
+    /** Compare already validated decimal strings without floating-point conversion. */
+    public static function compareDecimals(string $left, string $right): int
     {
         $leftNegative = str_starts_with($left, '-');
         $rightNegative = str_starts_with($right, '-');

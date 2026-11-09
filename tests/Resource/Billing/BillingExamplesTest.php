@@ -16,6 +16,8 @@ final class BillingExamplesTest extends HttpTestCase
             [201, '{"id":"prd_fixture"}'],
             [201, '{"id":"price_monthly","flat_amount":19.90}'],
             [201, '{"id":"price_seat","unit_amount":2.50}'],
+            [201, '{"id":"price_volume","pricing_model":"VOLUME"}'],
+            [201, '{"id":"price_graduated","pricing_model":"GRADUATED"}'],
         ]);
         $example = require dirname(__DIR__, 3) . '/examples/billing-catalogue.php';
         self::assertInstanceOf(Closure::class, $example);
@@ -25,10 +27,26 @@ final class BillingExamplesTest extends HttpTestCase
             'product' => ['id' => 'prd_fixture'],
             'monthly' => ['id' => 'price_monthly', 'flat_amount' => '19.90'],
             'per_seat' => ['id' => 'price_seat', 'unit_amount' => '2.50'],
+            'volume' => ['id' => 'price_volume', 'pricing_model' => 'VOLUME'],
+            'graduated' => ['id' => 'price_graduated', 'pricing_model' => 'GRADUATED'],
         ], $result);
-        self::assertCount(4, $http->requests);
+        self::assertCount(6, $http->requests);
         self::assertStringContainsString('"flat_amount":19.90', (string) $http->requests[2]->getBody());
         self::assertStringContainsString('"unit_amount":2.50', (string) $http->requests[3]->getBody());
+        self::assertSame(
+            '{"request_id":"<persisted-volume-price-request-id>","product_id":"prd_fixture",'
+            . '"currency":"EUR","pricing_model":"VOLUME","metered":false,'
+            . '"recurring":{"period":1,"period_unit":"MONTH"},'
+            . '"tiers":[{"upper_bound":50,"unit_amount":2.50},{"unit_amount":2.00}]}',
+            (string) $http->requests[4]->getBody(),
+        );
+        self::assertSame(
+            '{"request_id":"<persisted-graduated-price-request-id>","product_id":"prd_fixture",'
+            . '"currency":"EUR","pricing_model":"GRADUATED","metered":false,"recurring":null,'
+            . '"tiers":[{"upper_bound":50,"unit_amount":2.50,"flat_amount":0.00},'
+            . '{"unit_amount":2.00,"flat_amount":5.00}]}',
+            (string) $http->requests[5]->getBody(),
+        );
     }
 
     public function testCustomerAndHostedSignupExampleUsesDistinctExplicitContext(): void
