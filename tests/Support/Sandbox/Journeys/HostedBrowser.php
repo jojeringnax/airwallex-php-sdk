@@ -78,6 +78,8 @@ final readonly class HostedBrowser
         ) {
             throw new RuntimeException('Checkout preflight URL is not an approved candidate.');
         }
+        $journal = $riskJournal !== null && $mode === HostedSecurityMode::InstrumentSecurity
+            ? $riskJournal->instrumentAdapter(self::sourceHashes($mode)) : $riskJournal;
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         if ($observeRisk) {
             // Anonymous pipes only: child writes 3, reads 4. Chrome receives neither descriptor.
@@ -95,8 +97,6 @@ final readonly class HostedBrowser
             throw new RuntimeException('Browser preflight could not start.');
         }
         [$input, $output, $errors, $journalRead, $journalAck] = self::pipes($pipes);
-        $journal = $riskJournal !== null && $mode === HostedSecurityMode::InstrumentSecurity
-            ? $riskJournal->instrumentAdapter(self::sourceHashes($mode)) : $riskJournal;
         try {
             $handoff = [
                 'url' => $url, 'expected' => $expected, 'render' => $render,
@@ -245,29 +245,7 @@ final readonly class HostedBrowser
         }
         $safe = ['result' => $result, 'reason' => $reason, 'card_entry_enabled' => false];
         if ($mode === HostedSecurityMode::InstrumentSecurity) {
-            if (
-                !$observeRisk || $selectCard || ($data['instrument_security_requested'] ?? null) !== true
-                || ($data['instrument_ready'] ?? null) !== false || ($data['financial_permission'] ?? null) !== false
-                || ($data['security_graph_complete'] ?? null) !== false
-            ) {
-                throw new RuntimeException('Invalid no-input security evidence.');
-            }
-            $safe += ['instrument_security_requested' => true, 'instrument_ready' => false,
-                'financial_permission' => false, 'security_graph_complete' => false];
-            foreach (['security_loader_candidate', 'security_loader_promoted'] as $field) {
-                if (is_bool($data[$field] ?? null)) {
-                    $safe[$field] = $data[$field];
-                }
-            }
-            if (
-                in_array(
-                    $data['security_loader_wait_reason'] ?? null,
-                    ['not_observed', 'duplicate', 'scope', 'promoted', 'expired'],
-                    true
-                )
-            ) {
-                $safe['security_loader_wait_reason'] = $data['security_loader_wait_reason'];
-            }
+            $safe += self::instrumentEvidence($data, $observeRisk, $selectCard);
         }
         $failurePhases = ['configuration', 'tooling_load', 'browser_startup', 'proxy_start', 'browser_launch',
             'browser_context', 'page_setup', 'navigation', 'route_action', 'watchdog', 'visible_label',
@@ -804,6 +782,35 @@ final readonly class HostedBrowser
             }
             $written += $count;
         } while ($written < strlen($ack));
+    }
+
+    /**
+     * @param array<array-key,mixed> $data
+     * @return array<string,bool|string>
+     */
+    private static function instrumentEvidence(array $data, bool $observeRisk, bool $selectCard): array
+    {
+        if (!$observeRisk || $selectCard) {
+            throw new RuntimeException('Invalid no-input security profile.');
+        }
+        $safe = ['instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false];
+        foreach ($safe as $field => $expected) {
+            if (!array_key_exists($field, $data) || $data[$field] !== $expected) {
+                throw new RuntimeException('Invalid no-input security evidence.');
+            }
+        }
+        foreach (['security_loader_candidate', 'security_loader_promoted'] as $field) {
+            $value = $data[$field] ?? null;
+            if (is_bool($value)) {
+                $safe[$field] = $value;
+            }
+        }
+        $reason = $data['security_loader_wait_reason'] ?? null;
+        if (in_array($reason, ['not_observed', 'duplicate', 'scope', 'promoted', 'expired'], true)) {
+            $safe['security_loader_wait_reason'] = $reason;
+        }
+        return $safe;
     }
 
     /**

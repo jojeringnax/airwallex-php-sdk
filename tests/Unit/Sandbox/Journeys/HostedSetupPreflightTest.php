@@ -25,6 +25,7 @@ final class HostedSetupPreflightTest extends TestCase
     private array $checkout = [];
     private int $cancels = 0;
     private int $browserCalls = 0;
+    private int $simulatedTelemetrySends = 0;
 
     protected function setUp(): void
     {
@@ -82,6 +83,12 @@ final class HostedSetupPreflightTest extends TestCase
             $this->requests[] = $request;
             $path = $request->getUri()->getPath();
             if ($path === '/api/v1/authentication/login') {
+                if ($fault === 'late_tool_change') {
+                    $path = dirname(__DIR__, 4) . '/tools/browser/hosted-risk-relay.cjs';
+                    $original = file_get_contents($path);
+                    self::assertIsString($original);
+                    file_put_contents($path, $original . "\n// synthetic post-capture change; never executed\n");
+                }
                 if (($options['observe-risk-bootstrap'] ?? false) === true) {
                     $paths = glob($this->directory . '/sdk-validation-*/ledger.json');
                     self::assertIsArray($paths);
@@ -261,7 +268,7 @@ final class HostedSetupPreflightTest extends TestCase
                 self::assertStringNotContainsString('PRIVATE_SYNTHETIC_SESSION', $contents);
                 $this->browserCalls++;
                 self::assertSame('https://checkout.airwallex.com/pay?s=PRIVATE_SYNTHETIC_SESSION', $url);
-                if ($fault === 'risk_unacknowledged') {
+                if (in_array($fault, ['risk_unacknowledged', 'late_tool_change'], true)) {
                     self::assertNotNull($riskJournal);
                     $riskJournal->accept(json_encode($riskJournal->bootstrap() + [
                         'sequence' => 1, 'phase' => 'prepare', 'role' => 'visitor', 'ordinal' => 0,
@@ -272,6 +279,7 @@ final class HostedSetupPreflightTest extends TestCase
                         'session_sha256' => hash('sha256', 'PRIVATE_SESSION'),
                         'scope_sha256' => hash('sha256', 'PRIVATE_SCOPE'),
                     ], JSON_THROW_ON_ERROR));
+                    $this->simulatedTelemetrySends++;
                     throw new RuntimeException('PRIVATE_POSSIBLE_TELEMETRY_SEND');
                 }
                 if ($fault === 'browser_throws') {
@@ -296,6 +304,25 @@ final class HostedSetupPreflightTest extends TestCase
             },
             $mode,
         );
+    }
+
+    public function testLegacyRiskJournalUsesPreauthBookAndRejectsALaterHelperChangeBeforeSend(): void
+    {
+        $helper = dirname(__DIR__, 4) . '/tools/browser/hosted-risk-relay.cjs';
+        $original = file_get_contents($helper);
+        self::assertIsString($original);
+        try {
+            $result = $this->execute('late_tool_change', $this->options() + [
+                'render-owned-data' => true, 'observe-one-method-config' => true,
+                'observe-normal-reads' => true, 'observe-risk-bootstrap' => true,
+            ]);
+            self::assertSame('fail', $result['result']);
+            self::assertSame(1, $this->browserCalls);
+            self::assertSame(0, $this->simulatedTelemetrySends);
+            self::assertSame(['checkout_0' => 'pass'], $result['cleanup']);
+        } finally {
+            file_put_contents($helper, $original);
+        }
     }
 
     public function testSeparateSecurityModeKeepsPrivateArgumentOrderAndNeverSelectsCard(): void

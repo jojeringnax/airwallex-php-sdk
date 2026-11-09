@@ -67,13 +67,7 @@ final class HostedInstrumentSecurityJournal
             if (HostedBrowser::sourceHashes(HostedSecurityMode::InstrumentSecurity) !== $this->hashes) {
                 throw new RuntimeException('Private security tooling changed.');
             }
-            $data = [];
-            foreach (get_object_vars($view) as $key => $value) {
-                if (!is_string($key)) {
-                    throw new RuntimeException('Private security fields must be named.');
-                }
-                $data[$key] = $value;
-            }
+            $data = self::namedFields(get_object_vars($view));
             if (
                 ($data['sequence'] ?? null) !== $this->sequence + 1
                 || ($data['version'] ?? null) !== 1 || !is_string($data['nonce'] ?? null)
@@ -204,6 +198,22 @@ final class HostedInstrumentSecurityJournal
         if ($phase !== 'observed' || $data['http_status'] !== 200 || $data['response_validation'] !== 'matched') {
             $this->poisoned = true;
         }
+    }
+
+    /**
+     * @param array<array-key,mixed> $values
+     * @return array<string,mixed>
+     */
+    private static function namedFields(array $values): array
+    {
+        $named = [];
+        foreach ($values as $key => $value) {
+            if (!is_string($key)) {
+                throw new RuntimeException('Private security fields must be named.');
+            }
+            $named[$key] = $value;
+        }
+        return $named;
     }
 
     private static function digest(mixed $value): string

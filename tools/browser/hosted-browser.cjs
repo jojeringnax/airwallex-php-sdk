@@ -85,7 +85,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     const deadline = performance.now() + remaining;
     let timer;
     try {
-      const result = await Promise.race([Promise.resolve().then(action), new Promise((_, reject) => {
+      const result = await Promise.race([Promise.resolve().then(() => {
+        if (shuttingDown || performance.now() >= deadline || security.normalWindowRemaining() <= 0) {
+          throw new Error('Security response release is closed.');
+        }
+        return action();
+      }), new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error('Security response release is closed.')), remaining);
       })]);
       if (shuttingDown || performance.now() >= deadline || security.normalWindowRemaining() <= 0) {
@@ -410,19 +415,48 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           } finally { if (activeRead) { normalInFlight.delete(activeRead); finishRead(); } }
         }
       } else if (methodHeaders !== null) {
+        // Capture once while the original normal window is still open; snapshot closure never resets it.
+        const methodDeadline = instrumentSecurity ? Math.min(caseDeadline,
+          performance.now() + policy.normalWindowRemaining(),
+          performance.now() + security.normalWindowRemaining()) : null;
+        const methodStep = async action => {
+          if (!instrumentSecurity) return action();
+          const remaining = Math.min(methodDeadline - performance.now(), security.normalWindowRemaining());
+          if (shuttingDown || remaining <= 0) throw new Error('Original method response window ended.');
+          let timer;
+          try {
+            const value = await Promise.race([Promise.resolve().then(() => {
+              if (shuttingDown || performance.now() >= methodDeadline || security.normalWindowRemaining() <= 0) {
+                throw new Error('Original method response window ended.');
+              }
+              return action();
+            }), new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error('Original method response window ended.')), remaining);
+            })]);
+            if (shuttingDown || performance.now() >= methodDeadline || security.normalWindowRemaining() <= 0) {
+              throw new Error('Original method response window ended.');
+            }
+            return value;
+          } finally { clearTimeout(timer); }
+        };
+        const methodRead = (phase, action) => step(phase, () => methodStep(action));
         let delivered = false;
         try {
-          if (shuttingDown || (instrumentSecurity ? securityClosed() : normalAdmissionClosed)) throw new Error('Browser preflight is shutting down.');
+          if (shuttingDown || (normalAdmissionClosed || (instrumentSecurity
+              && (securityClosed() || performance.now() >= methodDeadline)))) throw new Error('Browser preflight is shutting down.');
           if (!methodClientPromise) methodClientPromise = step('method_context', () => playwright.request.newContext({
             ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
           }));
-          const client = await methodClientPromise;
-          if (shuttingDown || (instrumentSecurity ? securityClosed() : normalAdmissionClosed)) throw new Error('Browser preflight is shutting down.');
+          const client = instrumentSecurity
+            ? await methodRead('method_context', () => methodClientPromise) : await methodClientPromise;
+          if (shuttingDown || (normalAdmissionClosed || (instrumentSecurity
+              && (securityClosed() || performance.now() >= methodDeadline)))) throw new Error('Browser preflight is shutting down.');
           methodSendStarted = true;
-          const response = await step('method_get', () => client.get(request.url(), { headers: methodHeaders,
-            maxRedirects: 0, maxRetries: 0, timeout: 10000 }));
+          const response = await methodRead('method_get', () => client.get(request.url(), { headers: methodHeaders,
+            maxRedirects: 0, maxRetries: 0, timeout: instrumentSecurity
+              ? Math.max(1, Math.min(10000, methodDeadline - performance.now())) : 10000 }));
           try {
-            const status = await step('method_status', () => {
+            const status = await methodRead('method_status', () => {
               const status = response.status();
               if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error('Invalid method status.');
               return status;
@@ -432,16 +466,16 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             if (status >= 300 && status < 400) method.method_config_observation = 'redirect_rejected';
             else if (status !== 200) method.method_config_observation = 'http_rejected';
             else {
-              const declared = (await step('method_headers', () => response.headers()))['content-length'];
+              const declared = (await methodRead('method_headers', () => response.headers()))['content-length'];
               if (declared !== undefined && (!/^[0-9]+$/u.test(declared) || Number(declared) > 262144)) {
                 method.method_config_observation = 'invalid_response';
               } else {
-                const body = await step('method_body', () => response.body());
+                const body = await methodRead('method_body', () => response.body());
                 method = { ...method, ...policy.observeMethodConfig(body) };
                 if (policy.mayDeliverMethodConfig()) {
-                  const headers = Object.fromEntries(Object.entries(await step('method_headers', () => response.headers()))
+                  const headers = Object.fromEntries(Object.entries(await methodRead('method_headers', () => response.headers()))
                     .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
-                  await step('method_fulfill', () => route.fulfill({ response, headers, body }));
+                  await methodRead('method_fulfill', () => route.fulfill({ response, headers, body }));
                   method.method_config_payload_delivered = true;
                   delivered = true;
                 }

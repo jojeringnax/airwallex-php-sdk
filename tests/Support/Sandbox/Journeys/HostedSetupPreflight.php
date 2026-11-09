@@ -120,6 +120,14 @@ final class HostedSetupPreflight
             $browser ??= $bridge->inspect(...);
             $safe['source'] = SourceEvidence::capture();
             $safe['browser_tool_hashes'] = HostedBrowser::sourceHashes($mode);
+            $riskToolHashes = $safe['browser_tool_hashes'];
+            if ($mode === HostedSecurityMode::InstrumentSecurity) {
+                unset(
+                    $riskToolHashes['hosted-pending-loader.cjs'],
+                    $riskToolHashes['hosted-instrument-security.cjs'],
+                    $riskToolHashes['hosted-instrument-security.php']
+                );
+            }
             $configuration = Configuration::load('sandbox', $strings['credentials-file']);
             $sessions ??= static fn (Configuration $config, string $context): SandboxSession
                 => new SandboxSession($config, $context);
@@ -239,7 +247,7 @@ final class HostedSetupPreflight
                     $ledger,
                     $fingerprint,
                     $browserExpected,
-                    HostedBrowser::sourceHashes(),
+                    $riskToolHashes,
                     $mode === HostedSecurityMode::InstrumentSecurity ? $safe['browser_tool_hashes'] : null
                 ) : null;
             $safe['browser'] = HostedBrowser::sanitize(

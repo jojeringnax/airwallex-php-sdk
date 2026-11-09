@@ -73,6 +73,69 @@ final class HostedBrowserTest extends TestCase
         );
     }
 
+    public function testRejectedInstrumentSourceOrStateNeverSpawnsAChild(): void
+    {
+        foreach (['source_book', 'poisoned_state'] as $fault) {
+            $marker = $this->directory . '/child-started';
+            $bridge = $this->bridge('file_put_contents(' . var_export($marker, true) . ', "started");');
+            $context = hash('sha256', 'synthetic_context');
+            $healthy = true;
+            $ledger = RunLedger::create(
+                $context,
+                $this->directory,
+                synchronize: static function () use (&$healthy): bool {
+                    return $healthy;
+                },
+            );
+            $hashes = HostedBrowser::sourceHashes(HostedSecurityMode::InstrumentSecurity);
+            if ($fault === 'source_book') {
+                $hashes['hosted-browser.cjs'] = str_repeat('0', 64);
+            }
+            $journal = new HostedRiskJournal(
+                $ledger,
+                $context,
+                ['checkout_id' => 'fixture', 'mode' => 'SETUP', 'currency' => 'EUR'],
+                HostedBrowser::sourceHashes(),
+                $hashes
+            );
+            if ($fault === 'poisoned_state') {
+                $healthy = false;
+                try {
+                    $ledger->requestId('synthetic_failed_persistence', [], $context);
+                    self::fail('Synthetic state failure was not triggered.');
+                } catch (RuntimeException) {
+                    // The retained state is intentionally poisoned before adapter creation.
+                }
+            }
+            try {
+                $bridge->inspect(
+                    'https://checkout.sandbox.airwallex.com/pay?s=PRIVATE',
+                    ['checkout_id' => 'fixture', 'mode' => 'SETUP', 'currency' => 'EUR'],
+                    true,
+                    true,
+                    true,
+                    true,
+                    $journal,
+                    false,
+                    false,
+                    false,
+                    HostedSecurityMode::InstrumentSecurity
+                );
+                self::fail('Rejected adapter configuration cannot start a child.');
+            } catch (RuntimeException $error) {
+                self::assertStringNotContainsString('PRIVATE', $error->getMessage());
+                self::assertFileDoesNotExist($marker);
+            } finally {
+                foreach (glob($this->directory . '/sdk-validation-*/*') ?: [] as $path) {
+                    unlink($path);
+                }
+                foreach (glob($this->directory . '/sdk-validation-*') ?: [] as $path) {
+                    rmdir($path);
+                }
+            }
+        }
+    }
+
     public function testNewProfileReapsAnUncooperativeChildAfterPrivateOutputFailure(): void
     {
         if (!function_exists('pcntl_signal') || !defined('SIGTERM') || !defined('SIG_IGN')) {

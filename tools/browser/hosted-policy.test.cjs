@@ -1569,3 +1569,84 @@ for (const mode of ['complete', 'transport', 'deadline', 'context', 'dispose', '
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
 }
+
+
+function securityDelayedMethodFixture(lateResponse = false) {
+  const source = 'http://127.0.0.1:54321/render-frame#/elements/dropin?' + new URLSearchParams({
+    appVersion: 'v2.56.0', lang: 'en', options: JSON.stringify({ mode: 'recurring', currency: 'EUR',
+      client_secret: 'PRIVATE_CLIENT_SECRET', customer_id: 'PRIVATE_EXTERNAL_CUSTOMER' }) });
+  return methodFixtureModule('success')
+    .replace('[5000, 10000].includes(delay)', '([5000, 10000].includes(delay) || (delay >= 5000 && delay < 6000))')
+    .replace('const fixture = {', 'const fixture = { now: 0,')
+    .replace('module.exports = { fixture, request:', `Object.defineProperty(performance, 'now', { value: () => fixture.now });
+      module.exports = { fixture, request:`)
+    .replace('async newContext(options) {', lateResponse ? 'async newContext(options) {' : `async newContext(options) {
+      await new Promise(resolve => { fixture.releaseMethod = () => {
+        resolve(); setImmediate(() => { fixture.now = 30001; });
+      }; });`)
+    .replace("async body() { if (fault === 'body') fail();", lateResponse ? `async body() {
+      await new Promise(resolve => { fixture.releaseMethod = () => {
+        fixture.now = 9001; resolve(); setImmediate(() => { fixture.now = 30001; });
+      }; }); if (fault === 'body') fail();` : "async body() { if (fault === 'body') fail();")
+    .replace("async dispose() { if (fault === 'response_dispose')", "async dispose() { fixture.responseDisposed = true; if (fault === 'response_dispose')")
+    .replace('const mainFrame = {};', 'const mainFrame = { url: () => fixture.mainUrl, isDetached: () => false };')
+    .replace('const frame = { parentFrame:', `const frame = { url: () => ${JSON.stringify(source)}, parentFrame:`)
+    .replace("token = new URL(url).searchParams.get('s');", "token = new URL(url).searchParams.get('s'); fixture.mainUrl = url;")
+    .replace("if (fault === 'readiness_enabled') fail(); return match[1] !== 'cvc';", `if (match[1] === 'cvc') {
+      fixture.now = 5500; setImmediate(() => fixture.releaseMethod());
+      } if (fault === 'readiness_enabled') fail(); return match[1] !== 'cvc';`)
+    .replace("          const pending = routed('method', fault === 'wrong_frame' ? mainFrame : frame);\n"
+      + "          if (fault === 'delayed') { await Promise.resolve(); fail(); }\n"
+      + "          await pending;\n          await routed('method', frame);",
+      "          fixture.methodTask = routed('method', frame); fixture.methodTask.catch(() => {}); return;");
+}
+
+for (const instrument of [false, true]) {
+  test('method context resolving after snapshot cannot send in either profile: instrument=' + instrument, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-security-method-latch-'));
+    try {
+      const modulePath = path.join(directory, 'index.js');
+      fs.writeFileSync(modulePath, securityDelayedMethodFixture());
+      const program = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const journal = ${instrument} ? { evidence: () => ({}), close: async () => {} } : null;
+        const finish = result => process.stdout.write(JSON.stringify({ result: result.result,
+          normal_closed: result.normal_read_window_closed, method_send: result.method_config_send_started,
+          gets: fixture.fixture.gets, created: fixture.fixture.created, disposed: fixture.fixture.disposed }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true, journal, null, false, false, false, null, ${instrument})
+          .then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 3000 });
+      assert.equal(child.stderr, ''); assert.equal(child.status, 0);
+      assert.doesNotMatch(child.stdout, /PRIVATE/u);
+      const output = JSON.parse(child.stdout);
+      assert.equal(output.normal_closed, true);
+      assert.equal(output.method_send, false); assert.equal(output.gets, 0);
+      assert.equal(output.created, true); assert.equal(output.disposed, true);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+
+test('instrument method GET sent before capture cannot release a body after its original normal deadline', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-security-method-response-'));
+  try {
+    const modulePath = path.join(directory, 'index.js');
+    fs.writeFileSync(modulePath, securityDelayedMethodFixture(true));
+    const program = `const fixture = require(${JSON.stringify(modulePath)});
+      const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+      const finish = result => process.stdout.write(JSON.stringify({ result: result.result,
+        normal_closed: result.normal_read_window_closed, method_send: result.method_config_send_started,
+        delivered: result.method_config_payload_delivered, gets: fixture.fixture.gets,
+        disposed: fixture.fixture.disposed, response_disposed: fixture.fixture.responseDisposed }));
+      inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+        ${JSON.stringify(expectedCheckout)}, true, true, true, { evidence: () => ({}), close: async () => {} },
+        null, false, false, false, null, true).then(finish).catch(error => finish(error.evidence()));`;
+    const child = spawnSync(process.execPath, ['-e', program], { encoding: 'utf8', timeout: 3000 });
+    assert.equal(child.stderr, ''); assert.equal(child.status, 0); assert.doesNotMatch(child.stdout, /PRIVATE/u);
+    const output = JSON.parse(child.stdout);
+    assert.equal(output.result, 'fail'); assert.equal(output.normal_closed, true);
+    assert.equal(output.method_send, true); assert.equal(output.gets, 1); assert.equal(output.delivered, false);
+    assert.equal(output.disposed, true); assert.equal(output.response_disposed, true);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
