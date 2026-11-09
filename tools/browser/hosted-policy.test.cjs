@@ -653,7 +653,7 @@ const methodHeaders = { 'client-secret': 'PRIVATE_CLIENT_SECRET', 'content-type'
   'x-cloud-trace-context': '0123456789abcdef0123456789abcdef' };
 function methodPolicy(options = {}) {
   const origin = options.origin ?? 'https://checkout.sandbox.airwallex.com';
-  const policy = new HostedPolicy(origin + '/pay?s=' + sessionToken(), null, expectedCheckout,
+  const policy = new (options.Policy ?? HostedPolicy)(origin + '/pay?s=' + sessionToken(), null, expectedCheckout,
     options.render ?? true, options.observe ?? true);
   policy.claimPayerRequest(origin + '/billing/payer-web-api/checkout?ts=1794130000000', 'GET', 'fetch',
     { authorization: 'Bearer ' + sessionToken() });
@@ -946,14 +946,14 @@ const normalTargets = { customer: normalOrigin + '/api/v1/pa/customers/PRIVATE_E
 function normalPolicy(options = {}) {
   let now = 0;
   const origin = options.origin ?? normalOrigin;
-  const p = new HostedPolicy(origin + '/pay?s=' + sessionToken(), null, expectedCheckout, true, true,
+  const p = new (options.Policy ?? HostedPolicy)(origin + '/pay?s=' + sessionToken(), null, expectedCheckout, true, true,
     options.normal ?? true, () => now);
   p.claimPayerRequest(origin + '/billing/payer-web-api/checkout?ts=1794130000000', 'GET', 'fetch',
     { authorization: 'Bearer ' + sessionToken() });
   p.observePayer(Buffer.from(JSON.stringify(privatePayer)));
   p.startNormalWindow();
   if (p.mayDeliverPayer()) p.markPayerDelivered();
-  if (p.claimRenderFrame(privateFrame())) p.markRenderFrameDelivered();
+  if (options.frame !== false && p.claimRenderFrame(privateFrame())) p.markRenderFrameDelivered();
   return { p, advance: value => { now = value; } };
 }
 function normalClaim(p, role, change = {}) {
@@ -1648,5 +1648,366 @@ test('instrument method GET sent before capture cannot release a body after its 
     assert.equal(output.result, 'fail'); assert.equal(output.normal_closed, true);
     assert.equal(output.method_send, true); assert.equal(output.gets, 1); assert.equal(output.delivered, false);
     assert.equal(output.disposed, true); assert.equal(output.response_disposed, true);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+// Frozen pre-diagnostic guard methods from 15eeb7b; independent of future diagnostic edits.
+// Constructor/state setup remains shared; these exact old predicates/headers/attempt points are the oracle.
+const legacyReadGuards = [
+  {
+    "start": "  claimMethodConfig(",
+    "end": "\n  observeMethodConfig(",
+    "body": "  claimMethodConfig(value, method, type, headers, body = null) {\n    const url = parse(value);\n    if (!this.#observeConfig || !this.renderEnabled() || !this.#payerDelivered || !this.#frameDelivered\n        || !this.#frameReference || this.#configAttempted || method !== 'GET'\n        || !['fetch', 'xhr'].includes(type) || body !== null || !url\n        || url.origin !== new URL(this.#initial).origin || url.pathname !== '/api/v1/pa/config/payment_method_types'\n        || url.hash || value !== url.origin + url.pathname + url.search) return null;\n    const query = url.searchParams;\n    const required = { page_num: '0', page_size: '200', active: 'true',\n      transaction_currency: this.#expected.currency, __verification_methods: 'true' };\n    const allowed = new Set([...Object.keys(required), 'country_code', 'payment_intent_id']);\n    if ([...query.keys()].some(key => !allowed.has(key) || query.getAll(key).length !== 1)\n        || Object.entries(required).some(([key, val]) => query.get(key) !== val)\n        || (query.has('country_code') && !/^[A-Z]{2}$/u.test(query.get('country_code')))\n        || (query.has('payment_intent_id') && (typeof this.#frameReference.intent !== 'string'\n          || query.get('payment_intent_id') !== this.#frameReference.intent))) return null;\n    if (headers['client-secret'] !== this.#frameReference.secret || headers['x-api-version'] !== '2024-06-14'\n        || !/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')\n        || headers['content-type'] !== 'application/json' || headers['x-client-ip-source'] !== 'awx-checkout'\n        || Object.keys(headers).some(key => key.startsWith('x-')\n          && !['x-api-version', 'x-client-ip-source', 'x-device-type', 'x-cloud-trace-context'].includes(key))\n        || ['authorization', 'x-auth-token', 'x-on-behalf-of', 'x-tax-region',\n          'x-tax-calculation-identifier', 'x-pan'].some(key => Object.hasOwn(headers, key))\n        || (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type']))\n        || (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'\n          || headers['awx-tracker'].length > 256 || /[^\\x21-\\x7e]/u.test(headers['awx-tracker'])))) return null;\n    this.#configAttempted = true; // Before any send: the browser helper's retry must remain denied.\n    const outbound = { accept: 'application/json, text/plain, */*', cookie: '', referer: '',\n      'client-secret': headers['client-secret'], 'content-type': 'application/json',\n      'x-api-version': '2024-06-14', 'x-client-ip-source': 'awx-checkout',\n      'x-cloud-trace-context': headers['x-cloud-trace-context'] };\n    for (const key of ['awx-tracker', 'x-device-type']) if (Object.hasOwn(headers, key)) outbound[key] = headers[key];\n    return outbound;\n  }\n"
+  },
+  {
+    "start": "  #normalHeaders(",
+    "end": "\n  claimNormalRead(",
+    "body": "  #normalHeaders(headers, role) {\n    const common = ['accept', 'accept-language', 'accept-encoding', 'host', 'connection', 'priority',\n      'user-agent', 'origin', 'referer', 'cookie', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',\n      'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site'];\n    const pa = ['client-secret', 'content-type', 'awx-tracker', 'x-api-version', 'x-client-ip-source',\n      'x-device-type', 'x-cloud-trace-context'];\n    const allowed = [...common, ...(role === 'pa' ? pa : role === 'checkout_status' ? ['authorization']\n      : role === 'currency_settings' ? ['client-secret'] : [])];\n    if (!headers || typeof headers !== 'object' || Object.keys(headers).some(key => !allowed.includes(key))\n        || (Object.hasOwn(headers, 'origin') && headers.origin !== new URL(this.#initial).origin)) return null;\n    if (role === 'pa') {\n      if (headers['client-secret'] !== this.#frameReference?.secret || headers['x-api-version'] !== '2024-06-14'\n          || headers['content-type'] !== 'application/json' || headers['x-client-ip-source'] !== 'awx-checkout'\n          || !/^[0-9a-f]{32}$/u.test(headers['x-cloud-trace-context'] ?? '')\n          || (Object.hasOwn(headers, 'x-device-type') && !['mobile', 'desktop'].includes(headers['x-device-type']))\n          || (Object.hasOwn(headers, 'awx-tracker') && (typeof headers['awx-tracker'] !== 'string'\n            || headers['awx-tracker'].length > 256 || /[^\\x21-\\x7e]/u.test(headers['awx-tracker'])))) return null;\n      const result = { accept: 'application/json, text/plain, */*', cookie: '', referer: '' };\n      for (const key of pa) if (Object.hasOwn(headers, key)) result[key] = headers[key];\n      return result;\n    }\n    if (role === 'currency_settings') {\n      if (headers.accept !== 'application/json, text/plain, */*'\n          || headers['client-secret'] !== `Bearer ${this.#currencySecret}`) return null;\n      return { accept: headers.accept, 'client-secret': headers['client-secret'], cookie: '', referer: '',\n        ...(Object.hasOwn(headers, 'origin') ? { origin: headers.origin } : {}) };\n    }\n    if (role === 'parent_country' && headers.accept !== 'application/json, text/plain, */*') return null;\n    if (role === 'checkout_status' && headers.authorization !== `Bearer ${this.#token}`) return null;\n    return { accept: role === 'country' ? '*/*' : 'application/json, text/plain, */*', cookie: '', referer: '',\n      ...(role === 'checkout_status' ? { authorization: headers.authorization } : {}),\n      ...(['country', 'parent_country'].includes(role) && Object.hasOwn(headers, 'origin') ? { origin: headers.origin } : {}) };\n  }\n"
+  },
+  {
+    "start": "  claimNormalRead(",
+    "end": "\n  failNormalRead(",
+    "body": "  claimNormalRead(value, method, type, headers, body, fromMain, fromBound) {\n    const url = parse(value);\n    if (!this.#observeNormal || !this.#payerDelivered || this.normalWindowRemaining() <= 0 || !url\n        || method !== 'GET' || !['fetch', 'xhr'].includes(type) || body !== null || url.hash\n        || value !== url.origin + url.pathname + url.search) return null;\n    const origin = new URL(this.#initial).origin;\n    let role;\n    if (fromMain && url.origin === origin && url.pathname === '/billing/payer-web-api/checkout/status'\n        && !url.search) role = 'checkout_status';\n    else if (fromBound && this.#frameDelivered && this.#frameReference) {\n      const customer = this.#frameReference.customer;\n      if (!/^[A-Za-z0-9_-]{1,200}$/u.test(customer)) return null;\n      if (url.origin === origin && url.pathname === '/api/v1/pa/customers/' + customer && !url.search) role = 'customer';\n      else if (url.origin === origin && url.pathname === '/api/v1/pa/payment_consents'\n          && url.search.slice(1).split('&').sort().join('&')\n            === ['customer_id=' + customer, 'status=VERIFIED', 'page_size=100'].sort().join('&')) role = 'consent_list';\n      else if (url.origin === (this.#fixture ?? 'https://www.sandbox.airwallex.com')\n          && url.pathname === '/country' && !url.search) role = 'country';\n    }\n    if (!role || this.#normalAttempts[role] >= (role === 'checkout_status' ? 3 : 1)\n        || (role === 'checkout_status' && (this.#statusPoisoned || this.#statusBusy))) return null;\n    const outbound = this.#normalHeaders(headers, ['customer', 'consent_list'].includes(role) ? 'pa' : role);\n    if (outbound === null) return null;\n    this.#normalAttempts[role]++;\n    if (role === 'checkout_status') {\n      this.#statusBusy = true;\n      this.#cardStatusMatched = false;\n      this.#cardStatusDelivered = false;\n    }\n    return { role, headers: outbound };\n  }\n"
+  }
+];
+
+function legacyReadPolicy(directory) {
+  let source = fs.readFileSync(path.join(__dirname, 'hosted-policy.cjs'), 'utf8');
+  for (const method of legacyReadGuards) {
+    const start = source.indexOf(method.start), end = source.indexOf(method.end, start);
+    assert.ok(start >= 0 && end > start);
+    source = source.slice(0, start) + method.body + source.slice(end);
+  }
+  const file = path.join(directory, 'legacy-policy.cjs');
+  fs.writeFileSync(file, source);
+  return require(file).HostedPolicy;
+}
+
+function measuredRead(p, role, change = {}, commit = true) {
+  const url = change.url ?? (role === 'method_config' ? methodUrl : normalTargets[role]);
+  const method = change.method ?? 'GET', type = change.type ?? 'fetch';
+  const headers = change.headers ?? (role === 'country' ? {} : methodHeaders);
+  const denial = p.readDenial(url, method, type);
+  if (change.caller) denial?.caller(change.caller);
+  const claim = role === 'method_config'
+    ? p.claimMethodConfig(url, method, type, headers, change.body ?? null, denial)
+    : p.claimNormalRead(url, method, type, headers, change.body ?? null,
+      change.main ?? false, change.bound ?? true, denial);
+  if (claim === null && commit) denial?.commit();
+  return { claim, denial };
+}
+
+const methodHeaderDenials = [
+  [{ 'client-secret': 'PRIVATE_WRONG', 'x-api-version': 'wrong' }, 'header_client_secret'],
+  [{ 'x-api-version': 'wrong', 'x-cloud-trace-context': 'wrong' }, 'header_api_version'],
+  [{ 'x-cloud-trace-context': 'wrong', 'content-type': 'wrong' }, 'header_trace'],
+  [{ 'content-type': 'wrong', 'x-client-ip-source': 'wrong' }, 'header_content_type'],
+  [{ 'x-client-ip-source': 'wrong', authorization: 'PRIVATE' }, 'header_client_source'],
+  [{ 'x-private-unknown': 'PRIVATE', 'x-device-type': 'wrong' }, 'header_extra_or_forbidden'],
+  [{ authorization: 'PRIVATE', 'x-device-type': 'wrong' }, 'header_extra_or_forbidden'],
+  [{ 'x-device-type': 'wrong', 'awx-tracker': ' ' }, 'header_device'],
+  [{ 'awx-tracker': ' ' }, 'header_tracker'],
+];
+for (const [headers, reason] of methodHeaderDenials) {
+  test('method diagnostics preserve first header guard and unconsumed attempt: ' + reason + '/' + Object.keys(headers)[0], () => {
+    const p = methodPolicy();
+    const bad = measuredRead(p, 'method_config', { headers: { ...methodHeaders, ...headers } }, false);
+    assert.equal(bad.claim, null); assert.equal(Object.hasOwn(p.methodEvidence(), 'read_denial_reasons'), false);
+    assert.equal(p.methodEvidence().method_config_get_attempted, false);
+    bad.denial.commit(); bad.denial.commit();
+    assert.deepEqual(p.methodEvidence().read_denial_reasons, { method_config: { [reason]: 1 } });
+    assert.ok(measuredRead(p, 'method_config').claim);
+    measuredRead(p, 'method_config', { headers: { ...methodHeaders, 'client-secret': 'PRIVATE_WRONG' } });
+    assert.equal(p.methodEvidence().read_denial_reasons.method_config.slot_consumed, 1);
+    assert.doesNotMatch(JSON.stringify(p.methodEvidence()), /PRIVATE|2024-06-14|012345/u);
+  });
+}
+
+for (const role of ['customer', 'country']) {
+  const badHeaders = role === 'country' ? [
+    [{ authorization: 'PRIVATE' }, 'header_extra_or_forbidden'],
+    [{ origin: 'https://PRIVATE.invalid' }, 'header_origin'],
+  ] : [
+    [{ authorization: 'PRIVATE', origin: 'https://PRIVATE.invalid' }, 'header_extra_or_forbidden'],
+    [{ origin: 'https://PRIVATE.invalid', 'client-secret': 'PRIVATE_WRONG' }, 'header_origin'],
+    [{ 'client-secret': 'PRIVATE_WRONG', 'x-api-version': 'wrong' }, 'header_client_secret'],
+    [{ 'x-api-version': 'wrong', 'content-type': 'wrong' }, 'header_api_version'],
+    [{ 'content-type': 'wrong', 'x-client-ip-source': 'wrong' }, 'header_content_type'],
+    [{ 'x-client-ip-source': 'wrong', 'x-cloud-trace-context': 'wrong' }, 'header_client_source'],
+    [{ 'x-cloud-trace-context': 'wrong', 'x-device-type': 'wrong' }, 'header_trace'],
+    [{ 'x-device-type': 'wrong', 'awx-tracker': ' ' }, 'header_device'],
+    [{ 'awx-tracker': ' ' }, 'header_tracker'],
+  ];
+  for (const [headers, reason] of badHeaders) {
+    test(role + ' first-failure header diagnostics do not consume its slot: ' + reason, () => {
+      const { p } = normalPolicy();
+      measuredRead(p, role, { headers: { ...(role === 'country' ? {} : methodHeaders), ...headers } });
+      assert.deepEqual(p.methodEvidence().read_denial_reasons, { [role]: { [reason]: 1 } });
+      assert.equal(p.normalEvidence()['normal_' + role + '_attempts'], 0);
+      assert.ok(measuredRead(p, role).claim);
+      measuredRead(p, role, { headers: { authorization: 'PRIVATE' } });
+      assert.equal(p.methodEvidence().read_denial_reasons[role].slot_consumed, 1);
+    });
+  }
+}
+
+test('local scope and request binding precedence preserves missing evidence and country uncertainty', () => {
+  const methodCases = [
+    [() => methodPolicy({ origin: 'https://checkout.airwallex.com' }), methodUrl.replace('checkout.sandbox', 'checkout'), {}, 'render_scope_unavailable'],
+    [() => new HostedPolicy(normalOrigin + '/pay?s=' + sessionToken(), null, expectedCheckout, true, true), methodUrl, {}, 'payer_not_delivered'],
+    [() => methodPolicy({ frame: false }), methodUrl, {}, 'frame_not_delivered'],
+    [() => { const p = methodPolicy(); p.observePayer(Buffer.from('{"mode":"SETUP","currency":"EUR"}')); return p; }, methodUrl, {}, 'reference_unavailable'],
+    [() => methodPolicy(), methodUrl, { body: 'PRIVATE_BODY' }, 'request_shape'],
+    [() => methodPolicy(), methodUrl + '&page_num=0', {}, 'query_shape'],
+  ];
+  for (const [build, url, change, reason] of methodCases) {
+    const p = build(); measuredRead(p, 'method_config', { ...change, url, headers: { 'client-secret': 'PRIVATE_WRONG' } });
+    assert.deepEqual(p.methodEvidence().read_denial_reasons, { method_config: { [reason]: 1 } });
+  }
+  for (const role of ['customer', 'country']) {
+    for (const [build, change, reason] of [
+      [() => normalPolicy({ normal: false }).p, {}, 'observation_disabled'],
+      [() => new HostedPolicy(normalOrigin + '/pay?s=' + sessionToken(), null, expectedCheckout, true, true, true), {}, 'payer_not_delivered'],
+      [() => { const {p} = normalPolicy(); p.closeNormalWindow(); return p; }, { bound: false, caller: 'initiator_detached' }, 'window_unavailable'],
+      [() => normalPolicy().p, { body: 'PRIVATE_BODY', bound: false, caller: 'initiator_detached' }, 'request_shape'],
+      [() => normalPolicy().p, { bound: false, caller: 'initiator_detached' }, 'initiator_detached'],
+      [() => normalPolicy().p, { bound: false, caller: 'initiator_unavailable' }, 'initiator_unavailable'],
+      [() => normalPolicy().p, { bound: false, caller: 'initiator_document_mismatch' }, 'initiator_document_mismatch'],
+      [() => normalPolicy().p, { bound: false, caller: 'initiator_not_bound' }, 'initiator_not_bound'],
+      [() => normalPolicy({ frame: false }).p, {}, 'frame_not_delivered'],
+      [() => { const {p} = normalPolicy(); p.observePayer(Buffer.from('{"mode":"SETUP","currency":"EUR"}')); return p; }, {}, 'reference_unavailable'],
+      [() => { const {p} = normalPolicy(); p.observePayer(Buffer.from(JSON.stringify({ ...privatePayer,
+        setupModeDetails: { ...privatePayer.setupModeDetails, billingCustomerExternalId: 'PRIVATE/INVALID' } }))); return p; }, {}, 'reference_unavailable'],
+    ]) {
+      const p = build(); measuredRead(p, role, change);
+      assert.deepEqual(p.methodEvidence().read_denial_reasons, { [role]: { [reason]: 1 } });
+    }
+  }
+  for (const [url, reason] of [[normalTargets.customer.replace('PRIVATE_EXTERNAL_CUSTOMER', 'PRIVATE_OTHER'), 'resource_binding'],
+    [normalTargets.customer + '?PRIVATE_KEY=PRIVATE_VALUE', 'query_shape']]) {
+    const {p} = normalPolicy(); measuredRead(p, 'customer', { url });
+    assert.deepEqual(p.methodEvidence().read_denial_reasons, { customer: { [reason]: 1 } });
+  }
+  for (const url of [normalTargets.country + '?PRIVATE=x', 'https://foreign.invalid/country', methodUrl.replace('https://', 'https://USER:PASS@'),
+    methodUrl + 'x'.repeat(16385)]) {
+    const p = methodPolicy(); assert.equal(p.readDenial(url, 'GET', 'fetch'), null);
+    assert.equal(Object.hasOwn(p.methodEvidence(), 'read_denial_reasons'), false);
+  }
+});
+
+test('two concurrent route collectors commit only their own first blocked reason', async () => {
+  const p = methodPolicy();
+  const first = measuredRead(p, 'method_config', { headers: { ...methodHeaders, 'client-secret': 'PRIVATE_WRONG' } }, false);
+  const second = measuredRead(p, 'method_config', { headers: { ...methodHeaders, 'x-api-version': 'wrong' } }, false);
+  let release;
+  const blockedFirst = new Promise(resolve => { release = resolve; }).then(() => first.denial.commit());
+  second.denial.commit();
+  assert.deepEqual(p.methodEvidence().read_denial_reasons, { method_config: { header_api_version: 1 } });
+  release(); await blockedFirst;
+  assert.deepEqual(p.methodEvidence().read_denial_reasons, { method_config: { header_api_version: 1, header_client_secret: 1 } });
+  first.denial.commit(); assert.equal(p.methodEvidence().read_denial_reasons.method_config.header_client_secret, 1);
+  const copy = p.methodEvidence(); copy.read_denial_reasons.method_config.header_client_secret = 999;
+  assert.equal(p.methodEvidence().read_denial_reasons.method_config.header_client_secret, 1);
+});
+
+test('closed reason counts saturate without changing claims or exposing an exact larger total', () => {
+  const p = methodPolicy();
+  for (let index = 0; index < 1000002; index++) {
+    const route = p.readDenial(methodUrl, 'GET', 'fetch'); route.worker('admission_closed'); route.commit();
+  }
+  assert.equal(p.methodEvidence().read_denial_reasons.method_config.admission_closed, 1000000);
+  assert.equal(p.methodEvidence().read_denial_counts_capped, true);
+  assert.ok(p.claimMethodConfig(methodUrl, 'GET', 'fetch', methodHeaders));
+});
+
+test('frozen original guard methods preserve decisions, prepared headers, attempts and short-circuit header observations', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-read-guard-legacy-'));
+  try {
+    const Legacy = legacyReadPolicy(directory);
+    const variations = [{}, { headers: { ...methodHeaders, authorization: 'PRIVATE' } },
+      ...methodHeaderDenials.map(([change]) => ({ headers: { ...methodHeaders, ...change } })),
+      { body: 'PRIVATE_BODY' }, { method: 'POST' }, { type: 'document' }];
+    for (const role of ['method_config', 'customer', 'country']) {
+      for (const change of [...variations, { url: (role === 'method_config' ? methodUrl : normalTargets[role]) + '#PRIVATE' },
+        { url: (role === 'method_config' ? methodUrl : normalTargets[role]) + '?PRIVATE=VALUE' }]) {
+        const current = role === 'method_config' ? methodPolicy() : normalPolicy().p;
+        const old = role === 'method_config' ? methodPolicy({ Policy: Legacy }) : normalPolicy({ Policy: Legacy }).p;
+        const traces = [];
+        for (const p of [old, current]) {
+          const touched = [];
+          const raw = change.headers ?? (role === 'country' ? {} : methodHeaders);
+          const headers = new Proxy(raw, { get(target, key) { touched.push('get:' + String(key)); return target[key]; },
+            ownKeys(target) { touched.push('keys'); return Reflect.ownKeys(target); },
+            getOwnPropertyDescriptor(target, key) { touched.push('own:' + String(key)); return Reflect.getOwnPropertyDescriptor(target, key); } });
+          const claim = measuredRead(p, role, { ...change, headers }).claim;
+          const evidence = { ...p.methodEvidence(), ...p.normalEvidence() };
+          delete evidence.read_denial_reasons; delete evidence.read_denial_counts_capped;
+          traces.push({ claim, touched, evidence });
+        }
+        assert.deepEqual(traces[1], traces[0]);
+      }
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+for (const [fault, expectedReason] of [['missing_bound', 'bound_frame_unavailable'],
+  ['unavailable', 'initiator_unavailable'], ['wrong_frame', 'initiator_not_bound'],
+  ['http_403', null]]) {
+  test('worker records only actual final method denial and no admitted HTTP-failure reason: ' + fault, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-read-method-worker-'));
+    try {
+      let source = methodFixtureModule(fault === 'wrong_frame' || fault === 'http_403' ? fault : 'success')
+        .replace("          await routed('method', frame); // Replay", "          // No replay");
+      if (fault === 'missing_bound') source = source.replace("await routed('frame', frame);", '');
+      if (fault === 'unavailable') source = source.replace('frame: () => sourceFrame,',
+        "frame: () => { if (kind === 'method') fail(); return sourceFrame; },");
+      const modulePath = path.join(directory, 'index.js'); fs.writeFileSync(modulePath, source);
+      const driver = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = value => process.stdout.write(JSON.stringify({ ...value, fixture_gets: fixture.fixture.gets }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true).then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, ''); assert.equal(child.status, 0); assert.doesNotMatch(child.stdout, /PRIVATE/u);
+      const result = JSON.parse(child.stdout);
+      if (expectedReason === null) {
+        assert.equal(result.fixture_gets, 1); assert.equal(result.method_config_http_status, 403);
+        assert.equal(Object.hasOwn(result, 'read_denial_reasons'), false);
+      } else {
+        assert.equal(result.fixture_gets, 0); assert.equal(result.method_config_get_attempted, false);
+        assert.deepEqual(result.read_denial_reasons, { method_config: { [expectedReason]: 1 } });
+      }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+for (const [fault, expectedReason] of [['unavailable', 'initiator_unavailable'], ['detached', 'initiator_detached'],
+  ['nonboolean', 'initiator_unavailable'], ['not_bound', 'initiator_not_bound'],
+  ['document', 'initiator_document_mismatch']]) {
+  test('normal worker reuses its observed caller facts without new frame observations: ' + fault, () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-read-caller-worker-'));
+    try {
+      let source = normalFixtureModule('success', 'customer');
+      if (fault === 'unavailable') source = source.replace('frame: () => sourceFrame,',
+        "frame: () => { if (kind === 'normal') fail(); return sourceFrame; },");
+      if (fault === 'detached' || fault === 'nonboolean') source = source.replace("const normalPending = routed('normal', frame);",
+        `fixture.detached = ${fault === 'detached' ? 'true' : "'PRIVATE_NONBOOLEAN'"}; const normalPending = routed('normal', frame);`);
+      if (fault === 'not_bound') source = source.replace("const normalPending = routed('normal', frame);",
+        "const normalPending = routed('normal', mainFrame);");
+      if (fault === 'document') source = source.replace("const normalPending = routed('normal', frame);",
+        "fixture.frameUrl = 'about:blank'; const normalPending = routed('normal', frame);");
+      const modulePath = path.join(directory, 'index.js'); fs.writeFileSync(modulePath, source);
+      const driver = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = value => process.stdout.write(JSON.stringify({ ...value, fixture_gets: fixture.fixture.normalGets }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true, true).then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, ''); assert.equal(child.status, 0); assert.doesNotMatch(child.stdout, /PRIVATE/u);
+      const result = JSON.parse(child.stdout);
+      assert.equal(result.fixture_gets, 0);
+      // The frozen source fixture sends one initial normal route; no replay earns another caller observation.
+      assert.equal(result.read_denial_reasons.customer[expectedReason], 1);
+      assert.equal(result.normal_customer_attempts, 0);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+for (const role of ['customer', 'country']) {
+  test('disabled normal observation reports its local skip without admitting the ' + role + ' request', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-read-disabled-worker-'));
+    try {
+      const target = role === 'customer' ? '/api/v1/pa/customers/PRIVATE_EXTERNAL_CUSTOMER' : '/country';
+      const source = methodFixtureModule('success')
+        .replace("'/api/v1/pa/config/payment_method_types?active=true&page_num=0&page_size=200&transaction_currency=EUR&__verification_methods=true'", JSON.stringify(target))
+        .replace("          await routed('method', frame); // Replay", "          // No replay");
+      const modulePath = path.join(directory, 'index.js'); fs.writeFileSync(modulePath, source);
+      const driver = `const fixture = require(${JSON.stringify(modulePath)});
+        const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+        const finish = value => process.stdout.write(JSON.stringify({ ...value, fixture_gets: fixture.fixture.gets }));
+        inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+          ${JSON.stringify(expectedCheckout)}, true, true).then(finish).catch(error => finish(error.evidence()));`;
+      const child = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 4000 });
+      assert.equal(child.stderr, ''); assert.equal(child.status, 0); assert.doesNotMatch(child.stdout, /PRIVATE/u);
+      const result = JSON.parse(child.stdout); assert.equal(result.fixture_gets, 0);
+      assert.deepEqual(result.read_denial_reasons, { [role]: { observation_disabled: 1 } });
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test('new-mode late normal route reports admission closure before any claim/header read', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-read-latch-worker-'));
+  try {
+    const source = securityDelayedMethodFixture()
+      .replace("fixture.methodTask = routed('method', frame); fixture.methodTask.catch(() => {}); return;", 'return;')
+      .replace('setImmediate(() => fixture.releaseMethod());', `setImmediate(() => {
+        fixture.lateTask = routed('method', frame); fixture.lateTask.then(() => { fixture.now = 30001; });
+      });`)
+      .replace("headers: () => kind === 'payer' ?", "headers: () => kind === 'method' ? fail() : kind === 'payer' ?");
+    const modulePath = path.join(directory, 'index.js'); fs.writeFileSync(modulePath, source);
+    const driver = `const fixture = require(${JSON.stringify(modulePath)});
+      const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+      const finish = value => process.stdout.write(JSON.stringify({ ...value, fixture_gets: fixture.fixture.gets,
+        context_created: fixture.fixture.created }));
+      inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+        ${JSON.stringify(expectedCheckout)}, true, true, true, { evidence: () => ({}), close: async () => {} },
+        null, false, false, false, null, true).then(finish).catch(error => finish(error.evidence()));`;
+    const child = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 3000 });
+    assert.equal(child.stderr, ''); assert.equal(child.status, 0); assert.doesNotMatch(child.stdout, /PRIVATE/u);
+    const result = JSON.parse(child.stdout);
+    assert.equal(result.fixture_gets, 0); assert.equal(result.context_created, false);
+    assert.equal(result.method_config_get_attempted, false);
+    assert.deepEqual(result.read_denial_reasons, { method_config: { admission_closed: 1 } });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('actual concurrent worker routes retain distinct reasons through asynchronous final aborts', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-read-concurrent-worker-'));
+  try {
+    const source = methodFixtureModule('success')
+      .replace('let handler, opened;', 'let handler, opened, releaseFirst; const firstBlocked = new Promise(resolve => { releaseFirst = resolve; });')
+      .replace('const routed = (kind, sourceFrame) =>', 'const routed = (kind, sourceFrame, variant = null) =>')
+      .replace("'client-secret': 'PRIVATE_CLIENT_SECRET', 'content-type': 'application/json',", "'client-secret': variant === 'secret' ? 'PRIVATE_WRONG' : 'PRIVATE_CLIENT_SECRET', 'content-type': 'application/json',")
+      .replace("'x-api-version': '2024-06-14', 'x-client-ip-source':", "'x-api-version': variant === 'version' ? 'PRIVATE_WRONG' : '2024-06-14', 'x-client-ip-source':")
+      .replace('}, async abort() {', "}, async abort() { if (variant === 'secret') await firstBlocked; else if (variant === 'version') releaseFirst();")
+      .replace("          const pending = routed('method', fault === 'wrong_frame' ? mainFrame : frame);\n"
+        + "          if (fault === 'delayed') { await Promise.resolve(); fail(); }\n"
+        + "          await pending;\n          await routed('method', frame);",
+        "          await Promise.all([routed('method', frame, 'secret'), routed('method', frame, 'version')]);");
+    const modulePath = path.join(directory, 'index.js'); fs.writeFileSync(modulePath, source);
+    const driver = `const fixture = require(${JSON.stringify(modulePath)});
+      const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+      const finish = value => process.stdout.write(JSON.stringify({ ...value, fixture_gets: fixture.fixture.gets }));
+      inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+        ${JSON.stringify(expectedCheckout)}, true, true).then(finish).catch(error => finish(error.evidence()));`;
+    const child = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 4000 });
+    assert.equal(child.stderr, ''); assert.equal(child.status, 0); assert.doesNotMatch(child.stdout, /PRIVATE/u);
+    const result = JSON.parse(child.stdout); assert.equal(result.fixture_gets, 0);
+    assert.deepEqual(result.read_denial_reasons, { method_config: { header_api_version: 1, header_client_secret: 1 } });
+    assert.equal(result.denied_read_families.method_config, 2); assert.equal(result.method_config_get_attempted, false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('a failed final abort does not commit a speculative header-denial count', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-read-abort-worker-'));
+  try {
+    const source = methodFixtureModule('abort')
+      .replace("'client-secret': 'PRIVATE_CLIENT_SECRET', 'content-type': 'application/json',",
+        "'client-secret': 'PRIVATE_WRONG', 'content-type': 'application/json',")
+      .replace("          await routed('method', frame); // Replay", "          // No replay");
+    const modulePath = path.join(directory, 'index.js'); fs.writeFileSync(modulePath, source);
+    const driver = `const fixture = require(${JSON.stringify(modulePath)});
+      const { inspect } = require(${JSON.stringify(path.join(__dirname, 'hosted-browser.cjs'))});
+      const finish = value => process.stdout.write(JSON.stringify({ ...value, fixture_gets: fixture.fixture.gets }));
+      inspect('http://127.0.0.1:54321/pay?s=${sessionToken()}', fixture, 'http://127.0.0.1:54321', null,
+        ${JSON.stringify(expectedCheckout)}, true, true).then(finish).catch(error => finish(error.evidence()));`;
+    const child = spawnSync(process.execPath, ['-e', driver], { encoding: 'utf8', timeout: 4000 });
+    assert.equal(child.stderr, ''); assert.equal(child.status, 0); assert.doesNotMatch(child.stdout, /PRIVATE/u);
+    const result = JSON.parse(child.stdout);
+    assert.equal(result.result, 'fail'); assert.equal(result.browser_failure_phase, 'route_action');
+    assert.equal(result.fixture_gets, 0); assert.equal(result.method_config_get_attempted, false);
+    assert.equal(Object.hasOwn(result, 'read_denial_reasons'), false);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
