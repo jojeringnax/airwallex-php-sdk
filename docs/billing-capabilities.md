@@ -11,7 +11,7 @@ Contract review for [issue #5](https://github.com/jojeringnax/airwallex-php-sdk/
 | Self-service | Verified customer, source, subscription and invoice API operations underpin an application portal | Application owns UI, tenant authorization, persistence and reconciliation; provider-hosted Billing portal sessions deferred pending a verified contract |
 | Provider trials / future starts | Subscription `starts_at` and `trial_ends_at`, including checkout `subscription_data` | Application chooses dates and access policy; provider owns remote trial and billing state |
 | Generic local trials | Outside SDK implementation | Application stores trial dates and grants access, creating remote Billing resources when its policy requires |
-| Cancellation | Immediate cancellation and documented scheduled-ending fields | Application owns grace/access policy; schedule reversal needs the evidence gate below; cancelled-subscription reactivation and pause APIs deferred |
+| Cancellation | Immediate cancellation and documented scheduled-ending fields | Application owns grace/access policy; schedule-restoration claims stay within the finite-state evidence below; cancelled-subscription reactivation and pause APIs deferred |
 
 These boundaries retain native provider capabilities without adding application infrastructure to the framework-independent package. Link exposure avoids coupling the SDK to document storage/delivery. Supporting checkout UI modes at the server boundary lets applications choose their browser experience while sharing one Billing contract.
 
@@ -59,16 +59,20 @@ For recovery, the [API inventory](api-contracts.md#payment-recovery-conflict) re
 
 ## Delivery and evidence gates
 
-This reference records contract boundaries and bounded observations; it does not establish complete integration validation. Executable Billing resource interfaces and deterministic examples are documented in [Billing resources](billing-resources.md). Before claiming integration support, use explicitly configured sandbox credentials and sanitized fixtures; no live financial operations are required.
+This reference records contract boundaries and bounded observations. Executable Billing resource interfaces and deterministic examples are documented in [Billing resources](billing-resources.md). The [documentation-based completion rule](release-policy.md#documentation-based-completion) applies to every first-release issue. Account-specific Sandbox journeys, product entitlements and provider confirmation are supplemental evidence; missing, blocked or failed observations do not block SDK completion. They still limit claims about observed provider behavior and account availability.
 
-| Owning work | Required result / validation |
-| --- | --- |
-| [Consumer interfaces](consumer-interfaces.md) | Accepted PHP conventions and capability examples; implementation and sandbox evidence remain in the follow-ups below |
-| [#21](https://github.com/jojeringnax/airwallex-php-sdk/issues/21) | Cover all accepted UI/mode combinations; test URL/client-secret presence, one-hour expiry, cancellation and backend completion reconciliation |
-| [#23](https://github.com/jojeringnax/airwallex-php-sdk/issues/23) | Trial/future-start payloads, timezone precision, status-dependent updates and invalid ranges |
-| [#26](https://github.com/jojeringnax/airwallex-php-sdk/issues/26) | Immediate proration choices, scheduled ends, invalid/already-cancelled states; retain the observed finite ACTIVE restoration boundary and unresolved field/state interactions; preserve pause/reactivation deferral |
-| [#27](https://github.com/jojeringnax/airwallex-php-sdk/issues/27) | Return nullable PDF and hosted links; test draft/finalized access and expired-link handling; resolve validity-clock/refresh ambiguity with Airwallex or sandbox |
-| [#28](https://github.com/jojeringnax/airwallex-php-sdk/issues/28) | Source-change retry side effects, account-configured recovery and ownership failures |
-| [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) | Validate the account-specific journeys and entitlement prerequisites; seek Airwallex confirmation of hosted Billing portal availability/session contract if revisiting that deferral |
+Both connected-account Billing models remain in SDK scope under the [independent authorization and eligibility boundaries](connected-account-contracts.md). Missing provider entitlements do not remove those documented code paths or block their SDK completion. A token exchange or passing fixture does not prove an account is eligible.
+
+| Owning work | SDK implementation / deterministic validation | Supplemental provider observations |
+| --- | --- | --- |
+| [Consumer interfaces](consumer-interfaces.md) | Accepted PHP conventions and capability examples, implemented against the selected contracts | Account-specific execution of the documented examples |
+| [#21](https://github.com/jojeringnax/airwallex-php-sdk/issues/21) | Accepted UI/mode combinations, conditional URL/client-secret fields, returned expiry/status, cancellation and backend completion reconciliation | Actual Checkout completion and expiration; preserve the selected-schema/timestamp discrepancy rather than assert a guaranteed one-hour lifetime |
+| [#23](https://github.com/jojeringnax/airwallex-php-sdk/issues/23) | Trial/future-start payloads, timezone precision, documented status restrictions and invalid ranges | Natural-time trial/start transitions and account-specific collection |
+| [#26](https://github.com/jojeringnax/airwallex-php-sdk/issues/26) | Immediate proration choices, scheduled ends and provider failures for invalid/already-cancelled states; retain the finite ACTIVE restoration boundary and pause/reactivation deferral | Actual financial effects and unresolved schedule-field/state interactions |
+| [#27](https://github.com/jojeringnax/airwallex-php-sdk/issues/27) | Nullable PDF/hosted links, draft/finalized reads and unchanged expired-link values; no SDK renewal or expiry calculation | Link validity-clock and refresh clarification from Airwallex or Sandbox |
+| [#28](https://github.com/jojeringnax/airwallex-php-sdk/issues/28) | Explicit source-change retry side effects, ownership failures and returned recovery states; no universal dunning schedule | Account-configured retry cadence, exhaustion and final-action outcomes |
+| [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) | Documented Sandbox harness behavior, meaningful deterministic coverage and package checks under the same completion rule | Account-specific journey and entitlement observations retain their own pass/fail/pending/blocked results; hosted portal confirmation is needed only if revisiting that deferral |
+
+An observed integration pass requires explicitly configured Sandbox credentials, sanitized diagnostics and the owning journey's identity, state and cleanup proofs. Existing failed or pending results and reconciliation obligations remain unchanged; live financial operations remain outside validation scope.
 
 Hosted Billing portal sessions and pause/reactivation remain deliberate deferrals. Reopening them requires provider contracts, account eligibility and a separate scope decision. Application portal, document delivery, local trial and entitlement implementations remain outside this repository.
