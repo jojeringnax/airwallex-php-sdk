@@ -82,6 +82,62 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
         }
     }
 
+    /** Keep only the three known upstream notices observable inside this synthetic child protocol. */
+    private static function childDiagnosticCollector(): string
+    {
+        return <<<'PHP'
+        $deprecations = [];
+        set_error_handler(static function (
+            int $severity, string $message, string $file
+        ) use (&$deprecations, $argv): bool {
+            if ($severity !== E_DEPRECATED
+                || $file !== dirname($argv[1]) . '/psr/http-factory/src/UploadedFileFactoryInterface.php') {
+                return false;
+            }
+            $prefix = 'Psr\\Http\\Message\\UploadedFileFactoryInterface::createUploadedFile(): '
+                . 'Implicitly marking parameter $';
+            $suffix = ' as nullable is deprecated, the explicit nullable type must be used instead';
+            foreach (['size', 'clientFilename', 'clientMediaType'] as $parameter) {
+                if ($message === $prefix . $parameter . $suffix && !in_array($parameter, $deprecations, true)) {
+                    $deprecations[] = $parameter;
+                    return true;
+                }
+            }
+            return false;
+        });
+        PHP;
+    }
+
+    public function testChildDiagnosticsAcceptOnlyTheThreeExactUpstreamNoticesOnce(): void
+    {
+        $code = self::childDiagnosticCollector() . <<<'PHP'
+        $handler = set_error_handler(static fn (): bool => false);
+        restore_error_handler();
+        $file = dirname($argv[1]) . '/psr/http-factory/src/UploadedFileFactoryInterface.php';
+        $message = 'Psr\\Http\\Message\\UploadedFileFactoryInterface::createUploadedFile(): '
+            . 'Implicitly marking parameter $size as nullable is deprecated, '
+            . 'the explicit nullable type must be used instead';
+        $checks = [
+            $handler(E_WARNING, $message, $file),
+            $handler(E_DEPRECATED, $message, '/other/dependency.php'),
+            $handler(E_DEPRECATED, 'unexpected deprecation', $file),
+            $handler(E_DEPRECATED, $message, $file),
+            $handler(E_DEPRECATED, $message, $file),
+        ];
+        restore_error_handler();
+        echo json_encode([$checks, $deprecations], JSON_THROW_ON_ERROR);
+        PHP;
+        [$exit, $raw, $errors] = self::child([
+            PHP_BINARY, '-r', $code, dirname(__DIR__, 4) . '/vendor/autoload.php',
+        ]);
+        self::assertSame(0, $exit);
+        self::assertSame('', $errors);
+        self::assertSame(
+            [[false, false, false, true, false], ['size']],
+            json_decode($raw, true, flags: JSON_THROW_ON_ERROR)
+        );
+    }
+
     public function testTwoFreshProcessesRaceOneImmutableOriginalClaimAndOnlyOneCanInvokeDisable(): void
     {
         $f = AlipayConsentDisableCleanupTest::fixture();
@@ -96,7 +152,7 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
             $fixture = $f['base'] . '/child-fixture.json';
             file_put_contents($fixture, json_encode($data, JSON_THROW_ON_ERROR));
             chmod($fixture, 0600);
-            $code = <<<'CHILD'
+            $code = self::childDiagnosticCollector() . <<<'CHILD'
             require $argv[1];
             $f = json_decode(file_get_contents($argv[2]), true, flags: JSON_THROW_ON_ERROR);
             $index = $argv[3];
@@ -135,7 +191,8 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
             $r = \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentDisableCleanupCommand::run([
                 'environment'=>'sandbox', 'credentials-file'=>$f['credentials'], 'state-dir'=>$f['state'],
                 'prior-ledger'=>$f['prior'], 'disable-own-alipay-hk-consent-once'=>true], $provider);
-            echo json_encode($r, JSON_THROW_ON_ERROR);
+            restore_error_handler();
+            echo json_encode(['result' => $r, 'dependency_deprecations' => $deprecations], JSON_THROW_ON_ERROR);
             CHILD;
             foreach (['one', 'two'] as $index) {
                 $process = proc_open([PHP_BINARY, '-r', $code, dirname(__DIR__, 4) . '/vendor/autoload.php',
@@ -157,7 +214,13 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
                 self::assertSame(0, proc_close($process));
                 $result = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
                 self::assertIsArray($result);
-                $results[] = $result;
+                self::assertSame(['result', 'dependency_deprecations'], array_keys($result));
+                self::assertContains(
+                    $result['dependency_deprecations'],
+                    [[], ['size', 'clientFilename', 'clientMediaType']]
+                );
+                self::assertIsArray($result['result']);
+                $results[] = $result['result'];
             }
             self::assertSame(1, array_sum(array_column($results, 'disable_invocations')));
             self::assertSame(['fail', 'pending'], (static function (array $results): array {
