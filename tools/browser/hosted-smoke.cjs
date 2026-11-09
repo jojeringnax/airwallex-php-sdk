@@ -5,7 +5,7 @@ const path = require('node:path');
 const { fixtureCardRuntime } = require('./hosted-card-choice.cjs');
 const { inspect } = require('./hosted-browser.cjs');
 
-async function smoke(playwright) {
+async function smoke(playwright, instrumentOnly = false) {
   const hits = { page: 0, asset: 0, frame: 0, redirect: 0, forbidden: 0, websocket: 0, payer: 0, render: 0, controller: 0, method: 0, customer: 0, consent: 0, country: 0, status: 0, reloadPages: 0, currency: 0 };
   let tamper = false;
   let payerReply = 'matched';
@@ -304,6 +304,22 @@ async function smoke(playwright) {
     + Buffer.from(JSON.stringify({ resource_id: 'checkout:SYNTHETIC_CHECKOUT', exp: 4070908800 })).toString('base64url')
     + '.SYNTHETIC_SIGNATURE';
   try {
+    if (instrumentOnly) {
+      const journal = { run: async () => { throw new Error('No synthetic BWS role was expected.'); },
+        evidence: () => ({ risk_journal_prepared: 0, risk_journal_results: 0, risk_journal_poisoned: false }),
+        close: async () => {} };
+      const observed = await inspect(origin + '/payer-page?s=' + token + '&render=1&config=1&normal=1',
+        playwright, origin, null, expected, true, true, true, journal, null, false, false, false, null, true);
+      if (observed.instrument_security_requested !== true || observed.instrument_ready !== false
+          || observed.financial_permission !== false || observed.security_graph_complete !== false
+          || observed.card_entry_enabled !== false || hits.forbidden !== 0 || observed.proxy_external_connections !== 0
+          || observed.normal_read_window_closed !== true || observed.normal_checkout_status_attempts > 3) {
+        throw new Error('Local separate security profile changed its boundaries.');
+      }
+      return { security_shared_runner_verified: true, security_normal_window_unchanged: true,
+        security_financial_permission: false, security_external_connections: 0,
+        ...await instrumentSecuritySmoke(playwright) };
+    }
     const result = await inspect(origin + '/page?s=SYNTHETIC_SECRET', playwright, origin, async (page, context) => {
       if (await page.evaluate(() => window.fixtureLoaded) !== true) throw new Error('Local smoke failed.');
       await page.evaluate(async () => {
@@ -822,6 +838,94 @@ async function riskSmoke(playwright) {
   }
 }
 
+// Real Chrome, exclusively synthetic loopback: exercise async-loader-before-frame ordering.
+async function instrumentSecuritySmoke(playwright) {
+  const { InstrumentSecurityScope, PendingLoader } = require('./hosted-pending-loader.cjs');
+  let origin, bound, page, browser, context, proxy;
+  let loaderHits = 0, forbiddenHits = 0, acknowledgements = 0, prebindingSends = 0;
+  const sockets = new Set();
+  const server = http.createServer((request, response) => {
+    if (request.url === '/page') response.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html><body>
+      <script async id="airwallex-fraud-api" data-order-session-id="synthetic" src="/fingerprint.js?sessionId=synthetic&hasScriptId=false&disable3rdTracking=false"></script>
+      <script>setTimeout(()=>{ const frame=document.createElement('iframe'); frame.src='/bound-frame'; document.body.append(frame); },50);</script>`);
+    else if (request.url === '/bound-frame') response.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><p>Bound</p>');
+    else if (request.url.startsWith('/fingerprint.js?')) {
+      loaderHits++;
+      if (!bound) prebindingSends++;
+      response.writeHead(200, { 'content-type': 'application/javascript' }).end(`window.syntheticSecurityLoaded=true;
+        fetch('/financial',{method:'POST',body:'PRIVATE_INSTRUMENT'}).catch(()=>{});
+        const frame=document.createElement('iframe');frame.src='/risk-iframe.html';document.body.append(frame);`);
+    } else { forbiddenHits++; response.writeHead(500).end(); }
+  });
+  server.on('connection', socket => { sockets.add(socket); socket.on('error', () => {});
+    socket.on('close', () => sockets.delete(socket)); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  origin = 'http://127.0.0.1:' + server.address().port;
+  const parent = { renderEnabled: () => true, bindingEvidence: () => ({ payer_payload_delivered: true }),
+    normalEvidence: () => ({ normal_reads_requested: true }), normalSourceMatches: value => value === origin + '/page',
+    riskSessionMatches: value => value === 'synthetic' && !!bound };
+  const scope = new InstrumentSecurityScope(parent, performance.now() + 40000);
+  let phase = 'proxy';
+  let closing = false, blocked = 0, routeFailed = false;
+  const tasks = new Set();
+  const risk = { loaderTarget: value => value.startsWith(origin + '/fingerprint.js?'), handle: async route => {
+    if (!bound) throw new Error('Unbound synthetic promotion.');
+    acknowledgements++;
+    const response = await route.fetch({ headers: { accept: '*/*', cookie: '', referer: '' }, maxRedirects: 0, maxRetries: 0 });
+    try { await route.fulfill({ response, body: await response.body() }); } finally { await response.dispose(); }
+    return true;
+  } };
+  const pending = new PendingLoader(risk, scope);
+  try {
+    proxy = await require('./hosted-policy.cjs').egressProxy({ allowsAuthority: (host, port) =>
+      host === '127.0.0.1' && String(port) === new URL(origin).port,
+      allowsHttp: value => new URL(value).origin === origin });
+    phase = 'launch';
+    browser = await playwright.chromium.launch({ channel: 'chrome', headless: true,
+      proxy: { server: proxy.server, bypass: '' }, args: ['--proxy-bypass-list=<-loopback>', '--disable-quic'],
+      env: { PATH: process.env.PATH ?? '', LANG: 'en_US.UTF-8' } });
+    phase = 'context';
+    context = await browser.newContext({ ignoreHTTPSErrors: false, serviceWorkers: 'block' });
+    await context.route('**/*', route => {
+      const task = (async () => {
+        if (await pending.handle(route, context, () => ({ main: page?.mainFrame(), bound }), () => closing, () => 0)) return;
+        const request = route.request();
+        if ([origin + '/page', origin + '/bound-frame'].includes(request.url()) && request.method() === 'GET') {
+          if (request.url() === origin + '/bound-frame') {
+            if (loaderHits !== 0 || acknowledgements !== 0) throw new Error('Early synthetic loader send.');
+            bound = request.frame();
+          }
+          const response = await route.fetch({ maxRedirects: 0, maxRetries: 0 });
+          try { await route.fulfill({ response }); } finally { await response.dispose(); }
+        } else { blocked++; await route.abort('blockedbyclient'); }
+      })().catch(() => { routeFailed = true; });
+      tasks.add(task); void task.then(() => tasks.delete(task)); return task;
+    });
+    await context.routeWebSocket(/.*/, socket => socket.close());
+    phase = 'navigation';
+    page = await context.newPage();
+    await page.goto(origin + '/page', { waitUntil: 'domcontentloaded', timeout: 5000 });
+    phase = 'observation';
+    const deadline = performance.now() + 1500;
+    while ((loaderHits !== 1 || blocked < 2) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    if (routeFailed || prebindingSends !== 0 || loaderHits !== 1 || acknowledgements !== 1 || forbiddenHits !== 0
+        || blocked < 2 || !pending.evidence().security_loader_promoted) throw new Error('Local security ordering failed.');
+    return { security_early_candidate_verified: true, security_prebinding_send_blocked: true,
+      security_new_family_financial_denial: true, security_fixture_forbidden_hits: 0 };
+  } catch {
+    const error = new Error('Local security ordering failed safely.');
+    error.fixedLocalEvidence = { phase, route_failed: routeFailed, loader_hits: loaderHits,
+      forbidden_hits: forbiddenHits, acknowledgements, prebinding_sends: prebindingSends,
+      blocked, ...pending.evidence() };
+    throw error;
+  } finally {
+    closing = true; pending.close(); scope.close();
+    if (context) await context.close(); if (browser) await browser.close();
+    await Promise.all([...tasks]); if (proxy) await proxy.close();
+    for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve));
+  }
+}
+
 if (require.main === module) {
   (async () => {
     if (process.argv.length !== 3 || !path.isAbsolute(process.argv[2])) throw new Error('Local smoke failed.');
@@ -832,4 +936,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { smoke, riskSmoke };
+module.exports = { smoke, riskSmoke, instrumentSecuritySmoke };

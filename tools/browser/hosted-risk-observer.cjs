@@ -23,7 +23,12 @@ class HostedRiskObserver {
   #beforeCookies = null;
   #chain = Promise.resolve();
   #waiting = 0;
-  constructor(parent, journal, playwright, fixture = null, caseDeadline = performance.now() + 40000) {
+  #window = 8000;
+  #instrumentSecurity = false;
+  constructor(parent, journal, playwright, fixture = null, caseDeadline = performance.now() + 40000, instrumentSecurity = false) {
+    if (typeof instrumentSecurity !== 'boolean') throw new Error('Invalid security profile.');
+    this.#instrumentSecurity = instrumentSecurity;
+    this.#window = instrumentSecurity ? 15000 : 8000;
     if (!Number.isFinite(caseDeadline)) throw new Error('Risk case deadline is invalid.');
     this.#caseDeadline = caseDeadline;
     this.#parent = parent;
@@ -33,10 +38,12 @@ class HostedRiskObserver {
     this.#policy = new HostedRiskPolicy(parent, journal !== null, fixture);
   }
 
+  loaderTarget(value) { return this.#policy.loaderTarget(value); }
+
   start(proxy) {
     this.#proxy = proxy;
     this.#relay = this.#journal === null ? null : new HostedRiskRelay(proxy,
-      this.#fixture === null ? null : { origin: this.#fixture.bwsOrigin, ca: this.#fixture.ca });
+      this.#fixture === null ? null : { origin: this.#fixture.bwsOrigin, ca: this.#fixture.ca }, this.#instrumentSecurity);
   }
 
   authority(host, port) {
@@ -48,7 +55,7 @@ class HostedRiskObserver {
   #rememberDeadline() {
     const remaining = Math.min(this.#parent.normalWindowRemaining(), this.#caseDeadline - performance.now());
     if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('Risk scope is unavailable.');
-    this.#deadline ??= performance.now() + Math.min(8000, remaining);
+    this.#deadline ??= performance.now() + Math.min(this.#window, remaining);
   }
 
   async #bounded(promise) {
@@ -132,6 +139,25 @@ class HostedRiskObserver {
         if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)) return true;
         // Retain construction before await; shutdown disposes every created public context.
         this.#rememberDeadline();
+        if (this.#instrumentSecurity) {
+          const target = request.url();
+          const selected = { role: 'loader', ordinal: 0, url: target, headers: { accept: '*/*' },
+            body: Buffer.alloc(0), scope: claim.scope,
+            sessionHash: require('node:crypto').createHash('sha256').update(query.get('sessionId')).digest('hex') };
+          const deadline = Math.min(this.#deadline, this.#caseDeadline,
+            performance.now() + this.#parent.normalWindowRemaining());
+          const response = await this.#value(this.#journal.run(selected, async () => {
+            if (this.#closed || closing() || admissionClosed() || !this.#original(frame, main, bound)
+                || !this.#policy.live()) throw new Error('Loader scope is unavailable.');
+            return this.#relay.send(target, 'GET', 'loader', selected.headers, selected.body, deadline,
+              () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound));
+          }, value => value.status === 200 && this.#policy.verifyLoader(value.body), deadline));
+          if (this.#closed || closing() || !this.#original(frame, main, bound) || !this.#policy.live()) return true;
+          await this.#value(route.fulfill({ status: response.status,
+            headers: this.#policy.responseHeaders(response), body: response.body }));
+          delivered = true;
+          return true;
+        }
         this.#publicClient ??= this.#playwright.request.newContext({ ignoreHTTPSErrors: false,
           proxy: { server: this.#proxy, bypass: '' } }).then(client => {
           // Retain late completion even when bounded shutdown already reported failure.
@@ -198,7 +224,8 @@ class HostedRiskObserver {
           }
           this.#policy.invoke(selected.role);
           const response = await this.#relay.send(selected.url, selected.role === 'preflight' ? 'OPTIONS' : 'POST',
-            selected.role, selected.headers, selected.body, deadline);
+            selected.role, selected.headers, selected.body, deadline, this.#instrumentSecurity
+              ? () => !this.#closed && !closing() && !admissionClosed() && this.#original(frame, main, bound) : null);
           this.#policy.status(selected.role, response.status);
           return response;
         }, response => this.#policy.validateResponse(selected, response), deadline);
@@ -228,16 +255,30 @@ class HostedRiskObserver {
     return true;
   }
 
+  async drainSent() {
+    if (!this.#instrumentSecurity || this.#handlers.size === 0) return true;
+    // Admissions are already closed by the caller. Only retained, already-invoked handlers may finish.
+    return this.#bounded(Promise.all([...this.#handlers]));
+  }
+
   async close() {
     this.#closed = true;
-    let clean = this.#relay === undefined || this.#relay === null || await this.#bounded(this.#relay.close());
-    clean = await this.#bounded(this.#chain) && clean;
-    clean = await this.#bounded(Promise.all([...this.#handlers])) && clean;
-    clean = await this.#bounded(Promise.all([...this.#responseDisposals.values()]).then(values => values.every(Boolean))) && clean;
+    // New-profile teardown can reap completed work inside the case reserve; it grants no send/release.
+    const bounded = !this.#instrumentSecurity ? value => this.#bounded(value) : async value => {
+      let timer;
+      try { return await Promise.race([Promise.resolve(value).then(result => result !== false, () => false),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false),
+          Math.max(0, Math.min(1000, this.#caseDeadline - performance.now()))); })]); }
+      finally { clearTimeout(timer); }
+    };
+    let clean = this.#relay === undefined || this.#relay === null || await bounded(this.#relay.close());
+    clean = await bounded(this.#chain) && clean;
+    clean = await bounded(Promise.all([...this.#handlers])) && clean;
+    clean = await bounded(Promise.all([...this.#responseDisposals.values()]).then(values => values.every(Boolean))) && clean;
     if (this.#publicClient) {
-      clean = await this.#bounded(this.#publicClient.then(client => this.#disposePublic(client))) && clean;
+      clean = await bounded(this.#publicClient.then(client => this.#disposePublic(client))) && clean;
     }
-    if (this.#journal) clean = await this.#bounded(this.#journal.close()) && clean;
+    if (this.#journal) clean = await bounded(this.#journal.close()) && clean;
     if (!clean || this.#cleanupFailed) this.#policy.poison('shutdown');
     return clean && !this.#cleanupFailed;
   }

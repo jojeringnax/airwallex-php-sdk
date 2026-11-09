@@ -20,7 +20,12 @@ class PreflightFailure extends Error {
 }
 let startupPhase = 'configuration';
 
-async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false, observeCurrencySettings = false, selectCard = false, cardRuntime = null) {
+async function inspect(initial, playwright, fixtureOrigin = null, exercise = null, expected = null, render = false, observeConfig = false, observeNormal = false, riskJournal = null, riskFixture = null, observeParentCountry = false, observeCurrencySettings = false, selectCard = false, cardRuntime = null, instrumentSecurity = false) {
+  const instrumentCaseDeadline = performance.now() + 40000;
+  if (typeof instrumentSecurity !== 'boolean' || (instrumentSecurity
+      && (!render || !observeConfig || !observeNormal || riskJournal === null || selectCard))) {
+    throw new Error('Invalid fixed security profile.');
+  }
   const policy = new HostedPolicy(initial, fixtureOrigin, expected, render, observeConfig, observeNormal, undefined, observeParentCountry, observeCurrencySettings);
   if (typeof selectCard !== 'boolean' || (selectCard && !observeNormal)) throw new Error('Card choice requires explicit normal reads.');
   if (riskJournal !== null && !observeNormal) throw new Error('Risk observation requires explicit normal reads.');
@@ -73,6 +78,27 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     try { return await action(); }
     catch { markFailure(phase); throw new Error('Browser preflight failed safely.'); }
   };
+  const profileStep = async action => {
+    if (!instrumentSecurity) return action();
+    const remaining = security.normalWindowRemaining();
+    if (shuttingDown || remaining <= 0) throw new Error('Security response release is closed.');
+    const deadline = performance.now() + remaining;
+    let timer;
+    try {
+      const result = await Promise.race([Promise.resolve().then(() => {
+        if (shuttingDown || performance.now() >= deadline || security.normalWindowRemaining() <= 0) {
+          throw new Error('Security response release is closed.');
+        }
+        return action();
+      }), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Security response release is closed.')), remaining);
+      })]);
+      if (shuttingDown || performance.now() >= deadline || security.normalWindowRemaining() <= 0) {
+        throw new Error('Security response release is closed.');
+      }
+      return result;
+    } finally { clearTimeout(timer); }
+  };
   const pending = new Set();
   const track = (action, phase = 'route_action') => {
     const safe = Promise.resolve().then(action).catch(() => { markFailure(phase); });
@@ -86,7 +112,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     policy.closeNormalWindow();
     markFailure('normal_observation_deadline');
     shuttingDown = true;
-    if (context) { browserContextCloseStarted = true; void track(() => context.close(), 'shutdown_browser_context'); }
+    if (!instrumentSecurity && context) { browserContextCloseStarted = true; void track(() => context.close(), 'shutdown_browser_context'); }
   };
   const drainSentNormalReads = async () => {
     if (!observeNormal || shuttingDown || normalInFlight.size === 0) return;
@@ -99,7 +125,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       })]);
     } finally { clearTimeout(timer); }
   };
-  const caseDeadline = performance.now() + (render ? 40000 : 20000);
+  const caseDeadline = instrumentSecurity ? instrumentCaseDeadline : performance.now() + (render ? 40000 : 20000);
   cardCaseDeadline = caseDeadline;
   const parentCountry = new ParentCountryObserver(policy, observeParentCountry, playwright, caseDeadline);
   const currencySettings = new CurrencySettingsObserver(policy, observeCurrencySettings, playwright, caseDeadline);
@@ -112,7 +138,14 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     };
     void cardChoice.consider(frame, scope, scope());
   };
-  const risk = new HostedRiskObserver(policy, riskJournal, playwright, riskFixture, caseDeadline);
+  const { InstrumentSecurityScope, PendingLoader } = instrumentSecurity
+    ? require('./hosted-pending-loader.cjs') : {};
+  const security = instrumentSecurity ? new InstrumentSecurityScope(policy, caseDeadline) : null;
+  const risk = new HostedRiskObserver(security ?? policy, riskJournal, playwright, riskFixture, caseDeadline, instrumentSecurity);
+  const pendingLoader = instrumentSecurity ? new PendingLoader(risk, security) : null;
+  let sourceGeneration = 0;
+  let instrumentMainDocumentSeen = false;
+  const securityClosed = () => shuttingDown || (security !== null && security.admissionRemaining() <= 0);
   const watchdog = setTimeout(() => {
     markFailure('watchdog');
     shuttingDown = true;
@@ -133,9 +166,10 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     payer_mode_matches: false, payer_currency_matches: false };
   try {
     proxy = await step('proxy_start', () => egressProxy({
-      allowsAuthority: (host, port) => policy.allowsAuthority(host, port) || risk.authority(host, port),
+      allowsAuthority: (host, port) => (!instrumentSecurity || !securityClosed())
+        && (policy.allowsAuthority(host, port) || risk.authority(host, port)),
       allowsHttp: value => policy.allowsHttp(value),
-    }));
+    }, instrumentSecurity && fixtureOrigin === null));
     risk.start(proxy.server);
     parentCountry.start(proxy.server);
     currencySettings.start(proxy.server);
@@ -162,13 +196,26 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     await context.route('**/*', route => track(async () => {
       if (shuttingDown) throw new Error('Browser preflight is shutting down.');
       const request = route.request();
+      if (instrumentSecurity && request.resourceType() === 'document') {
+        let frame;
+        try { frame = request.frame(); } catch { /* Unavailable navigation is withheld. */ }
+        const main = mainPage?.mainFrame();
+        if (!frame || (frame === main && instrumentMainDocumentSeen) || frame === boundFrame) {
+          sourceGeneration++; security.close(); pendingLoader.close();
+          counts.blocked_requests++; await route.abort('blockedbyclient'); return;
+        }
+        if (frame === main) instrumentMainDocumentSeen = true;
+        else if (request.url() === initial) {
+          counts.blocked_requests++; await route.abort('blockedbyclient'); return;
+        }
+      }
       if (observeParentCountry && request.resourceType() === 'document' && request.frame() === mainPage?.mainFrame()) {
         policy.noteParentMainDocument(request.url());
       }
       if (observeCurrencySettings && request.resourceType() === 'document' && request.frame() === mainPage?.mainFrame()) {
         policy.noteCurrencyMainDocument(request.url());
       }
-      if (normalAdmissionClosed) {
+      if (normalAdmissionClosed && !instrumentSecurity) {
         counts.blocked_requests++;
         policy.noteDeniedRead(request.url(), request.method(), request.resourceType());
         await route.abort('blockedbyclient');
@@ -176,8 +223,13 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       }
       if (await parentCountry.handle(route, mainPage?.mainFrame(), () => shuttingDown, () => normalAdmissionClosed)) return;
       if (observeCurrencySettings && await currencySettings.handle(route, mainPage?.mainFrame(), () => shuttingDown, () => normalAdmissionClosed)) return;
+      if (pendingLoader && await pendingLoader.handle(route, context,
+        () => ({ main: mainPage?.mainFrame(), bound: boundFrame }), securityClosed, () => sourceGeneration)) return;
       if (await risk.handle(route, context, mainPage?.mainFrame(), boundFrame,
-        () => shuttingDown, () => normalAdmissionClosed)) return;
+        () => shuttingDown, instrumentSecurity ? securityClosed : () => normalAdmissionClosed)) return;
+      if (instrumentSecurity && securityClosed()) {
+        counts.blocked_requests++; await route.abort('blockedbyclient'); return;
+      }
       // Script admission and integrity share one immutable, non-null expected hash.
       const script = request.resourceType() === 'script';
       const expectedHash = script ? policy.assetHash(request.url(), request.method(), request.resourceType()) : null;
@@ -227,14 +279,14 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         try { payerFromMainPage = request.frame() === mainPage.mainFrame(); } catch { /* Deny unavailable frame. */ }
       }
       let methodHeaders = null;
-      if (observeConfig && boundFrame && ['xhr', 'fetch'].includes(request.resourceType())) {
+      if (!normalAdmissionClosed && observeConfig && boundFrame && ['xhr', 'fetch'].includes(request.resourceType())) {
         let fromBoundFrame = false;
         try { fromBoundFrame = request.frame() === boundFrame; } catch { /* Deny detached or unavailable frames. */ }
         if (fromBoundFrame) methodHeaders = policy.claimMethodConfig(request.url(), request.method(),
           request.resourceType(), request.headers(), request.postData());
       }
       let normalRead = null;
-      if (observeNormal && mainPage && ['xhr', 'fetch'].includes(request.resourceType())) {
+      if (!normalAdmissionClosed && observeNormal && mainPage && ['xhr', 'fetch'].includes(request.resourceType())) {
         let fromMain = false, fromBound = false;
         try {
           const frame = request.frame();
@@ -363,19 +415,48 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
           } finally { if (activeRead) { normalInFlight.delete(activeRead); finishRead(); } }
         }
       } else if (methodHeaders !== null) {
+        // Capture once while the original normal window is still open; snapshot closure never resets it.
+        const methodDeadline = instrumentSecurity ? Math.min(caseDeadline,
+          performance.now() + policy.normalWindowRemaining(),
+          performance.now() + security.normalWindowRemaining()) : null;
+        const methodStep = async action => {
+          if (!instrumentSecurity) return action();
+          const remaining = Math.min(methodDeadline - performance.now(), security.normalWindowRemaining());
+          if (shuttingDown || remaining <= 0) throw new Error('Original method response window ended.');
+          let timer;
+          try {
+            const value = await Promise.race([Promise.resolve().then(() => {
+              if (shuttingDown || performance.now() >= methodDeadline || security.normalWindowRemaining() <= 0) {
+                throw new Error('Original method response window ended.');
+              }
+              return action();
+            }), new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error('Original method response window ended.')), remaining);
+            })]);
+            if (shuttingDown || performance.now() >= methodDeadline || security.normalWindowRemaining() <= 0) {
+              throw new Error('Original method response window ended.');
+            }
+            return value;
+          } finally { clearTimeout(timer); }
+        };
+        const methodRead = (phase, action) => step(phase, () => methodStep(action));
         let delivered = false;
         try {
-          if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
+          if (shuttingDown || (normalAdmissionClosed || (instrumentSecurity
+              && (securityClosed() || performance.now() >= methodDeadline)))) throw new Error('Browser preflight is shutting down.');
           if (!methodClientPromise) methodClientPromise = step('method_context', () => playwright.request.newContext({
             ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
           }));
-          const client = await methodClientPromise;
-          if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
+          const client = instrumentSecurity
+            ? await methodRead('method_context', () => methodClientPromise) : await methodClientPromise;
+          if (shuttingDown || (normalAdmissionClosed || (instrumentSecurity
+              && (securityClosed() || performance.now() >= methodDeadline)))) throw new Error('Browser preflight is shutting down.');
           methodSendStarted = true;
-          const response = await step('method_get', () => client.get(request.url(), { headers: methodHeaders,
-            maxRedirects: 0, maxRetries: 0, timeout: 10000 }));
+          const response = await methodRead('method_get', () => client.get(request.url(), { headers: methodHeaders,
+            maxRedirects: 0, maxRetries: 0, timeout: instrumentSecurity
+              ? Math.max(1, Math.min(10000, methodDeadline - performance.now())) : 10000 }));
           try {
-            const status = await step('method_status', () => {
+            const status = await methodRead('method_status', () => {
               const status = response.status();
               if (!Number.isInteger(status) || status < 100 || status > 599) throw new Error('Invalid method status.');
               return status;
@@ -385,16 +466,16 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             if (status >= 300 && status < 400) method.method_config_observation = 'redirect_rejected';
             else if (status !== 200) method.method_config_observation = 'http_rejected';
             else {
-              const declared = (await step('method_headers', () => response.headers()))['content-length'];
+              const declared = (await methodRead('method_headers', () => response.headers()))['content-length'];
               if (declared !== undefined && (!/^[0-9]+$/u.test(declared) || Number(declared) > 262144)) {
                 method.method_config_observation = 'invalid_response';
               } else {
-                const body = await step('method_body', () => response.body());
+                const body = await methodRead('method_body', () => response.body());
                 method = { ...method, ...policy.observeMethodConfig(body) };
                 if (policy.mayDeliverMethodConfig()) {
-                  const headers = Object.fromEntries(Object.entries(await step('method_headers', () => response.headers()))
+                  const headers = Object.fromEntries(Object.entries(await methodRead('method_headers', () => response.headers()))
                     .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
-                  await step('method_fulfill', () => route.fulfill({ response, headers, body }));
+                  await methodRead('method_fulfill', () => route.fulfill({ response, headers, body }));
                   method.method_config_payload_delivered = true;
                   delivered = true;
                 }
@@ -409,11 +490,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         let delivered = false;
         try {
           // Only the reviewed getter headers survive. Never follow a redirect or replay the GET.
-          const response = await route.fetch({ headers: {
+          const response = await profileStep(() => route.fetch({ headers: {
             authorization: request.headers().authorization,
             accept: 'application/json, text/plain, */*',
             cookie: '', // Playwright otherwise adds BrowserContext cookies despite the header override.
-          }, maxRedirects: 0, maxRetries: 0, timeout: 10000 });
+          }, maxRedirects: 0, maxRetries: 0, timeout: instrumentSecurity
+            ? Math.max(1, Math.min(10000, security.normalWindowRemaining())) : 10000 }));
           try {
             const status = response.status();
             if (!Number.isInteger(status) || status < 100 || status > 599) {
@@ -426,12 +508,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             } else if (status !== 200) {
               payer.payer_observation = 'http_rejected';
             } else {
-              const body = await response.body();
+              const body = await profileStep(() => response.body());
               payer = { ...payer, ...policy.observePayer(body) };
               if (policy.mayDeliverPayer()) {
                 policy.startNormalWindow();
                 if (observeNormal) normalWindowTimer = setTimeout(expireNormalWindow, policy.normalWindowRemaining());
-                await route.fulfill({ response, body });
+                await profileStep(() => route.fulfill({ response, body }));
                 policy.markPayerDelivered();
                 delivered = true;
               }
@@ -450,17 +532,19 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
         // The public bootstrap receives no page credentials, cookies or private referrer.
         const headers = controller ? { accept: '*/*', cookie: '', referer: '' } : { ...request.headers() };
         if (!controller) delete headers.referer;
-        if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
+        if (shuttingDown || (instrumentSecurity ? securityClosed() : normalAdmissionClosed)) throw new Error('Browser preflight is shutting down.');
         if (controller && !publicClientPromise) {
           // Separate storage prevents even a public Set-Cookie from changing the browser's cookie jar.
           publicClientPromise = playwright.request.newContext({
             ignoreHTTPSErrors: false, proxy: { server: proxy.server, bypass: '' },
           });
         }
-        const publicClient = controller ? await publicClientPromise : null;
-        if (shuttingDown || normalAdmissionClosed) throw new Error('Browser preflight is shutting down.');
-        const options = { headers, maxRedirects: 0, maxRetries: 0, timeout: 10000 };
-        const response = controller ? await publicClient.get(request.url(), options) : await route.fetch(options);
+        const publicClient = controller ? await profileStep(() => publicClientPromise) : null;
+        if (shuttingDown || (instrumentSecurity ? securityClosed() : normalAdmissionClosed)) throw new Error('Browser preflight is shutting down.');
+        const options = { headers, maxRedirects: 0, maxRetries: 0, timeout: instrumentSecurity
+          ? Math.max(1, Math.min(10000, security.normalWindowRemaining())) : 10000 };
+        const response = await profileStep(() => controller
+          ? publicClient.get(request.url(), options) : route.fetch(options));
         try {
           if (controller) {
             const status = response.status();
@@ -472,7 +556,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             if (renderFrame) policy.noteRenderCheck('document_redirect');
             await route.abort('blockedbyclient');
           } else {
-            const body = await response.body();
+            const body = await profileStep(() => response.body());
             if (body.length > 2 * 1024 * 1024) throw new Error('Browser response exceeds the preflight boundary.');
             if (renderFrame && (response.status() !== 200
                 || (fixtureOrigin === null && (!body.includes('window.checkoutVersion="v2.56.0"')
@@ -500,8 +584,8 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
             if (controller) {
               const publicHeaders = Object.fromEntries(Object.entries(response.headers())
                 .filter(([key]) => key.toLowerCase() !== 'set-cookie'));
-              await route.fulfill({ response, headers: publicHeaders, body });
-            } else await route.fulfill({ response, body });
+              await profileStep(() => route.fulfill({ response, headers: publicHeaders, body }));
+            } else await profileStep(() => route.fulfill({ response, body }));
             if (renderFrame) {
               counts.bound_render_frames++;
               policy.noteRenderCheck('fulfilled');
@@ -526,6 +610,23 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     });
     const page = await step('page_setup', () => context.newPage());
     mainPage = page;
+    if (instrumentSecurity) {
+      let mainNavigations = 0;
+      const frameNavigations = new WeakMap();
+      page.on('framenavigated', frame => {
+        if (frame === page.mainFrame() && ++mainNavigations > 1) {
+          sourceGeneration++; security.close(); pendingLoader.close();
+        } else if (frame === boundFrame && (frameNavigations.get(frame) ?? 0) > 0) {
+          sourceGeneration++; security.close(); pendingLoader.close();
+        }
+        if (frame === page.mainFrame() || frame === boundFrame) {
+          frameNavigations.set(frame, (frameNavigations.get(frame) ?? 0) + 1);
+        }
+      });
+      page.on('framedetached', frame => { if (frame === boundFrame) {
+        sourceGeneration++; security.close(); pendingLoader.close();
+      } });
+    }
     page.setDefaultTimeout(3000);
     page.setDefaultNavigationTimeout(10000);
     await step('navigation', () => page.goto(initial, { waitUntil: 'domcontentloaded' }));
@@ -597,6 +698,12 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
       normalAdmissionClosed = true; // No new request or late context-construction send after the fixed snapshot.
       await Promise.all([drainSentNormalReads(), parentCountry.drainSent(), currencySettings.drainSent()]); // Already sent reads only.
       policy.closeNormalWindow();
+      if (instrumentSecurity) clearTimeout(normalWindowTimer);
+    }
+    if (instrumentSecurity) {
+      // No normal/UI admission is reopened. Only the closed security observer remains live.
+      while (!securityClosed()) await new Promise(resolve => setTimeout(resolve, Math.min(25, security.admissionRemaining())));
+      if (!await risk.drainSent()) markFailure('risk_shutdown');
     }
     const visible = await step('visible_label', () =>
       page.getByText(/^(test mode|sandbox)$/iu, { exact: true }).first().isVisible());
@@ -619,6 +726,7 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     cardChoice.capture();
     if (observeNormal) { normalAdmissionClosed = true; await Promise.all([drainSentNormalReads(), parentCountry.drainSent(), currencySettings.drainSent()]); }
     shuttingDown = true;
+    security?.close(); pendingLoader?.close();
     policy.closeNormalWindow();
     clearTimeout(normalWindowTimer);
     clearTimeout(watchdog);
@@ -647,13 +755,13 @@ async function inspect(initial, playwright, fixtureOrigin = null, exercise = nul
     ...policy.bindingEvidence(), ...cardChoice.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...payer, ...policy.renderEvidence(), ...policy.methodEvidence(),
     ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}),
     ...(observeConfig ? { ...method, ...readiness, ...readinessAttachment, method_config_send_started: methodSendStarted } : {}),
-    ...risk.evidence(),
+    ...risk.evidence(), ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}),
   });
-  return { ...result, ...counts, ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
+  return { ...result, ...counts, ...(security?.evidence() ?? {}), ...(pendingLoader?.evidence() ?? {}), ...cardChoice.evidence(), ...risk.evidence(), ...parentCountry.evidence(), ...currencySettings.evidence(), ...(observeNormal ? { ...normal, ...policy.normalEvidence() } : {}), ...policy.renderEvidence(), ...policy.methodEvidence(), proxy_rejections: proxy.counts.rejected,
     proxy_connections: proxy.counts.connected, proxy_external_connections: proxy.counts.externalConnected };
 }
 
-async function main() {
+async function main(instrumentSecurity = false) {
   // Only a fixed module location is an argument; the private URL arrives via stdin.
   if (process.argv.length !== 3 || !path.isAbsolute(process.argv[2])) throw new Error('Invalid browser configuration.');
   const chunks = [];
@@ -678,6 +786,8 @@ async function main() {
       || !input.expected || typeof input.expected !== 'object') {
     throw new Error('Invalid private browser input.');
   }
+  if (instrumentSecurity && (input.render !== true || input.observeConfig !== true || input.observeNormal !== true
+      || input.observeRisk !== true || Object.hasOwn(input, 'selectCard'))) throw new Error('Invalid fixed security input.');
   // Reject non-provider input before requiring any browser module or launching Chrome.
   new HostedPolicy(input.url, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, undefined, input.observeParentCountry ?? false, input.observeCurrencySettings ?? false);
   startupPhase = 'tooling_load';
@@ -685,7 +795,7 @@ async function main() {
   const cardRuntime = input.selectCard === true ? await verifyCardRuntime(process.argv[2]) : null;
   startupPhase = 'browser_startup';
   const journal = input.observeRisk === true ? RiskJournalClient.fromDescriptors(input.riskJournal) : null;
-  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal, null, input.observeParentCountry ?? false, input.observeCurrencySettings ?? false, input.selectCard ?? false, cardRuntime);
+  const result = await inspect(input.url, playwright, null, null, input.expected, input.render ?? false, input.observeConfig ?? false, input.observeNormal ?? false, journal, null, input.observeParentCountry ?? false, input.observeCurrencySettings ?? false, input.selectCard ?? false, cardRuntime, instrumentSecurity);
   process.stdout.write(JSON.stringify(result) + '\n');
 }
 
@@ -697,4 +807,10 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { inspect };
+module.exports = { inspect, instrumentMain: async () => {
+  try { await main(true); } catch (error) {
+    const safe = error instanceof PreflightFailure ? error.evidence() : { result: 'fail',
+      reason: 'browser_preflight_failed', card_entry_enabled: false, browser_failure_phase: startupPhase };
+    process.stdout.write(JSON.stringify(safe) + '\n'); process.exitCode = 1;
+  }
+} };

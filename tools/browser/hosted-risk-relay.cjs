@@ -18,7 +18,11 @@ class HostedRiskRelay {
   #closing = false;
   #failed = false;
   #received = 0;
-  constructor(proxy, fixture = null) {
+  #instrumentSecurity = false;
+  #loaderUsed = false;
+  constructor(proxy, fixture = null, instrumentSecurity = false) {
+    if (typeof instrumentSecurity !== 'boolean') throw new RiskRelayFailure('configuration');
+    this.#instrumentSecurity = instrumentSecurity;
     const parsed = new URL(proxy);
     if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || !parsed.port
         || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
@@ -38,6 +42,20 @@ class HostedRiskRelay {
   #target(value, method, role) {
     let target;
     try { target = new URL(value); } catch { throw new RiskRelayFailure('target'); }
+    if (role === 'loader') {
+      const origin = this.#fixture?.origin ?? 'https://static.sandbox.airwallex.com';
+      const query = target.search.slice(1).split('&');
+      const session = target.searchParams.get('sessionId');
+      if (!this.#instrumentSecurity || this.#loaderUsed || method !== 'GET' || value !== target.href
+          || target.origin !== origin || target.username || target.password || target.hash
+          || (this.#fixture === null && target.port)
+          || target.pathname !== (this.#fixture === null ? '/webapp/fraud/device-fingerprint/index.js' : '/fingerprint.js')
+          || !/^[A-Za-z0-9_-]{1,128}$/u.test(session ?? '')
+          || query.sort().join('&') !== ['sessionId=' + session, 'hasScriptId=false', 'disable3rdTracking=false'].sort().join('&')) {
+        throw new RiskRelayFailure('target');
+      }
+      return target;
+    }
     const origin = this.#fixture?.origin ?? 'https://bws.sandbox.airwallex.com';
     if (target.origin !== origin || value !== target.href || target.search || target.hash
         || target.username || target.password || (this.#fixture === null && target.port)
@@ -49,6 +67,12 @@ class HostedRiskRelay {
   }
 
   #headers(fields, role, bytes) {
+    if (role === 'loader') {
+      if (!fields || Object.keys(fields).join(',') !== 'accept' || fields.accept !== '*/*' || bytes !== 0) {
+        throw new RiskRelayFailure('headers');
+      }
+      return { accept: '*/*' };
+    }
     const allowed = new Set(['accept', 'content-type', 'origin', 'referer', 'user-agent', 'cookie',
       'access-control-request-method', 'access-control-request-headers']);
     let size = 0;
@@ -70,13 +94,19 @@ class HostedRiskRelay {
     return { ...fields, ...(role === 'preflight' ? {} : { 'content-length': String(bytes) }) };
   }
 
-  async send(value, method, role, headers, body, deadline) {
+  async send(value, method, role, headers, body, deadline, sendAllowed = null) {
+    if (this.#instrumentSecurity ? typeof sendAllowed !== 'function' : sendAllowed !== null) {
+      throw new RiskRelayFailure('boundary');
+    }
+    const maySend = () => !this.#instrumentSecurity || sendAllowed() === true;
     const target = this.#target(value, method, role);
-    if (!Buffer.isBuffer(body) || body.length > 65536 || (role !== 'preflight' && body.length === 0)
-        || !Number.isFinite(deadline) || deadline <= performance.now() || this.#closing || this.#failed) {
+    if (!Buffer.isBuffer(body) || body.length > 65536 || (!['preflight', 'loader'].includes(role) && body.length === 0)
+        || !Number.isFinite(deadline) || deadline <= performance.now() || this.#closing || this.#failed || !maySend()) {
       throw new RiskRelayFailure('boundary');
     }
     const outgoing = this.#headers(headers, role, body.length);
+    if (role === 'loader') this.#loaderUsed = true;
+    const limit = role === 'loader' ? 262144 : 65536;
     const remaining = Math.min(8000, deadline - performance.now());
     if (remaining <= 0) throw new RiskRelayFailure('deadline');
     let connect, socket, secure, request, agent;
@@ -113,7 +143,7 @@ class HostedRiskRelay {
             this.#sockets.add(socket);
             socket.once('close', () => this.#sockets.delete(socket));
             socket.on('error', fail);
-            if (done || this.#closing || reply.statusCode !== 200 || head.length || performance.now() >= deadline) {
+            if (done || this.#closing || !maySend() || reply.statusCode !== 200 || head.length || performance.now() >= deadline) {
               return fail();
             }
             phase = 'tls';
@@ -125,13 +155,13 @@ class HostedRiskRelay {
             secure.on('error', fail);
             secure.once('secureConnect', () => {
               try {
-                if (done || this.#closing || !secure.authorized || performance.now() >= deadline
+                if (done || this.#closing || !maySend() || !secure.authorized || performance.now() >= deadline
                     || tls.checkServerIdentity(target.hostname, secure.getPeerCertificate())) return fail();
                 phase = 'response';
                 agent = new https.Agent({ keepAlive: false, maxSockets: 1 });
                 agent.createConnection = (_options, callback) => { callback(null, secure); return secure; };
                 request = https.request({ hostname: target.hostname, port: target.port || 443,
-                  path: target.pathname, method, headers: outgoing, agent, maxHeaderSize: 16384 }, response => {
+                  path: target.pathname + (role === 'loader' ? target.search : ''), method, headers: outgoing, agent, maxHeaderSize: 16384 }, response => {
                   if (done || this.#closing || performance.now() >= deadline) return fail();
                   const status = response.statusCode;
                   if (!Number.isInteger(status) || status < 100 || status > 599) return fail();
@@ -144,15 +174,17 @@ class HostedRiskRelay {
                   }
                   const length = fields.filter(item => item.name.toLowerCase() === 'content-length');
                   if (headerBytes > 16384 || length.length > 1 || (length.length === 1
-                      && (!/^[0-9]+$/u.test(length[0].value) || Number(length[0].value) > 65536))) return fail();
+                      && (!/^[0-9]+$/u.test(length[0].value) || Number(length[0].value) > limit))) return fail();
+                  if (role === 'loader' && fields.some(item => item.name.toLowerCase() === 'content-encoding'
+                      && item.value.toLowerCase() !== 'identity')) { phase = 'encoding'; return fail(); }
                   const chunks = [];
                   let bytes = 0;
                   response.on('error', fail); response.on('aborted', fail);
                   response.on('data', chunk => {
                     if (done) return;
                     bytes += chunk.length;
-                    this.#received += chunk.length;
-                    if (this.#closing || bytes > 65536 || this.#received > 262144 || performance.now() >= deadline) return fail();
+                    if (role !== 'loader') this.#received += chunk.length;
+                    if (this.#closing || bytes > limit || this.#received > 262144 || performance.now() >= deadline) return fail();
                     chunks.push(chunk); armRead();
                   });
                   response.once('end', () => {
@@ -167,6 +199,7 @@ class HostedRiskRelay {
                 request.once('close', () => this.#requests.delete(request));
                 request.on('error', fail);
                 request.on('information', () => { phase = 'framing'; fail(); });
+                if (!maySend()) return fail();
                 request.end(body);
                 armRead();
 
