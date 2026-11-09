@@ -222,7 +222,7 @@ final class WorkflowTest extends HttpTestCase
     {
         $http = $this->scenario([[201, self::LOGIN], [403, '{"code":"forbidden","message":"private buyer payload"}']]);
         try {
-            $this->client($http, retryPolicy: new RetryPolicy())->forConnectedAccount('acct_B')
+            $this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3))->forConnectedAccount('acct_B')
                 ->payments()->paymentIntents()->capture(
                     'intent-owned-by-A',
                     ['request_id' => 'stable-capture',
@@ -238,7 +238,7 @@ final class WorkflowTest extends HttpTestCase
         };
         $http = $this->scenario([[201, self::LOGIN], $ambiguous]);
         try {
-            $this->client($http, retryPolicy: new RetryPolicy())->payments()->refunds()->create([
+            $this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3))->payments()->refunds()->create([
                 'request_id' => 'stable-refund', 'payment_intent_id' => 'intent-A', 'amount' => '5.00',
             ]);
             self::fail('Expected ambiguous refund outcome.');

@@ -35,7 +35,7 @@ Billing item and line-item reads use the direct methods accepted in [#61](https:
 
 The direct resource structure keeps item reads discoverable alongside the parent operations. Every call retains the explicit parent ID; individual reads also take the item ID. Responses remain native arrays, and list calls return one bookmark-paginated page. The names and parameter shapes follow the shared compatibility policy once released. See the [executed item-read recipe](../examples/billing-item-reads.php) for all four calls and [Billing resources](billing-resources.md) for schema provenance and remaining provider evidence.
 
-For implemented environment, token, transport, retry and diagnostic behavior, see [client configuration](client-configuration.md). Its optional clock and retry configuration remain a delegated provisional decision under [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60).
+For implemented environment, token, transport, retry and diagnostic behavior, see [client configuration](client-configuration.md), which owns the accepted optional clock and opt-in read-retry behavior for [#60](https://github.com/jojeringnax/airwallex-php-sdk/issues/60).
 
 ## Workflow references
 

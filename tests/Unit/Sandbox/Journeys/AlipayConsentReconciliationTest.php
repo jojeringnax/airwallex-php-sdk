@@ -5,19 +5,23 @@ declare(strict_types=1);
 namespace Jojeringnax\Airwallex\Tests\Unit\Sandbox\Journeys;
 
 use Jojeringnax\Airwallex\Internal\Json\JsonCodec;
+use Jojeringnax\Airwallex\RetryPolicy;
+use Jojeringnax\Airwallex\Tests\Support\HistoricalAlipayTestCase;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliationCommand;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReuseCommand;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReuseTransport;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\KlarnaIntentReconciliation;
-use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SourceEvidence;
 use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Psr\Http\Message\RequestInterface;
 use RuntimeException;
 use stdClass;
 
-final class AlipayConsentReconciliationTest extends TestCase
+#[RunTestsInSeparateProcesses]
+#[PreserveGlobalState(false)]
+final class AlipayConsentReconciliationTest extends HistoricalAlipayTestCase
 {
     /** @var list<string> */
     private array $bases = [];
@@ -100,6 +104,27 @@ final class AlipayConsentReconciliationTest extends TestCase
     {
         foreach ($this->bases as $base) {
             self::remove($base);
+        }
+    }
+
+    public function testChangedHistoricalSdkIsRejectedBeforeAuthentication(): void
+    {
+        self::assertSame(3, (new RetryPolicy())->maxAttempts);
+        $f = self::fixture();
+        $this->bases[] = $f['base'];
+        $priorHash = hash_file('sha256', $f['prior']);
+        $path = self::sdkRoot() . '/src/RetryPolicy.php';
+        $original = file_get_contents($path);
+        self::assertIsString($original);
+        try {
+            file_put_contents($path, "\n", FILE_APPEND);
+            $result = AlipayConsentReconciliationCommand::run(self::options($f), $f['provider']);
+            self::assertSame('prior_validation', $result['phase']);
+            self::assertSame('unavailable', $result['observation_result']);
+            self::assertSame([], $f['provider']->requests);
+            self::assertSame($priorHash, hash_file('sha256', $f['prior']));
+        } finally {
+            file_put_contents($path, $original);
         }
     }
 
@@ -263,7 +288,7 @@ final class AlipayConsentReconciliationTest extends TestCase
                 $n->source->sdk_digest = str_repeat('a', 64);
                 break;
             case 'current-sdk-as-prior':
-                $n->source->sdk_digest = SourceEvidence::capture()['sdk_digest'];
+                $n->source->sdk_digest = '184cbc2ac51ee6498f45b5aa50a8ec82c89e66231cb2fabacc862b8a579e48ae';
                 break;
             case 'old-harness':
                 $n->source->harness_digest = str_repeat('a', 64);
