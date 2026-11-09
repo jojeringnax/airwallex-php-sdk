@@ -913,6 +913,31 @@ final readonly class HostedBrowser
         ) {
             $safe['security_loader_first_failure_gate'] = $data['security_loader_first_failure_gate'];
         }
+        foreach (
+            ['security_bound_navigation_original_relation', 'security_bound_navigation_previous_relation'] as $field
+        ) {
+            if (
+                in_array($data[$field] ?? null, [
+                'exact_repeat', 'fragment_only_change', 'nonfragment_change', 'unavailable',
+                ], true)
+            ) {
+                $safe[$field] = $data[$field];
+            }
+        }
+        $reference = $data['security_bound_document_reference'] ?? null;
+        if (in_array($reference, ['captured_before_stop', 'not_established', 'unavailable'], true)) {
+            $safe['security_bound_document_reference'] = $reference;
+        }
+        $continuity = $data['security_bound_document_continuity'] ?? null;
+        if (
+            in_array($continuity, ['unavailable', 'not_captured'], true)
+            || ($reference === 'captured_before_stop' && in_array($continuity, ['same', 'different'], true))
+        ) {
+            $safe['security_bound_document_continuity'] = $continuity;
+        }
+        if (in_array($data['security_bound_document_cleanup'] ?? null, ['complete', 'unavailable'], true)) {
+            $safe['security_bound_document_cleanup'] = $data['security_bound_document_cleanup'];
+        }
         return $safe;
     }
 
