@@ -88,33 +88,32 @@ final readonly class InstrumentBrowser
             throw new RuntimeException('The instrument process could not start.');
         }
         $clean = false;
+        $input = $output = $errorPipe = null;
         try {
-            if (!is_resource($pipes[0]) || !is_resource($pipes[1]) || !is_resource($pipes[2])) {
-                throw new RuntimeException('The private process pipes are unavailable.');
-            }
+            [$input, $output, $errorPipe] = self::pipes($pipes);
             $payload = json_encode($packet, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-            if (strlen($payload) > 32768 || fwrite($pipes[0], $payload) !== strlen($payload)) {
+            if (strlen($payload) > 32768 || fwrite($input, $payload) !== strlen($payload)) {
                 throw new RuntimeException('The private process handoff failed.');
             }
-            fclose($pipes[0]);
-            stream_set_blocking($pipes[1], false);
-            stream_set_blocking($pipes[2], false);
+            fclose($input);
+            stream_set_blocking($output, false);
+            stream_set_blocking($errorPipe, false);
             $deadline = hrtime(true) / 1_000_000_000 + 240;
             $raw = '';
             $hadErrors = false;
             do {
-                $chunk = stream_get_contents($pipes[1], 16385);
-                $errors = stream_get_contents($pipes[2], 16385);
-                if ($chunk === false || $errors === false || hrtime(true) / 1_000_000_000 >= $deadline) {
+                $chunk = stream_get_contents($output, 16385);
+                $discard = stream_get_contents($errorPipe, 16385);
+                if ($chunk === false || $discard === false || hrtime(true) / 1_000_000_000 >= $deadline) {
                     throw new RuntimeException('The instrument process exceeded its parent deadline.');
                 }
                 $raw .= $chunk;
-                $hadErrors = $hadErrors || $errors !== '';
+                $hadErrors = $hadErrors || $discard !== '';
                 if (strlen($raw) > 16384) {
                     throw new RuntimeException('The instrument receipt exceeded its boundary.');
                 }
                 $status = proc_get_status($process);
-                if (!$status['running'] && feof($pipes[1]) && feof($pipes[2])) {
+                if (!$status['running'] && feof($output) && feof($errorPipe)) {
                     $clean = true;
                     if ($hadErrors || !in_array($status['exitcode'], [0, 1], true)) {
                         throw new RuntimeException('The instrument process did not close cleanly.');
@@ -130,7 +129,7 @@ final readonly class InstrumentBrowser
             }
             return $safe + ['process_reaped' => true];
         } finally {
-            foreach ($pipes as $pipe) {
+            foreach ([$input, $output, $errorPipe] as $pipe) {
                 if (is_resource($pipe)) {
                     fclose($pipe);
                 }
@@ -150,6 +149,26 @@ final readonly class InstrumentBrowser
             }
             proc_close($process);
         }
+    }
+
+    /** @return array{resource,resource,resource} */
+    private static function pipes(mixed $pipes): array
+    {
+        if (!is_array($pipes)) {
+            throw new RuntimeException('The private process pipes are unavailable.');
+        }
+        $input = $pipes[0] ?? null;
+        $output = $pipes[1] ?? null;
+        $errors = $pipes[2] ?? null;
+        if (!is_resource($input) || !is_resource($output) || !is_resource($errors)) {
+            foreach ($pipes as $pipe) {
+                if (is_resource($pipe)) {
+                    fclose($pipe);
+                }
+            }
+            throw new RuntimeException('The private process pipes are unavailable.');
+        }
+        return [$input, $output, $errors];
     }
 
     /** @return array<string,mixed> */

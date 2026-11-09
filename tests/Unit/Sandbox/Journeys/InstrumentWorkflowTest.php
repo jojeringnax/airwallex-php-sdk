@@ -10,6 +10,7 @@ use GuzzleHttp\Psr7\Request;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Configuration;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\InstrumentApiTransport;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\InstrumentBrowser;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\InstrumentWorkflow;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -394,6 +395,43 @@ final class InstrumentWorkflowTest extends TestCase
         }
         $this->expectException(ProtocolException::class);
         $transport->arm('customer_create', $path, $body);
+    }
+
+    public function testPrivateProcessHandoffClosesInputAndReapsWithMinimalEnvironment(): void
+    {
+        $script = '#!' . PHP_BINARY . "\n" . <<<'PHP'
+<?php
+$packet = json_decode(stream_get_contents(STDIN), true, 16, JSON_THROW_ON_ERROR);
+$expected = 'https://checkout.sandbox.airwallex.com/pay?s=SYNTHETIC_CAPABILITY';
+if (!is_array($packet) || ($packet['url'] ?? null) !== $expected
+    || getenv('AIRWALLEX_INSTRUMENT_TEST_PARENT') !== false
+    || str_contains(implode(' ', $argv), 'SYNTHETIC_CAPABILITY')
+    || !is_dir(getenv('HOME')) || !is_dir(getenv('TMPDIR'))) {
+    fwrite(STDERR, 'closed_handoff_failed');
+    exit(2);
+}
+usleep(50000);
+echo '{"result":"fail","phase":"configuration","security_graph_complete":false}';
+exit(1);
+PHP;
+        $binary = $this->directory . '/fixture-runtime';
+        file_put_contents($binary, $script);
+        chmod($binary, 0700);
+        $folder = $this->directory . '/process';
+        mkdir($folder, 0700);
+        $original = getenv('AIRWALLEX_INSTRUMENT_TEST_PARENT');
+        putenv('AIRWALLEX_INSTRUMENT_TEST_PARENT=SYNTHETIC_PARENT_VALUE');
+        try {
+            $bridge = new InstrumentBrowser($binary, $this->directory . '/module');
+            $result = $bridge->collect(['url' =>
+                'https://checkout.sandbox.airwallex.com/pay?s=SYNTHETIC_CAPABILITY'], $folder);
+            self::assertSame('fail', $result['result']);
+            self::assertSame('configuration', $result['phase']);
+            self::assertTrue($result['process_reaped']);
+        } finally {
+            $original === false ? putenv('AIRWALLEX_INSTRUMENT_TEST_PARENT')
+                : putenv('AIRWALLEX_INSTRUMENT_TEST_PARENT=' . $original);
+        }
     }
 
     /** @param array<string,mixed> $record */

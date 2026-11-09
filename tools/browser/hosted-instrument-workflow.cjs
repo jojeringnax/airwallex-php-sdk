@@ -13,6 +13,7 @@ const { InstrumentDocuments, installProjection } = require('./instrument-documen
 const { InstrumentActions } = require('./instrument-actions.cjs');
 const { egressProxy } = require('./hosted-policy.cjs');
 const { parseInstrumentJson } = require('./instrument-json.cjs');
+const profileExpires = Date.parse('2026-11-15T00:00:00Z');
 
 function sourceBook() {
   const names = [
@@ -59,7 +60,7 @@ function inputShape(input) {
     typeof input.expected.checkout_id !== 'string' ||
     !/^[A-Za-z0-9_-]{1,128}$/u.test(input.expected.checkout_id) ||
     !sameBook(input.source_hashes) ||
-    Date.now() >= Date.parse('2026-11-15T00:00:00Z')
+    Date.now() >= profileExpires
   ) {
     throw new Error('Explicit fresh instrument configuration is unavailable.');
   }
@@ -215,6 +216,7 @@ async function runInstrument(input, playwright, fixture = null) {
     !stopped &&
     !shuttingDown &&
     performance.now() < release &&
+    Date.now() < profileExpires &&
     reads.base.requestScopeVerified() &&
     code() &&
     journal.healthy();

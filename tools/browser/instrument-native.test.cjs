@@ -113,6 +113,7 @@ function dropinProgram(failure) {
 }
 function fixture(directory, failure) {
   let scopeAlive = true;
+  let checkpointExpired = false;
   const invoked = [],
     wire = [],
     failures = [],
@@ -156,6 +157,10 @@ function fixture(directory, failure) {
   const relay = {
     async send(claim, _deadline, live, beforeSend) {
       if (failure === 'expired' && claim.role === 'consent_create') scopeAlive = false;
+      if (failure === 'profile_expired' && claim.role === 'consent_create') {
+        checkpointExpired = true;
+        Date.now = () => Date.parse('2026-11-15T00:00:00Z');
+      }
       await beforeSend();
       assert.equal(live('admit'), true);
       const records = fs
@@ -280,7 +285,7 @@ function fixture(directory, failure) {
     invoked,
     wire,
     failures,
-    expired: () => !scopeAlive,
+    expired: () => !scopeAlive || checkpointExpired,
     onFailure: (error, url) => failures.push({ error: error.message, url })
   };
 }
@@ -295,12 +300,14 @@ for (const failure of [
   'replaced_control',
   'reload',
   'interactive',
-  'expired'
+  'expired',
+  'profile_expired'
 ]) {
   test('native original-document fixture: ' + failure, { skip: !tooling, timeout: 20000 }, async () => {
     assert.ok(path.isAbsolute(tooling));
     const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'airwallex-instrument-native-')));
     fs.chmodSync(directory, 0o700);
+    const originalNow = Date.now;
     try {
       const local = fixture(directory, failure);
       const result = await runInstrument(
@@ -357,12 +364,13 @@ for (const failure of [
           'replaced_control',
           'reload',
           'interactive',
-          'expired'
+          'expired',
+          'profile_expired'
         ].includes(failure)
       )
         assert.ok(!local.invoked.includes('consent_create'));
       if (['replaced_control', 'reload'].includes(failure)) assert.equal(result.submit_attempted, false);
-      if (failure === 'expired') {
+      if (['expired', 'profile_expired'].includes(failure)) {
         assert.equal(local.expired(), true);
         assert.equal(result.submit_attempted, true);
         assert.equal(result.possible_financial_send, true);
@@ -383,6 +391,7 @@ for (const failure of [
         );
       }
     } finally {
+      Date.now = originalNow;
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
