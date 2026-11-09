@@ -3,6 +3,12 @@
 const { HostedRiskPolicy, riskCookieNames } = require('./hosted-risk-policy.cjs');
 const { HostedRiskRelay } = require('./hosted-risk-relay.cjs');
 
+// Private stdout codec: exactly eight ASCII bytes replace only the eight-byte withheld value.
+const preflightCodes = Object.freeze({ response_absent: 'r_absent', fields_not_array: 'f_array_',
+  body_not_buffer: 'b_buffer', body_limit: 'b_limit_', status_not_integer: 's_int___',
+  duplicate_selected_header: 'h_dup___', status_not_2xx: 's_2xx___', cors_origin: 'c_origin',
+  cors_methods_post: 'c_post__', cors_headers_content_type: 'c_type__' });
+
 // No input actions or financial request roles exist in this component.
 class HostedRiskObserver {
   #policy;
@@ -30,6 +36,7 @@ class HostedRiskObserver {
   #loaderPhase = 'pre_send';
   #telemetryFailure = null;
   #validation = {};
+  #preflightGate = null;
   #shutdownFailure = null;
   constructor(parent, journal, playwright, fixture = null, caseDeadline = performance.now() + 40000, instrumentSecurity = false) {
     if (typeof instrumentSecurity !== 'boolean') throw new Error('Invalid security profile.');
@@ -58,8 +65,16 @@ class HostedRiskObserver {
   noteDenied(value) { this.#policy.noteDenied(value); }
   evidence() { return { ...this.#policy.evidence(), ...(this.#journal?.evidence() ?? {}),
     ...(this.#instrumentSecurity ? { security_loader_validation: this.#loaderValidation,
-      ...(this.#loaderFailure ?? {}), ...this.#validation, ...(this.#telemetryFailure ?? {}),
+      ...(this.#loaderFailure ?? {}), ...this.#validationEvidence(), ...(this.#telemetryFailure ?? {}),
       ...(this.#shutdownFailure === null ? {} : { security_telemetry_shutdown_failure_stage: this.#shutdownFailure }) } : {}) }; }
+
+  #validationEvidence() {
+    const facts = { ...this.#validation };
+    if (facts.security_preflight_validation === 'withheld' && this.#preflightGate !== null) {
+      facts.security_preflight_validation = preflightCodes[this.#preflightGate];
+    }
+    return facts;
+  }
 
   #telemetryRole(operation, role) {
     if (this.#instrumentSecurity) {
@@ -85,7 +100,11 @@ class HostedRiskObserver {
   #validated(operation, value) {
     if (!this.#instrumentSecurity || operation.role === undefined) return;
     const key = 'security_' + operation.role + '_validation';
-    if (this.#validation[key] === undefined || this.#validation[key] === 'matched') this.#validation[key] = value;
+    if (this.#validation[key] === undefined || this.#validation[key] === 'matched') {
+      this.#validation[key] = value;
+      if (operation.role === 'preflight' && value === 'withheld'
+          && Object.hasOwn(preflightCodes, operation.validationGate)) this.#preflightGate = operation.validationGate;
+    }
     if (value !== 'matched') this.#telemetryFailed(operation);
   }
 
@@ -358,7 +377,12 @@ class HostedRiskObserver {
           }, response => {
             part.phase = 'response_validation';
             try {
-              const matched = this.#policy.validateResponse(selected, response);
+              const report = this.#instrumentSecurity && part.role === 'preflight' ? gate => {
+                part.validationGate ??= gate;
+              } : null;
+              const validate = report === null ? () => this.#policy.validateResponse(selected, response)
+                : () => this.#policy.validateResponse(selected, response, report);
+              const matched = validate();
               this.#validated(part, matched === true ? 'matched' : 'withheld');
               part.phase = 'result_ack';
               return matched;

@@ -120,6 +120,133 @@ final class HostedBrowserTest extends TestCase
         }
     }
 
+    /** @param non-empty-string $code @param non-empty-string $gate */
+    #[DataProvider('preflightPredicateCodes')]
+    public function testPrivatePreflightCodesPreserveOldFacts(string $code, string $gate): void
+    {
+        self::assertSame(8, strlen($code));
+        $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+            'instrument_security_requested' => true, 'instrument_ready' => false,
+            'financial_permission' => false, 'security_graph_complete' => false,
+            'risk_preflight_attempts' => 1, 'risk_preflight_client_invocations' => 1,
+            'risk_preflight_http_status' => 200, 'risk_preflight_delivered' => 0];
+        $project = static fn (array $data): array => HostedBrowser::sanitize(
+            $data,
+            true,
+            true,
+            true,
+            true,
+            mode: HostedSecurityMode::InstrumentSecurity
+        );
+        $old = $project($base + ['security_preflight_validation' => 'withheld']);
+        $raw = $base + ['security_preflight_validation' => $code,
+            'security_preflight_validation_gate' => 'SYNTHETIC_PRIVATE_SPOOF'];
+        $safe = $project($raw);
+        self::assertSame('withheld', $safe['security_preflight_validation']);
+        self::assertSame($gate, $safe['security_preflight_validation_gate']);
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        unset($safe['security_preflight_validation_gate']);
+        self::assertSame($old, $safe);
+        self::assertArrayNotHasKey('security_preflight_validation_gate', $project(
+            $base + ['security_preflight_validation' => 'withheld', 'security_preflight_validation_gate' => $gate]
+        ));
+        self::assertSame(
+            HostedBrowser::sanitize($base, true, true, true, true),
+            HostedBrowser::sanitize($raw, true, true, true, true)
+        );
+        foreach (['visitor', 'event'] as $wrongRole) {
+            try {
+                $project($base + ['security_' . $wrongRole . '_validation' => $code,
+                    'risk_' . $wrongRole . '_attempts' => 1, 'risk_' . $wrongRole . '_client_invocations' => 1]);
+                self::fail('A preflight code cannot describe another role.');
+            } catch (RuntimeException $error) {
+                self::assertSame('Invalid sparse telemetry validation evidence.', $error->getMessage());
+            }
+        }
+        foreach (
+            [['risk_preflight_attempts', 0], ['risk_preflight_client_invocations', 0],
+            ['risk_preflight_attempts', 2], ['security_preflight_validation', 'c_origin '],
+            ['security_preflight_validation', 'C_ORIGIN']] as [$key, $bad]
+        ) {
+            try {
+                $project(array_replace($raw, [$key => $bad]));
+                self::fail('Invalid private preflight code or counters cannot produce a label.');
+            } catch (RuntimeException $error) {
+                self::assertSame('Invalid sparse telemetry validation evidence.', $error->getMessage());
+            }
+        }
+    }
+
+    /** @return iterable<string,array{non-empty-string,non-empty-string}> */
+    public static function preflightPredicateCodes(): iterable
+    {
+        foreach (
+            ['r_absent' => 'response_absent', 'f_array_' => 'fields_not_array',
+            'b_buffer' => 'body_not_buffer', 'b_limit_' => 'body_limit', 's_int___' => 'status_not_integer',
+            'h_dup___' => 'duplicate_selected_header', 's_2xx___' => 'status_not_2xx',
+            'c_origin' => 'cors_origin', 'c_post__' => 'cors_methods_post',
+            'c_type__' => 'cors_headers_content_type'] as $code => $gate
+        ) {
+            yield $gate => [$code, $gate];
+        }
+    }
+
+    public function testPrivateCodecKeepsTheActualParentRawOutputBoundary(): void
+    {
+        foreach (['withheld', 'c_origin'] as $value) {
+            foreach ([8192, 8193] as $size) {
+                $data = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
+                    'instrument_security_requested' => true, 'instrument_ready' => false,
+                    'financial_permission' => false, 'security_graph_complete' => false,
+                    'risk_preflight_attempts' => 1, 'risk_preflight_client_invocations' => 1,
+                    'security_preflight_validation' => $value];
+                $json = json_encode($data, JSON_THROW_ON_ERROR);
+                $raw = $json . str_repeat(' ', $size - strlen($json) - 1) . "\n";
+                self::assertSame($size, strlen($raw));
+                $bridge = $this->bridge('file_get_contents("php://stdin"); echo '
+                    . var_export($raw, true) . '; exit(1);');
+                $context = hash('sha256', 'synthetic_codec_boundary');
+                $ledger = RunLedger::create($context, $this->directory);
+                $journal = new HostedRiskJournal(
+                    $ledger,
+                    $context,
+                    ['checkout_id' => 'fixture', 'mode' => 'SETUP', 'currency' => 'EUR'],
+                    HostedBrowser::sourceHashes(),
+                    HostedBrowser::sourceHashes(HostedSecurityMode::InstrumentSecurity),
+                );
+                try {
+                    $safe = $bridge->inspect(
+                        'https://checkout.sandbox.airwallex.com/pay?s=PRIVATE',
+                        ['checkout_id' => 'fixture', 'mode' => 'SETUP', 'currency' => 'EUR'],
+                        true,
+                        true,
+                        true,
+                        true,
+                        $journal,
+                        mode: HostedSecurityMode::InstrumentSecurity
+                    );
+                    self::assertSame(8192, $size);
+                    self::assertSame('withheld', $safe['security_preflight_validation']);
+                    if ($value === 'c_origin') {
+                        self::assertSame('cors_origin', $safe['security_preflight_validation_gate']);
+                    } else {
+                        self::assertArrayNotHasKey('security_preflight_validation_gate', $safe);
+                    }
+                } catch (RuntimeException $error) {
+                    self::assertSame(8193, $size);
+                    self::assertSame('Browser preflight output exceeds its safe boundary.', $error->getMessage());
+                } finally {
+                    foreach (glob($this->directory . '/sdk-validation-*/*') ?: [] as $path) {
+                        unlink($path);
+                    }
+                    foreach (glob($this->directory . '/sdk-validation-*') ?: [] as $path) {
+                        rmdir($path);
+                    }
+                }
+            }
+        }
+    }
+
     public function testTelemetryFactsAreSparseClosedAndRequireTheirObservedRole(): void
     {
         $base = ['result' => 'fail', 'reason' => 'browser_preflight_failed', 'card_entry_enabled' => false,
@@ -340,7 +467,7 @@ final class HostedBrowserTest extends TestCase
 
     public function testRejectedInstrumentSourceOrStateNeverSpawnsAChild(): void
     {
-        foreach (['source_book', 'poisoned_state'] as $fault) {
+        foreach (['source_book', 'hosted-risk-policy.cjs', 'hosted-risk-observer.cjs', 'poisoned_state'] as $fault) {
             $marker = $this->directory . '/child-started';
             $bridge = $this->bridge('file_put_contents(' . var_export($marker, true) . ', "started");');
             $context = hash('sha256', 'synthetic_context');
@@ -355,6 +482,8 @@ final class HostedBrowserTest extends TestCase
             $hashes = HostedBrowser::sourceHashes(HostedSecurityMode::InstrumentSecurity);
             if ($fault === 'source_book') {
                 $hashes['hosted-browser.cjs'] = str_repeat('0', 64);
+            } elseif (str_ends_with($fault, '.cjs')) {
+                $hashes[$fault] = str_repeat('0', 64);
             }
             $journal = new HostedRiskJournal(
                 $ledger,

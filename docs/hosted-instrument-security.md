@@ -82,6 +82,33 @@ HTTP status, validation, durable result and browser delivery are separate. The o
 
 `security_telemetry_shutdown_failure_stage` names only the first actually unsuccessful existing observer-owned close result: relay, chain, handler, response disposal, public context or journal. `prior_cleanup_failed` is available only when the original short-circuit expression reaches that flag; it does not identify its earlier cause. Unseen worker, browser or driver-close facts stay absent. These diagnostic memos add no request, predicate probe, retry, wait, clock check, deadline extension or scope reopening. Existing raw output bounds and default/legacy evidence remain unchanged.
 
+### Preflight predicate selector and private output compatibility
+
+When an existing preflight response predicate returns false, the Instrument PHP evidence can additionally report `security_preflight_validation_gate`. Its closed values are `response_absent`, `fields_not_array`, `body_not_buffer`, `body_limit`, `status_not_integer`, `duplicate_selected_header`, `status_not_2xx`, `cors_origin`, `cors_methods_post` and `cors_headers_content_type`. Each names the first reached local false predicate. Exceptions, unreached predicates and unclassified withholding supply no selector. The existing validation fact remains `withheld`; later result acknowledgements, abort or cleanup cannot replace its first nonmatched observation. A supplied field with this name cannot create a selector. Other roles and legacy output retain their existing meaning.
+
+The selector taps the original primitive results without another response/header/body/claim read, predicate probe, clock, hash or await. Both allow-header lists are still parsed before the origin, explicit POST and content-type conjunction. A throwing diagnostic tap cannot change validation or grant. This observes the deliberately strict local validator; it is not evidence of a provider defect, protocol noncompliance, account eligibility, readiness or the cause of a historical failed case. Preflight status, validation, result durability and delivery remain separate.
+
+The Instrument child's private stdout uses the following fixed codes only for known preflight `withheld` outcomes. Each replaces the existing eight-byte value with exactly eight ASCII bytes; internal state and journal result validation remain `withheld`.
+
+| Private value | PHP-safe selector |
+| --- | --- |
+| `r_absent` | `response_absent` |
+| `f_array_` | `fields_not_array` |
+| `b_buffer` | `body_not_buffer` |
+| `b_limit_` | `body_limit` |
+| `s_int___` | `status_not_integer` |
+| `h_dup___` | `duplicate_selected_header` |
+| `s_2xx___` | `status_not_2xx` |
+| `c_origin` | `cors_origin` |
+| `c_post__` | `cors_methods_post` |
+| `c_type__` | `cors_headers_content_type` |
+
+PHP restores the original `security_preflight_validation=withheld` and adds the fixed selector only after its raw child-output boundary. Unknown or wrong-role codes fail the existing Instrument validation, with no invented label. Old raw `withheld` is still accepted without a selector; that does not prove the diagnostic ran. The decoder does not run in legacy mode, whose original unknown-field filtering is unchanged. Matched, exception and absent facts are unchanged.
+
+This development-only producer/consumer representation change preserves identical raw serialized length, including the terminal newline, for each corresponding old output. Every other field and the existing 8192-byte acceptance/rejection boundary stay unchanged for all optional-observer combinations; there is no universal maximum-size claim and no field trimming or larger cap. Earlier empty-optional-observer arithmetic did not establish an all-mode bound; a data-only 8193-byte addition was neither an executed output nor coherence-verified provider evidence. Complete optional-observer composition and exact 8192/8193 boundary fixtures test the relative length invariant separately from temporal/provider reachability.
+
+Deploy the reviewed PHP consumer and CJS producer atomically. The actual one-use launcher must pin the full reviewed pair before launch; that launcher proof is separate from this contribution. Capturing source hashes alone is not a semantic-version handshake for arbitrary static mixtures. Existing producer-book rejection precedes child spawn, and later source mutation must still prevent ACK/send. Decoder rejection is an output compatibility check, not a pre-send guarantee for already authorized telemetry. This tradeoff changes neither the public SDK contract nor roles, hosts, headers, cookies, bodies, counts, windows, timeouts, the one-use same-Document condition or input/financial denials. Historical receipts below keep their original failed outcomes and unselected predicates.
+
 ## Observed Sandbox limit
 
 The separate security mode can additionally report the first reached loader failure phase/gate, validation outcome, and the first observed source-scope stop using fixed literal labels only. Validation short-circuits in the original status, claim, live-scope, Buffer, size and hash order. Later guards are not queried after an earlier failure; no URL, session, header, body, DOM text or Error properties supply diagnostic values. An already matched validation remains matched if delivery subsequently fails. The first-stop memo observes existing document requests, navigation/detachment events, deadline results or teardown; it does not create another timer, close call, admission fence or retry. A failure-time copy preserves which stop, if any, was already recorded, so later teardown cannot imply an earlier cause. These optional fields are re-allowlisted by PHP and are absent from legacy preflight output.

@@ -838,7 +838,7 @@ async function riskSmoke(playwright, diagnostics = false) {
       } else if (diagnostics && mode === 'cors_withheld') {
         const evidence = observer.evidence();
         if (evidence.risk_preflight_http_status !== 200 || evidence.risk_visitor_client_invocations !== 0
-            || evidence.security_preflight_validation !== 'withheld'
+            || evidence.security_preflight_validation !== 'c_type__'
             || evidence.security_telemetry_first_failure_phase !== 'response_validation'
             || evidence.security_telemetry_first_failure_role !== 'preflight') throw new Error('Local CORS withholding facts failed.');
       } else if (requests.length !== before || messages.length !== 0
@@ -852,7 +852,8 @@ async function riskSmoke(playwright, diagnostics = false) {
           payer_http_status: 200, payer_observation: 'matched', render_requested: true,
           payer_payload_delivered: true, bound_render_frames: 1, ...observer.evidence(),
           PRIVATE_URL: document, PRIVATE_BODY: 'SYNTHETIC_PRIVATE' });
-        if (projected.security_preflight_validation !== (mode === 'matched' ? 'matched' : 'withheld')
+        if ((mode === 'cors_withheld' && projected.security_preflight_validation_gate !== 'cors_headers_content_type')
+            || projected.security_preflight_validation !== (mode === 'matched' ? 'matched' : 'withheld')
             || projected.risk_preflight_delivered !== 0 || JSON.stringify(projected).includes('SYNTHETIC_PRIVATE')) {
           throw new Error('Local telemetry projection failed.');
         }
@@ -865,7 +866,7 @@ async function riskSmoke(playwright, diagnostics = false) {
       context = browser = proxy = observer = null;
     }
     if (diagnostics) return { security_telemetry_native_tls_verified: true,
-      security_telemetry_withholding_verified: true, security_telemetry_php_projection_verified: true };
+      security_telemetry_withholding_verified: true, security_telemetry_php_projection_verified: true, security_preflight_predicate_codec_verified: true };
     return { risk_bootstrap_local_verified: true, risk_cookie_isolation_verified: true,
       risk_cors_grant_verified: true, risk_default_denial_verified: true, risk_financial_denial_verified: true };
   } catch {
@@ -1010,8 +1011,9 @@ function boundDocumentWorkerFixture(page, deadline, options = {}) {
     const empty = () => ({}), markFailure = phase => { failed = true; firstFailure ??= phase; };
     const track = async action => action(), drainSentNormalReads = async () => {};
     const dependency = { drainSent: async () => {}, close: async () => true, failed: () => false, evidence: empty };
-    const parentCountry = dependency, currencySettings = dependency;
-    const cardChoice = { capture: () => trace.push('capture_fields'), evidence: empty };
+    const parentCountry = { ...dependency, evidence: () => rawFacts.parentCountry ?? {} };
+    const currencySettings = { ...dependency, evidence: () => rawFacts.currencySettings ?? {} };
+    const cardChoice = { capture: () => trace.push('capture_fields'), evidence: () => rawFacts.cardChoice ?? {} };
     const policy = { markRenderFrameDelivered: () => trace.push('render_delivered'), candidateOrigin: () => rawFacts.candidateOrigin ?? null,
       closeNormalWindow: () => trace.push('normal_close'), bindingEvidence: () => rawFacts.binding ?? {},
       renderEvidence: () => rawFacts.render ?? {}, methodEvidence: () => rawFacts.methods ?? {}, normalEvidence: () => rawFacts.normalPolicy ?? {}, normalWindowRemaining: () => normalRemaining, normalSourceMatches: (value, main) => !retainSameDocument

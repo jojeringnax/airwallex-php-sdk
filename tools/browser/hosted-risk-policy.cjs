@@ -286,7 +286,26 @@ class HostedRiskPolicy {
       this.#loader.document, this.#loader.role);
   }
 
-  #responseFields(response) {
+  #responseFields(response, report = null) {
+    if (report !== null) {
+      const reject = (value, gate) => {
+        if (value) { try { report(gate); } catch { /* A diagnostic cannot change validation. */ } }
+        return value;
+      };
+      if (reject(!response, 'response_absent') || reject(!Array.isArray(response.fields), 'fields_not_array')
+          || reject(!Buffer.isBuffer(response.body), 'body_not_buffer')
+          || reject(response.body.length > 65536, 'body_limit')
+          || reject(!Number.isInteger(response.status), 'status_not_integer')) return null;
+      const headers = new Map();
+      for (const item of response.fields) {
+        const name = item.name.toLowerCase();
+        if (reject(headers.has(name) && ['content-type', 'access-control-allow-origin',
+          'access-control-allow-methods', 'access-control-allow-headers', 'access-control-allow-credentials'].includes(name),
+        'duplicate_selected_header')) return null;
+        headers.set(name, item.value);
+      }
+      return headers;
+    }
     if (!response || !Array.isArray(response.fields) || !Buffer.isBuffer(response.body)
         || response.body.length > 65536 || !Number.isInteger(response.status)) return null;
     const headers = new Map();
@@ -299,16 +318,34 @@ class HostedRiskPolicy {
     return headers;
   }
 
-  validateResponse(claim, response) {
-    const headers = this.#responseFields(response);
-    if (!headers || response.status < 200 || response.status > 299) return false;
+  validateResponse(claim, response, report = null) {
+    const headers = this.#responseFields(response, report);
+    if (report === null) {
+      if (!headers || response.status < 200 || response.status > 299) return false;
+    } else {
+      const reject = value => {
+        if (value) { try { report('status_not_2xx'); } catch { /* Diagnostic only. */ } }
+        return value;
+      };
+      if (!headers || reject(response.status < 200) || reject(response.status > 299)) return false;
+    }
     const origin = claim.headers.origin;
     const allowedOrigin = headers.get('access-control-allow-origin');
     if (claim.role === 'preflight') {
       const methods = (headers.get('access-control-allow-methods') ?? '').split(',').map(value => value.trim());
       const names = (headers.get('access-control-allow-headers') ?? '').toLowerCase().split(',').map(value => value.trim());
-      this.#grant = (allowedOrigin === origin || allowedOrigin === '*') && methods.includes('POST')
-        && names.includes('content-type');
+      if (report === null) {
+        this.#grant = (allowedOrigin === origin || allowedOrigin === '*') && methods.includes('POST')
+          && names.includes('content-type');
+      } else {
+        const pass = (value, gate) => {
+          if (!value) { try { report(gate); } catch { /* Diagnostic only. */ } }
+          return value;
+        };
+        this.#grant = pass(allowedOrigin === origin || allowedOrigin === '*', 'cors_origin')
+          && pass(methods.includes('POST'), 'cors_methods_post')
+          && pass(names.includes('content-type'), 'cors_headers_content_type');
+      }
       return this.#grant;
     }
     if (claim.role === 'visitor') {

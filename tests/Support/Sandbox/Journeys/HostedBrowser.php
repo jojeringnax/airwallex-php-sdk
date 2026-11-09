@@ -975,12 +975,21 @@ final readonly class HostedBrowser
     private static function telemetryEvidence(array $data): array
     {
         $safe = [];
+        // Instrument-only private stdout codes; each replaces the eight-byte withheld value.
+        $preflightCodes = ['r_absent' => 'response_absent', 'f_array_' => 'fields_not_array',
+            'b_buffer' => 'body_not_buffer', 'b_limit_' => 'body_limit', 's_int___' => 'status_not_integer',
+            'h_dup___' => 'duplicate_selected_header', 's_2xx___' => 'status_not_2xx',
+            'c_origin' => 'cors_origin', 'c_post__' => 'cors_methods_post', 'c_type__' => 'cors_headers_content_type'];
         foreach (['preflight' => 1, 'visitor' => 1, 'event' => 8] as $role => $cap) {
             $key = 'security_' . $role . '_validation';
             if (!array_key_exists($key, $data)) {
                 continue;
             }
             $value = $data[$key];
+            $gate = $role === 'preflight' && is_string($value) ? ($preflightCodes[$value] ?? null) : null;
+            if ($gate !== null) {
+                $value = 'withheld';
+            }
             $attempts = $data['risk_' . $role . '_attempts'] ?? null;
             $invocations = $data['risk_' . $role . '_client_invocations'] ?? null;
             $status = $data['risk_' . $role . '_http_status'] ?? null;
@@ -994,6 +1003,9 @@ final readonly class HostedBrowser
                 throw new RuntimeException('Invalid sparse telemetry validation evidence.');
             }
             $safe[$key] = $value;
+            if ($gate !== null) {
+                $safe['security_preflight_validation_gate'] = $gate;
+            }
         }
         $phaseKey = 'security_telemetry_first_failure_phase';
         $gateKey = 'security_telemetry_first_failure_gate';

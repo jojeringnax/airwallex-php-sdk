@@ -944,7 +944,7 @@ async function telemetryScenario(fault = '', reference = false, instrument = tru
       if (fault === 'relay') throw privateError;
       return { status: 200, body: Buffer.from('{"data":{"visitorID":"SYNTHETIC_PRIVATE"}}'), fields: [
         { name: 'access-control-allow-origin', value: '*' }, { name: 'content-type', value: 'application/json' },
-        ...(fault === 'cors' ? [] : [{ name: 'access-control-allow-methods', value: 'POST' },
+        ...(['cors','cors_result_ack'].includes(fault) ? [] : [{ name: 'access-control-allow-methods', value: 'POST' },
           { name: 'access-control-allow-headers', value: 'content-type' }]),
       ] };
     }
@@ -964,7 +964,7 @@ async function telemetryScenario(fault = '', reference = false, instrument = tru
       let matched = false;
       try { matched = validate(response) === true; } catch { /* Match the production journal's validator boundary. */ }
       trace.push('observed.' + String(matched));
-      if (selected.role !== 'loader' && fault === 'result_ack') throw privateError;
+      if (selected.role !== 'loader' && ['result_ack','cors_result_ack'].includes(fault)) throw privateError;
       if (!matched) throw privateError;
       if (selected.role === 'preflight' && fault === 'after_preflight') closing = true;
       return response;
@@ -1015,7 +1015,7 @@ test('preflight200 distinguishes grant withholding from matched internal deliver
   const pass = (await telemetryScenario()).evidence, fail = (await telemetryScenario('cors')).evidence;
   assert.equal(pass.risk_preflight_http_status, 200); assert.equal(pass.risk_preflight_delivered, 0);
   assert.equal(pass.security_preflight_validation, 'matched'); assert.equal(pass.security_visitor_validation, 'matched');
-  assert.equal(fail.risk_preflight_http_status, 200); assert.equal(fail.security_preflight_validation, 'withheld');
+  assert.equal(fail.risk_preflight_http_status, 200); assert.equal(fail.security_preflight_validation, 'c_post__');
   assert.equal(fail.risk_visitor_client_invocations, 0);
   assert.equal(fail.security_telemetry_first_failure_role, 'preflight');
   assert.equal(fail.security_telemetry_first_failure_phase, 'response_validation');
@@ -1113,9 +1113,9 @@ test('compiled Error-property reader is rejected by the zero-read privacy assert
 
 test('HTTP-only validation and overwritten-first-failure mutants fail the reached-outcome acceptance', async () => {
   for (const [before, after, expected] of [
-    ['const matched = this.#policy.validateResponse(selected, response);',
-      'const matched = (this.#policy.validateResponse(selected, response), response.status === 200);',
-      evidence => assert.equal(evidence.security_preflight_validation, 'withheld')],
+    ['const matched = validate();',
+      'const matched = (validate(), response.status === 200);',
+      evidence => assert.equal(evidence.security_preflight_validation, 'c_post__')],
     ['!this.#instrumentSecurity || this.#telemetryFailure !== null', '!this.#instrumentSecurity',
       evidence => assert.equal(evidence.security_telemetry_first_failure_phase, 'response_validation')],
   ]) {
@@ -1139,7 +1139,7 @@ test('late-invocation and invented-cleanup mutants fail the original closed-scop
   assert.throws(() => assert.equal(cleanup.clean, false), { code: 'ERR_ASSERTION' });
 });
 
-test('coherent selected-profile raw production outputs stay below8192 before PHP filtering', t => {
+test('selected-profile raw outputs and optional-map codec composition preserve existing cap decisions', async t => {
   const { boundDocumentWorkerFixture, sanitizeBoundDocumentFixture } = require('./hosted-smoke.cjs');
   const policy = fs.readFileSync(path.join(__dirname, 'hosted-policy.cjs'), 'utf8');
   const names = source => [...source.matchAll(/'([^']+)'/gu)].map(value => value[1]);
@@ -1209,6 +1209,23 @@ test('coherent selected-profile raw production outputs stay below8192 before PHP
   for (const field of ['cardnumber', 'expiry', 'cvc']) for (const flag of ['unique', 'visible', 'enabled']) rawFacts.readiness[field + '_' + flag] = false;
   Object.assign(rawFacts.result, rawFacts.binding, rawFacts.payer, rawFacts.method, rawFacts.readiness, rawFacts.attachment, { method_config_send_started: true });
   const main = {}, page = { on() {}, mainFrame: () => main };
+  // Complete actual optional-observer maps, not evidence-empty dependency stubs. These are
+  // synthetic composition cases, not a universal temporal/coherence or provider-size assertion.
+  for (const parent of [false, true]) for (const currency of [false, true]) {
+    const maps = await optionalCodecMaps(parent, currency);
+    for (const code of Object.values(predicateCodes)) for (const failed of [false, true]) {
+      const data = { ...rawFacts, ...maps };
+      const oldFacts = { ...risk, security_preflight_validation: 'withheld' };
+      const codedFacts = { ...oldFacts, security_preflight_validation: code };
+      const before = boundDocumentWorkerFixture(page, performance.now() + 40000, {rawFacts:data,journalFacts:oldFacts}).output(failed);
+      const after = boundDocumentWorkerFixture(page, performance.now() + 40000, {rawFacts:data,journalFacts:codedFacts}).output(failed);
+      assert.deepEqual({...after,security_preflight_validation:'withheld'},before);
+      const oldBytes = Buffer.byteLength(JSON.stringify(before) + '\n'), newBytes = Buffer.byteLength(JSON.stringify(after) + '\n');
+      assert.equal(newBytes,oldBytes); assert.equal(newBytes<=8192,oldBytes<=8192);
+      if (parent) assert.equal(after.parent_country_outcome,'matched');
+      if (currency) assert.equal(after.currency_settings_outcome,'matched');
+    }
+  }
   const worker = boundDocumentWorkerFixture(page, performance.now() + 40000, { rawFacts, journalFacts: risk });
   const bound = value => { const bytes = Buffer.byteLength(JSON.stringify(value)); assert.ok(bytes <= 8192, 'RAW child output exceeds8192'); return bytes; };
   for (const failure of [false, true]) {
@@ -1230,4 +1247,199 @@ test('coherent selected-profile raw production outputs stay below8192 before PHP
     assert.throws(() => bound(padded), { code: 'ERR_ASSERTION' });
     assert.equal(Object.hasOwn(sanitizeBoundDocumentFixture(padded, true), 'SYNTHETIC_PRIVATE_UNUSED'), false);
   }
+});
+
+// Immutable Main5ee response validator; diagnostic tests compare original observable reads.
+const referenceResponseValidator = "  #responseFields(response) {\n    if (!response || !Array.isArray(response.fields) || !Buffer.isBuffer(response.body)\n        || response.body.length > 65536 || !Number.isInteger(response.status)) return null;\n    const headers = new Map();\n    for (const item of response.fields) {\n      const name = item.name.toLowerCase();\n      if (headers.has(name) && ['content-type', 'access-control-allow-origin',\n        'access-control-allow-methods', 'access-control-allow-headers', 'access-control-allow-credentials'].includes(name)) return null;\n      headers.set(name, item.value);\n    }\n    return headers;\n  }\n\n  validateResponse(claim, response) {\n    const headers = this.#responseFields(response);\n    if (!headers || response.status < 200 || response.status > 299) return false;\n    const origin = claim.headers.origin;\n    const allowedOrigin = headers.get('access-control-allow-origin');\n    if (claim.role === 'preflight') {\n      const methods = (headers.get('access-control-allow-methods') ?? '').split(',').map(value => value.trim());\n      const names = (headers.get('access-control-allow-headers') ?? '').toLowerCase().split(',').map(value => value.trim());\n      this.#grant = (allowedOrigin === origin || allowedOrigin === '*') && methods.includes('POST')\n        && names.includes('content-type');\n      return this.#grant;\n    }\n    if (claim.role === 'visitor') {\n      if (!this.#grant || response.status !== 200\n        || !/^application\\/json(?:;\\s*charset=utf-8)?$/iu.test(headers.get('content-type') ?? '')\n        || (allowedOrigin !== origin && allowedOrigin !== '*')) return false;\n      try {\n        const value = json(response.body);\n        return value && typeof value === 'object' && !Array.isArray(value)\n          && value.data && typeof value.data === 'object' && !Array.isArray(value.data)\n          && typeof value.data.visitorID === 'string' && value.data.visitorID.length > 0\n          && value.data.visitorID.length <= 1024\n          && (!Object.hasOwn(value.data, 'visitorToken') || (typeof value.data.visitorToken === 'string'\n            && value.data.visitorToken.length <= 8192));\n      } catch { return false; }\n    }\n    // Beacon is source-defined no-cors telemetry. A 2xx is not evidence that tracking succeeded.\n    return claim.role === 'event';\n  }\n\n";
+
+const predicateCodes = Object.freeze({ response_absent: 'r_absent', fields_not_array: 'f_array_',
+  body_not_buffer: 'b_buffer', body_limit: 'b_limit_', status_not_integer: 's_int___',
+  duplicate_selected_header: 'h_dup___', status_not_2xx: 's_2xx___', cors_origin: 'c_origin',
+  cors_methods_post: 'c_post__', cors_headers_content_type: 'c_type__' });
+function validationPolicy(reference = false, mutate = value => value) {
+  const Module = require('node:module'), filename = path.join(__dirname, 'hosted-risk-policy.cjs');
+  let source = fs.readFileSync(filename, 'utf8');
+  if (reference) {
+    const a = source.indexOf('  #responseFields('), b = source.indexOf('  responseHeaders(', a);
+    assert.ok(a >= 0 && b > a); source = source.slice(0, a) + referenceResponseValidator + source.slice(b);
+  }
+  source = mutate(source);
+  const loaded = new Module(filename, module); loaded.filename = filename; loaded.paths = Module._nodeModulePaths(__dirname);
+  loaded._compile(source, filename); return loaded.exports.HostedRiskPolicy;
+}
+function predicateCase(name, Policy, observed = true, throwingTap = false) {
+  const trace = [], gates = []; let errorReads = 0;
+  const privateError = new Error();
+  for (const key of ['name', 'message', 'stack', 'cause']) Object.defineProperty(privateError, key, {
+    get() { errorReads++; return 'SYNTHETIC_PRIVATE_ERROR'; },
+  });
+  const fields = [ ['access-control-allow-origin', ['cors_origin','cors_all','cors_origin_bad_methods','cors_origin_bad_headers'].includes(name) ? 'SYNTHETIC_PRIVATE_ORIGIN' : '*'],
+    ['access-control-allow-methods', name === 'cors_origin_bad_methods' ? 42 : ['cors_methods_post','cors_all'].includes(name) ? 'GET' : 'POST'],
+    ['access-control-allow-headers', name === 'cors_origin_bad_headers' ? 42 : ['cors_headers_content_type','cors_all'].includes(name) ? 'accept' : 'content-type'] ];
+  if (['duplicate_selected_header','duplicate_and_status'].includes(name)) fields.push(['Access-Control-Allow-Origin', '*']);
+  const rows = fields.map(([name, value], index) => ({
+    get name() { trace.push('name.' + index); if (name === 'THROW') throw privateError; return name; },
+    get value() { trace.push('value.' + index); return value; },
+  }));
+  if (name === 'throwing_header') rows[0] = { get name() { trace.push('name.0'); throw privateError; } };
+  const response = name === 'response_absent' ? null : {
+    get fields() { trace.push('fields'); return ['fields_not_array','simultaneous'].includes(name) ? {} : rows; },
+    get body() { trace.push('body'); return ['body_not_buffer','simultaneous'].includes(name) ? 'SYNTHETIC_PRIVATE_BODY'
+      : Buffer.alloc(name === 'body_limit' ? 65537 : 0); },
+    get status() { trace.push('status'); return ['status_not_integer','simultaneous'].includes(name) ? '200'
+      : ['status_not_2xx','duplicate_and_status'].includes(name) ? 199 : name === 'upper_status' ? 300 : 200; },
+  };
+  const selected = { get headers() { trace.push('claim.headers'); return {get origin() {trace.push('origin');return 'https://synthetic.invalid';}}; },
+    get role() { trace.push('role'); return 'preflight'; } };
+  const policy = new Policy({}, true);
+  let result, threw = false;
+  try { result = policy.validateResponse(selected, response, observed ? gate => {
+    gates.push(gate); if (throwingTap) throw privateError;
+  } : null); } catch { threw = true; }
+  assert.equal(errorReads, 0);
+  return { trace, result, threw, gates };
+}
+for (const name of [...Object.keys(predicateCodes), 'matched', 'upper_status', 'throwing_header', 'simultaneous', 'duplicate_and_status', 'cors_all', 'cors_origin_bad_methods', 'cors_origin_bad_headers']) {
+  test('preflight predicate tap preserves Main5ee getters/result/throw: ' + name, () => {
+    const old = predicateCase(name, validationPolicy(true), false);
+    for (const observed of [false, true]) for (const throwing of [false, true]) {
+      const current = predicateCase(name, validationPolicy(), observed, throwing);
+      assert.deepEqual(current.trace, old.trace); assert.equal(current.result, old.result); assert.equal(current.threw, old.threw);
+      assert.deepEqual(current.gates, !observed || ['matched','throwing_header','cors_origin_bad_methods','cors_origin_bad_headers'].includes(name) ? []
+        : [{upper_status:'status_not_2xx',simultaneous:'fields_not_array',duplicate_and_status:'duplicate_selected_header',cors_all:'cors_origin'}[name] ?? name]);
+      if (name === 'duplicate_selected_header') assert.equal(current.trace.includes('value.3'), false);
+      if (name === 'cors_origin') assert.ok(current.trace.indexOf('value.2') < current.trace.indexOf('role'));
+    }
+  });
+}
+for (const [name, before, after] of [
+  ['extra body read', 'reject(response.body.length > 65536', 'reject((response.body, response.body.length) > 65536'],
+  ['duplicate value read', 'const name = item.name.toLowerCase();', 'const name = item.name.toLowerCase(); void item.value;'],
+  ['status order', "reject(response.status < 200) || reject(response.status > 299)", "reject(response.status > 299) || reject(response.status < 200)"],
+]) {
+  test('compiled predicate read/order counterexample is detected: ' + name, () => {
+    const Policy = validationPolicy(false, source => { assert.ok(source.includes(before)); return source.replace(before, after); });
+    const selected = name === 'status order' ? 'status_not_2xx' : name === 'duplicate value read' ? 'duplicate_selected_header' : 'matched';
+    assert.throws(() => assert.deepEqual(predicateCase(selected, Policy).trace,
+      predicateCase(selected, validationPolicy(true), false).trace), {code:'ERR_ASSERTION'});
+  });
+}
+test('every exact private code preserves serialization length/cap decisions under arbitrary surrounding data', () => {
+  const clone = value => JSON.parse(JSON.stringify(value));
+  for (const code of Object.values(predicateCodes)) {
+    assert.match(code, /^[\x20-\x7e]{8}$/u);
+    for (const target of [100, 8191, 8192, 8193, 9000]) {
+      const old = { security_preflight_validation:'withheld', private_padding:'' };
+      const initial = Buffer.byteLength(JSON.stringify(old) + '\n');
+      old.private_padding = 'x'.repeat(Math.max(0, target - initial));
+      const current = clone(old); current.security_preflight_validation = code;
+      const a = Buffer.byteLength(JSON.stringify(old) + '\n'), b = Buffer.byteLength(JSON.stringify(current) + '\n');
+      assert.equal(a, b); assert.equal(b <= 8192, a <= 8192);
+      if (target >= initial) assert.equal(b, target);
+    }
+  }
+});
+
+test('preflight codec first nonmatch is private and serialization never mutates internal validation', async () => {
+  const f = await telemetryScenario('cors');
+  assert.equal(f.evidence.security_preflight_validation, 'c_post__');
+  assert.equal(f.beforeClose.security_preflight_validation, 'c_post__');
+  assert.equal(Object.hasOwn(f.evidence, 'security_preflight_validation_gate'), false);
+  assert.equal(f.evidence.security_telemetry_first_failure_gate, 'operation_failed');
+  const source = fs.readFileSync(path.join(__dirname, 'hosted-risk-observer.cjs'),'utf8');
+  const seam = `  fixturePreflight(values) {
+    return values.map(([value,validationGate]) => {
+      this.#validated({role:'preflight',phase:'response_validation',validationGate},value);
+      return {internal:this.#validation.security_preflight_validation,facts:this.evidence()};
+    });
+  }\n`;
+  const Observer = diagnosticObserver({'fixture:clock': {now: () => 0, cleanup() {}}}, false, value => value.replace('  toJSON() {', seam + '  toJSON() {'));
+  for (const [gate, code] of Object.entries(predicateCodes)) {
+    const instance = new Observer({}, null, {}, null, 10000, true);
+    const first = instance.fixturePreflight([['withheld',gate]])[0];
+    assert.equal(first.internal,'withheld');assert.equal(first.facts.security_preflight_validation,code);
+    assert.equal(Buffer.byteLength(JSON.stringify(first.facts)),Buffer.byteLength(JSON.stringify({...first.facts,security_preflight_validation:'withheld'})));
+  }
+  for (const [values, expected] of [
+    [[['matched'], ['withheld','cors_origin'], ['matched'], ['withheld','cors_methods_post']], 'c_origin'],
+    [[['exception'], ['withheld','cors_origin']], 'exception'],
+    [[['withheld'], ['withheld','cors_origin']], 'withheld'],
+  ]) {
+    const instance = new Observer({}, null, {}, null, 10000, true);
+    const states = instance.fixturePreflight(values);
+    assert.equal(states.at(-1).facts.security_preflight_validation, expected);
+    assert.equal(states.at(-1).internal, expected === 'c_origin' ? 'withheld' : expected);
+  }
+  assert.ok(source.includes("return role; // Tap an original operand"));
+});
+
+async function optionalCodecMaps(parent, currency) {
+  const { HostedPolicy } = require('./hosted-policy.cjs');
+  const { ParentCountryObserver } = require('./hosted-parent-country.cjs');
+  const { CurrencySettingsObserver } = require('./hosted-currency-settings.cjs');
+  const { NativeCardChoice } = require('./hosted-card-choice.cjs');
+  const origin='https://checkout.sandbox.airwallex.com';
+  const token=Buffer.from('{"alg":"SYNTHETIC"}').toString('base64url')+'.'
+    +Buffer.from(JSON.stringify({resource_id:'checkout:SYNTHETIC_CHECKOUT',exp:4070908800})).toString('base64url')+'.SYNTHETIC';
+  const initial=origin+'/pay?s='+token;
+  const policy=new HostedPolicy(initial,null,{checkout_id:'SYNTHETIC_CHECKOUT',mode:'SETUP',currency:'EUR'},true,true,true,()=>1000,parent,currency);
+  policy.noteParentMainDocument(initial);policy.startParentCountryWindow();policy.noteCurrencyMainDocument(initial);
+  policy.claimPayerRequest(origin+'/billing/payer-web-api/checkout?ts=1794130000000','GET','xhr',{authorization:'Bearer '+token});
+  policy.observePayer(Buffer.from('{"mode":"SETUP","currency":"EUR","setupModeDetails":{"externalTransactionClientSecret":"SYNTHETIC_SECRET","billingCustomerExternalId":"SYNTHETIC_CUSTOMER"}}'));
+  policy.startNormalWindow();policy.markPayerDelivered();
+  const frame={isDetached:()=>false,url:()=>initial};
+  const runtime={request:{newContext:async()=>({get:async url=>({status:()=>200,
+    headersArray:async()=>[{name:'content-type',value:'application/json'}],
+    body:async()=>Buffer.from(url.endsWith('/country')?'{"countryCode":"DE"}':'{"items":[]}'),dispose:async()=>{}}),dispose:async()=>{}})}};
+  const a=new ParentCountryObserver(policy,parent,runtime,performance.now()+10000);
+  const b=new CurrencySettingsObserver(policy,currency,runtime,performance.now()+10000);
+  const route=(url,headers)=>({request:()=>({frame:()=>frame,url:()=>url,method:()=>'GET',resourceType:()=>'xhr',headers:()=>headers,postData:()=>null}),
+    fulfill:async()=>{},abort:async()=>{}});
+  try {
+    await a.handle(route('https://www.sandbox.airwallex.com/country',{origin,accept:'application/json, text/plain, */*'}),frame,()=>false,()=>false);
+    await b.handle(route(origin+'/api/v1/pa/config/currency_settings',{origin,accept:'application/json, text/plain, */*','client-secret':'Bearer SYNTHETIC_SECRET'}),frame,()=>false,()=>false);
+  } finally {assert.equal(await a.close(),true);assert.equal(await b.close(),true);}
+  return {parentCountry:a.evidence(),currencySettings:b.evidence(),cardChoice:new NativeCardChoice(false,null,()=>0).evidence()};
+}
+
+
+test('failed result ACK cannot rewrite an already selected withheld predicate', async () => {
+  const f=await telemetryScenario('cors_result_ack');
+  assert.equal(f.evidence.security_preflight_validation,'c_post__');
+  assert.equal(f.evidence.security_telemetry_first_failure_phase,'response_validation');
+  assert.equal(f.evidence.risk_visitor_client_invocations,0);
+  assert.equal((await telemetryScenario('prepare')).evidence.security_preflight_validation,undefined);
+  assert.equal((await telemetryScenario('validator_exception')).evidence.security_preflight_validation,'exception');
+});
+for (const [name,before,after] of [
+  ['shortened code', "cors_methods_post: 'c_post__'", "cors_methods_post: 'c_post_'"],
+  ['raw appended selector', '...this.#validationEvidence(),', "...this.#validationEvidence(), security_preflight_validation_gate:'cors_methods_post',"],
+]) {
+  test('compiled private-output length mutant fails equality/cap acceptance: '+name,async()=>{
+    const f=await telemetryScenario('cors',false,true,source=>{assert.ok(source.includes(before));return source.replace(before,after);});
+    assert.throws(()=>{
+      const raw=f.evidence, baseline={...raw,security_preflight_validation:'withheld'};
+      delete baseline.security_preflight_validation_gate;
+      assert.equal(Buffer.byteLength(JSON.stringify(raw)),Buffer.byteLength(JSON.stringify(baseline)));
+    },{code:'ERR_ASSERTION'});
+  });
+}
+
+test('compiled serialization mutation cannot change internal preflight state',async()=>{
+  const seam='  fixtureInternal() { return this.#validation.security_preflight_validation; }\n  toJSON() {';
+  const check=async mutant=>{
+    const f=await telemetryScenario('cors',false,true,source=>{
+      source=source.replace('  toJSON() {',seam);
+      return mutant?source.replace('const facts = { ...this.#validation };','const facts = this.#validation;'):source;
+    });
+    assert.equal(f.observer.fixtureInternal(),'withheld');
+  };
+  await check(false);await assert.rejects(check(true),{code:'ERR_ASSERTION'});
+});
+test('compiled swallowed Error-getter access in the tap fails zero-read privacy',()=>{
+  const Policy=validationPolicy(false,source=>{
+    const before='catch { /* Diagnostic only. */ }';assert.ok(source.includes(before));
+    return source.replace(before,'catch (error) { void error.message; }');
+  });
+  assert.throws(()=>predicateCase('status_not_2xx',Policy,true,true),{code:'ERR_ASSERTION'});
 });
