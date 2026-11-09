@@ -129,12 +129,20 @@ abstract class HistoricalAlipayTestCase extends TestCase
                 'GIT_CONFIG_NOSYSTEM' => '1', 'GIT_CONFIG_GLOBAL' => '/dev/null']
         );
         self::assertIsResource($process);
-        $output = $pipes[1] ?? null;
-        self::assertIsResource($output);
+        $output = self::outputPipe($pipes);
         $result = stream_get_contents($output);
         fclose($output);
         self::assertSame(0, proc_close($process), 'Historical SDK source must be available in local Git objects.');
         self::assertIsString($result);
         return $result;
+    }
+
+    /** @return resource */
+    private static function outputPipe(mixed $pipes)
+    {
+        if (!is_array($pipes) || !is_resource($pipes[1] ?? null)) {
+            throw new RuntimeException('Historical source extraction requires an output stream.');
+        }
+        return $pipes[1];
     }
 }
