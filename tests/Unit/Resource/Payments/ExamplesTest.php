@@ -26,8 +26,10 @@ final class ExamplesTest extends HttpTestCase
         self::assertSame('PENDING', $result['status']);
         self::assertSame('19.90', $result['amount']);
         self::assertStringContainsString('"request_id":"persisted-create"', (string) $http->requests[2]->getBody());
-        self::assertStringContainsString('"request_id":"persisted-confirm"', (string) $http->requests[3]->getBody());
-        self::assertStringContainsString('"triggered_by":"merchant"', (string) $http->requests[3]->getBody());
+        self::assertSame([
+            'request_id' => 'persisted-confirm',
+            'payment_consent_id' => 'consent-A',
+        ], json_decode((string) $http->requests[3]->getBody(), true, flags: JSON_THROW_ON_ERROR));
         self::assertCount(4, $http->requests);
     }
 

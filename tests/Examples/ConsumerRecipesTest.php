@@ -423,6 +423,10 @@ final class ConsumerRecipesTest extends HttpTestCase
         self::assertSame('REQUIRES_CUSTOMER_ACTION', $result['status']);
         self::assertStringContainsString('"amount":19.90', (string) $http->requests[1]->getBody());
         self::assertStringContainsString('"triggered_by":"customer"', (string) $http->requests[2]->getBody());
+        self::assertStringContainsString(
+            '"payment_method":{"type":"card","id":"method"}',
+            (string) $http->requests[2]->getBody()
+        );
         self::assertStringContainsString('"auto_capture":true', (string) $http->requests[2]->getBody());
         self::assertCount(3, $http->requests);
     }
@@ -471,8 +475,11 @@ final class ConsumerRecipesTest extends HttpTestCase
         self::assertSame('REQUIRES_CAPTURE', $authorized['status']);
         self::assertSame('19.90', $captured['captured_amount']);
         self::assertSame('CANCELLED', $cancelled['status']);
-        self::assertStringContainsString('"auto_capture":false', (string) $http->requests[1]->getBody());
-        self::assertStringContainsString('"authorization_type":"pre_auth"', (string) $http->requests[1]->getBody());
+        self::assertSame([
+            'request_id' => 'auth',
+            'payment_consent_id' => 'consent',
+            'payment_method_options' => ['card' => ['auto_capture' => false, 'authorization_type' => 'pre_auth']],
+        ], json_decode((string) $http->requests[1]->getBody(), true, flags: JSON_THROW_ON_ERROR));
         self::assertStringEndsWith('/other-intent/cancel', (string) $http->requests[3]->getUri());
     }
 

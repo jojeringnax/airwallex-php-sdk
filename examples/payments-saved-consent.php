@@ -28,7 +28,6 @@ return static function (
     return $payments->payments()->paymentIntents()->confirm($intent['id'], [
         'request_id' => $requestIds['confirm'],
         'payment_consent_id' => $consentId,
-        'triggered_by' => 'merchant',
     ]);
     // The caller inspects status/next_action; a successful call does not imply settlement.
 };
