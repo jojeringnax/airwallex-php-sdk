@@ -55,10 +55,11 @@ final class AlipayConsentReconciliation
         self::keys($source, ['base_commit', 'sdk_digest', 'harness_digest']);
         self::same($source, ['base_commit' => self::ORIGINAL, 'sdk_digest' => self::SDK,
             'harness_digest' => self::HARNESS]);
-        // The reviewed direct-webhook numeric selector leaves Customer/Consent read contracts unchanged.
+        // Reviewed direct-webhook and Subscription request additions leave Customer/Consent reads unchanged.
         if (
             !in_array(SourceEvidence::capture()['sdk_digest'], [
                 self::SDK, '184cbc2ac51ee6498f45b5aa50a8ec82c89e66231cb2fabacc862b8a579e48ae',
+                'b6093b9a18fa1d3d277c7850b959a22fa26da5963c8c5c3e9158f0b6cc9e4ea5',
             ], true)
         ) {
             throw new RuntimeException('The approved SDK source has changed.');

@@ -10,6 +10,7 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconcilia
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReuseCommand;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReuseTransport;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\KlarnaIntentReconciliation;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SourceEvidence;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
@@ -262,7 +263,7 @@ final class AlipayConsentReconciliationTest extends TestCase
                 $n->source->sdk_digest = str_repeat('a', 64);
                 break;
             case 'current-sdk-as-prior':
-                $n->source->sdk_digest = '184cbc2ac51ee6498f45b5aa50a8ec82c89e66231cb2fabacc862b8a579e48ae';
+                $n->source->sdk_digest = SourceEvidence::capture()['sdk_digest'];
                 break;
             case 'old-harness':
                 $n->source->harness_digest = str_repeat('a', 64);
