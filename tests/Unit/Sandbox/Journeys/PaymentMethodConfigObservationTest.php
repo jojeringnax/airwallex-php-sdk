@@ -104,16 +104,19 @@ final class PaymentMethodConfigObservationTest extends TestCase
     public function testCurrentPageProofAndPrivateSnapshotAreDistinctFromUseAuthority(): void
     {
         $f = self::fixture();
-        $requests = [];
+        $capture = new class {
+            /** @var list<RequestInterface> */
+            public array $requests = [];
+        };
         $raw = json_encode(['has_more' => false, 'items' => [self::row()],
             'future_field' => 'SYNTHETIC_PRIVATE_UNKNOWN'], JSON_THROW_ON_ERROR);
         try {
             $client = self::client(static function (RequestInterface $request) use (
-                &$requests,
+                $capture,
                 $raw
             ): ResponseInterface {
-                $requests[] = $request;
-                return count($requests) === 1 ? self::login() : self::response($raw);
+                $capture->requests[] = $request;
+                return count($capture->requests) === 1 ? self::login() : self::response($raw);
             });
             $result = PaymentMethodConfigCommand::run(self::options($f), $client);
             self::assertSame('pass', $result['result']);
@@ -131,10 +134,15 @@ final class PaymentMethodConfigObservationTest extends TestCase
             ) {
                 self::assertFalse($result[$key]);
             }
-            self::assertSame('SYNTHETIC_PRIVATE_ACCOUNT', $requests[0]->getHeaderLine('x-login-as'));
-            self::assertSame(PaymentMethodConfigTransport::TARGET, (string) $requests[1]->getUri());
-            self::assertSame('Bearer SYNTHETIC_PRIVATE_TOKEN', $requests[1]->getHeaderLine('Authorization'));
-            self::assertFalse($requests[1]->hasHeader('x-login-as'));
+            self::assertCount(2, $capture->requests);
+            $login = $capture->requests[0] ?? null;
+            $page = $capture->requests[1] ?? null;
+            self::assertInstanceOf(RequestInterface::class, $login);
+            self::assertInstanceOf(RequestInterface::class, $page);
+            self::assertSame('SYNTHETIC_PRIVATE_ACCOUNT', $login->getHeaderLine('x-login-as'));
+            self::assertSame(PaymentMethodConfigTransport::TARGET, (string) $page->getUri());
+            self::assertSame('Bearer SYNTHETIC_PRIVATE_TOKEN', $page->getHeaderLine('Authorization'));
+            self::assertFalse($page->hasHeader('x-login-as'));
             $encoded = json_encode($result, JSON_THROW_ON_ERROR);
             self::assertStringNotContainsString('SYNTHETIC_PRIVATE', $encoded);
             self::assertLessThan(8192, strlen($encoded));

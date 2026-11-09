@@ -193,7 +193,7 @@ final class PaymentMethodConfigObservation
         $facts['wildcard_state'] = $counts['observed_wildcard_rows'] > 0 ? 'observed'
             : ($counts['qualifying_rows'] === 0 || $unknownCurrency > 0
                 ? 'unavailable' : 'not_observed_on_page');
-        if ($facts['pagination_state'] === 'boolean') {
+        if (isset($facts['has_more'])) {
             $facts['result'] = 'pass';
             $facts['filtered_page_terminal'] = $facts['has_more'] === false;
         }
