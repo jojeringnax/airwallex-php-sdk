@@ -200,6 +200,23 @@ The return separates `update_response`/`update_error` from the later `subscripti
 
 Read-only observations preserve unknown, nonterminal, repeated and reordered provider states, exact monetary values and extra fields. They establish neither that the source change caused an observed state nor that payment, settlement or access entitlement succeeded. A response or later error never schedules another source change, collection retry or dunning action. Actual reusable-instrument/Source linkage, eligible collection accounts and account-configured recovery/dunning evidence remain under [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42); the [dunning conflict](api-contracts.md#payment-recovery-conflict) does not establish a universal retry schedule. These deterministic recipes do not depend on another browser diagnostic or promise a live recovery outcome.
 
+## Subscription items and Invoice line items
+
+Use the [item-read recipe](../examples/billing-item-reads.php) after authorizing the buyer and resolving stored parent/item IDs in the owning Billing organization and environment:
+
+```php
+$readItems = require $sdkDirectory . '/examples/billing-item-reads.php';
+$items = $readItems(
+    $billing,
+    '<subscription-id>',
+    '<subscription-item-id>',
+    '<invoice-id>',
+    '<invoice-line-item-id>',
+);
+```
+
+The recipe calls all four [accepted methods](consumer-interfaces.md#subordinate-reads), returning two individual items and one page per parent. Each list preserves the native `items`, `page_after` and `page_before` envelope. When choosing another page, pass its non-null bookmark as `page` to `listItems($subscriptionId, $query)` or `listLineItems($invoiceId, $query)`, retaining the original `page_size`, parent ID and authorized client. These subordinate lists support only `page` and `page_size` in API `2026-08-21`. Empty pages and provider failures remain visible; the recipe performs no automatic traversal.
+
 ## Standalone Payments
 
 Use the effective owning account client throughout a payment/refund journey. The same resource methods apply to direct accounts and independently eligible delegated connected accounts.
