@@ -17,6 +17,7 @@ use GuzzleHttp\Psr7\Utils;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReuseTransport;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
+use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
@@ -164,9 +165,7 @@ final class AlipayConsentReuseTransportTest extends TestCase
             $pipes
         );
         self::assertIsResource($process);
-        self::assertIsResource($pipes[0] ?? null);
-        self::assertIsResource($pipes[1] ?? null);
-        self::assertIsResource($pipes[2] ?? null);
+        $pipes = self::processPipes($pipes, $process);
         fclose($pipes[0]);
         stream_set_timeout($pipes[1], 5);
         $line = fgets($pipes[1], 128);
@@ -868,6 +867,75 @@ final class AlipayConsentReuseTransportTest extends TestCase
             self::assertSame(0, $transport->report()['http_invocations']);
             // Its operation intent was reserved, but invalid headers earn no prepared/possible-send record.
             self::assertSame([], $this->observations());
+        }
+    }
+
+    public function testInvalidPipeShapeClosesAndReapsOwnedFixtureChild(): void
+    {
+        $process = proc_open(
+            [PHP_BINARY, '-r', 'stream_get_contents(STDIN);'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes
+        );
+        self::assertIsResource($process);
+        $pipes = self::processPipes($pipes, $process);
+        $invalid = $pipes;
+        $invalid[3] = $invalid[2];
+        unset($invalid[2]);
+        $rejected = false;
+        try {
+            try {
+                self::processPipes($invalid, $process);
+            } catch (AssertionFailedError) {
+                $rejected = true;
+            }
+            self::assertTrue($rejected);
+            self::assertFalse(is_resource($process));
+            foreach ($pipes as $pipe) {
+                self::assertFalse(is_resource($pipe));
+            }
+        } finally {
+            foreach ($pipes as $pipe) {
+                if (is_resource($pipe)) {
+                    fclose($pipe);
+                }
+            }
+            if (is_resource($process)) {
+                proc_terminate($process);
+                proc_close($process);
+            }
+        }
+    }
+
+    /**
+     * @param resource $process
+     * @return array{resource,resource,resource}
+     */
+    private static function processPipes(mixed $pipes, $process): array
+    {
+        try {
+            self::assertIsArray($pipes);
+            $input = $pipes[0] ?? null;
+            $output = $pipes[1] ?? null;
+            $errors = $pipes[2] ?? null;
+            self::assertIsResource($input);
+            self::assertIsResource($output);
+            self::assertIsResource($errors);
+            return [$input, $output, $errors];
+        } catch (\Throwable $failure) {
+            try {
+                if (is_array($pipes)) {
+                    foreach ($pipes as $pipe) {
+                        if (is_resource($pipe) && get_resource_type($pipe) === 'stream') {
+                            fclose($pipe);
+                        }
+                    }
+                }
+            } finally {
+                proc_terminate($process);
+                proc_close($process);
+            }
+            throw $failure;
         }
     }
 }
