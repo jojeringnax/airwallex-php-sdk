@@ -18,7 +18,7 @@ use Psr\Http\Client\ClientInterface;
 use RuntimeException;
 use SensitiveParameter;
 
-/** Fresh DEFAULT management, independent account prerequisite and organization future-Subscription providers. */
+/** Fresh selected management, independent account prerequisite and organization future-Subscription providers. */
 final class SubscriptionWebhookApi
 {
     public readonly WebhookDeliveryApi $management;
@@ -39,6 +39,7 @@ final class SubscriptionWebhookApi
         /** @var array<string,string> */
         private readonly array $source = [],
         ?float $caseStarted = null,
+        WebhookManagementProfile $managementProfile = WebhookManagementProfile::DefaultLogin,
     ) {
         $this->configuration = $configuration;
         $clock ??= static fn (): float => hrtime(true) / 1_000_000_000;
@@ -47,7 +48,6 @@ final class SubscriptionWebhookApi
         }
         $caseStarted ??= $clock();
         $deadline = SubscriptionWebhookTransport::caseDeadline($caseStarted, $deadline);
-        $managementProfile = WebhookManagementProfile::DefaultLogin;
         $this->managementTransport = new WebhookDeliveryTransport(
             $configuration->accountId(),
             $http,
@@ -112,8 +112,9 @@ final class SubscriptionWebhookApi
         composite:string} */
     public static function contexts(
         #[SensitiveParameter] Configuration $configuration,
+        WebhookManagementProfile $managementProfile = WebhookManagementProfile::DefaultLogin,
     ): array {
-        $contexts = BillingWebhookApi::contexts($configuration, WebhookManagementProfile::DefaultLogin);
+        $contexts = BillingWebhookApi::contexts($configuration, $managementProfile);
         $contexts['composite'] = hash('sha256', json_encode([$contexts, WebhookDeliveryEvents::Subscription->names(),
             '2026-08-21', 'billing-subscription-webhook-pair'], JSON_THROW_ON_ERROR));
         return $contexts;

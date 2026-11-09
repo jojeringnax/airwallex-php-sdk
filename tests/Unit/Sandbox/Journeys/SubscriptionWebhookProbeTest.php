@@ -14,6 +14,7 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SubscriptionWebhookProb
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SubscriptionWebhookApi;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SourceEvidence;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookDeliveryStore;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookManagementProfile;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
@@ -74,9 +75,16 @@ final class SubscriptionWebhookProbeTest extends TestCase
      * @param (Closure(string,RunLedger):WebhookDeliveryStore)|null $stores
      * @return array<string,mixed>
      */
-    private function observe(?Closure $ledgers = null, ?Closure $stores = null): array
-    {
-        return SubscriptionWebhookProbe::run($this->options(), $this->http, function (array $config) {
+    private function observe(
+        ?Closure $ledgers = null,
+        ?Closure $stores = null,
+        ?WebhookManagementProfile $managementProfile = null,
+    ): array {
+        $options = $this->options();
+        if ($managementProfile !== null) {
+            $options['management-profile'] = $managementProfile->value;
+        }
+        return SubscriptionWebhookProbe::run($options, $this->http, function (array $config) {
             $runtime = new WebhookDeliveryFixtureRuntime($config);
             $this->runtime = $runtime;
             $this->http->runtime = $runtime;
@@ -210,6 +218,150 @@ final class SubscriptionWebhookProbeTest extends TestCase
         self::assertSame('unknown', $safe['inventory_completeness']);
         self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
         self::assertLessThanOrEqual(39, count($this->http->requests));
+        self::assertSame('DEFAULT', $safe['management_profile']);
+        self::assertSame('default-login', $safe['management_context']);
+        self::assertIsArray($safe['tool_hashes']);
+        self::assertSame(hash('sha256', 'DEFAULT'), $safe['tool_hashes']['management_profile']);
+    }
+
+    public function testFreshAccountManagementUsesSeparateAccountAndOrganizationTokens(): void
+    {
+        $this->http = new SubscriptionWebhookFixtureProvider(managementProfile: WebhookManagementProfile::Account);
+        $safe = $this->observe(managementProfile: WebhookManagementProfile::Account);
+        self::assertSame('pass', $safe['result'], json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertSame('ACCOUNT', $safe['management_profile']);
+        self::assertSame('account', $safe['management_context']);
+        self::assertSame('organization', $safe['producer_context']);
+        self::assertTrue($safe['registration_deleted']);
+        self::assertTrue($safe['sdk_cancelled_verified']);
+        self::assertTrue($safe['typed_owner_verified']);
+        self::assertFalse($safe['reconciliation_required']);
+        self::assertLessThanOrEqual(39, count($this->http->requests));
+        $logins = [];
+        foreach ($this->http->requests as $request) {
+            $path = $request->getUri()->getPath();
+            self::assertFalse($request->hasHeader('x-on-behalf-of'));
+            if ($path === '/api/v1/authentication/login') {
+                $logins[] = $request->getHeaderLine('x-login-as');
+                continue;
+            }
+            self::assertFalse($request->hasHeader('x-login-as'));
+            self::assertSame(
+                'Bearer ' . ($path === '/api/v1/account' ? 'SYNTHETIC_PRIVATE_ACCOUNT_TOKEN'
+                    : (str_starts_with($path, '/api/v1/webhooks/')
+                        ? 'SYNTHETIC_PRIVATE_MANAGEMENT_ACCOUNT_TOKEN' : 'SYNTHETIC_PRIVATE_ORG_TOKEN')),
+                $request->getHeaderLine('Authorization')
+            );
+        }
+        self::assertSame(['SYNTHETIC_PRIVATE_ACCOUNT', 'SYNTHETIC_PRIVATE_ACCOUNT', ''], $logins);
+        self::assertIsArray($safe['tool_hashes']);
+        self::assertSame(hash('sha256', 'ACCOUNT'), $safe['tool_hashes']['management_profile']);
+        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
+        $files = glob($this->directory . '/sdk-validation-*/ledger.json');
+        self::assertIsArray($files);
+        self::assertCount(2, $files); // Main journal and its independent registration-cleanup journal.
+        $profileFound = false;
+        foreach ($files as $file) {
+            $raw = file_get_contents($file);
+            self::assertIsString($raw);
+            $data = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($data);
+            self::assertIsArray($data['actions']);
+            if (isset($data['actions']['billing_webhook_provenance'])) {
+                self::assertIsArray($safe['context_fingerprints']);
+                self::assertIsArray($safe['source']);
+                self::assertIsString($safe['context_fingerprint']);
+                $contexts = $safe['context_fingerprints'];
+                $evidence = ['source' => $safe['source'], 'context_fingerprint' => $safe['context_fingerprint']];
+                $encoded = json_encode([$evidence, $safe['tool_hashes'], $contexts], JSON_THROW_ON_ERROR);
+                $fingerprint = hash('sha256', $encoded);
+                $body = ['source_fingerprint' => $fingerprint, 'contexts' => $contexts,
+                    'events' => ['subscription.created', 'subscription.cancelled'], 'api_version' => '2026-08-21',
+                    'organization_expectation_sha256' => $contexts['organization_reference'],
+                    'management_profile' => 'ACCOUNT'];
+                self::assertIsArray($data['actions']['billing_webhook_provenance']);
+                self::assertSame(
+                    hash('sha256', json_encode($body, JSON_THROW_ON_ERROR)),
+                    $data['actions']['billing_webhook_provenance']['body_hash']
+                );
+                $profileFound = true;
+            }
+        }
+        self::assertTrue($profileFound);
+    }
+
+    public function testAccountRegistrationFailureNeverFallsBackOrStartsProducer(): void
+    {
+        $this->http = new SubscriptionWebhookFixtureProvider(managementProfile: WebhookManagementProfile::Account);
+        $this->http->intercept = static fn (RequestInterface $request): ?ResponseInterface =>
+            $request->getUri()->getPath() === '/api/v1/webhooks/create'
+                ? new Response(400, [], '{"code":"invalid_argument"}') : null;
+        $safe = $this->observe(managementProfile: WebhookManagementProfile::Account);
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('ACCOUNT', $safe['management_profile']);
+        self::assertTrue($safe['registration_outcome_unknown']);
+        self::assertTrue($safe['reconciliation_required']);
+        self::assertFalse($safe['customer_created']);
+        self::assertSame(1, $this->http->count('/api/v1/webhooks/create'));
+        self::assertSame(0, $this->http->count('/api/v1/billing/billing_customers/create'));
+        foreach ($this->http->requests as $request) {
+            if ($request->getUri()->getPath() === '/api/v1/authentication/login') {
+                self::assertSame('SYNTHETIC_PRIVATE_ACCOUNT', $request->getHeaderLine('x-login-as'));
+            }
+        }
+    }
+
+    public function testProfileContextsKeepDefaultBytesAndIsolateAccountManagement(): void
+    {
+        $configuration = Configuration::load('sandbox', $this->directory . '/credentials');
+        $default = SubscriptionWebhookApi::contexts($configuration);
+        self::assertSame(
+            $default,
+            SubscriptionWebhookApi::contexts($configuration, WebhookManagementProfile::DefaultLogin)
+        );
+        $old = BillingWebhookApi::contexts($configuration, WebhookManagementProfile::DefaultLogin);
+        $old['composite'] = hash('sha256', json_encode([$old, ['subscription.created', 'subscription.cancelled'],
+            '2026-08-21', 'billing-subscription-webhook-pair'], JSON_THROW_ON_ERROR));
+        self::assertSame($old, $default);
+        $account = SubscriptionWebhookApi::contexts($configuration, WebhookManagementProfile::Account);
+        self::assertNotSame($default['management'], $account['management']);
+        self::assertNotSame($default['composite'], $account['composite']);
+        foreach (['producer', 'collector', 'organization_reference'] as $key) {
+            self::assertSame($default[$key], $account[$key]);
+        }
+        $safe = $this->observe(
+            ledgers: fn (string $context, string $directory): RunLedger => RunLedger::create(
+                $default['composite'],
+                $directory
+            ),
+            managementProfile: WebhookManagementProfile::Account
+        );
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('provenance', $safe['phase']);
+        self::assertSame([], $this->http->requests);
+    }
+
+    /** @return iterable<string,array{mixed}> */
+    public static function invalidManagementProfiles(): iterable
+    {
+        yield 'unknown' => ['OTHER'];
+        yield 'lowercase' => ['account'];
+        yield 'empty' => [''];
+        yield 'bool' => [true];
+        yield 'list' => [['ACCOUNT']];
+    }
+
+    #[DataProvider('invalidManagementProfiles')]
+    public function testInvalidProfileStopsBeforeCredentialsOrLogin(mixed $profile): void
+    {
+        $options = $this->options();
+        $options['management-profile'] = $profile;
+        $options['credentials-file'] = '/SYNTHETIC_UNAVAILABLE';
+        $safe = SubscriptionWebhookProbe::run($options, $this->http);
+        self::assertSame('fail', $safe['result']);
+        self::assertSame('configuration', $safe['phase']);
+        self::assertSame('unavailable', $safe['management_profile']);
+        self::assertSame([], $this->http->requests);
     }
     public function testPreparedWireAndSeparateIntentAreDurableBeforeEveryDelegate(): void
     {
@@ -719,7 +871,11 @@ final class SubscriptionWebhookProbeTest extends TestCase
         foreach (
             [[], ['--environment=production'], ['--create-one-subscription-webhook-pair=true'],
             ['--create-one-subscription-webhook-pair', '--create-one-subscription-webhook-pair'],
-            ['--environment=sandbox', '--event=subscription.created'], ['--resume=SYNTHETIC_PRIVATE']] as $arguments
+            ['--environment=sandbox', '--event=subscription.created'], ['--resume=SYNTHETIC_PRIVATE'],
+            ['--environment=sandbox', '--create-one-subscription-webhook-pair', '--management-profile=ORG'],
+            ['--environment=sandbox', '--create-one-subscription-webhook-pair', '--management-profile=account'],
+            ['--environment=sandbox', '--create-one-subscription-webhook-pair',
+                '--management-profile=ACCOUNT', '--management-profile=DEFAULT']] as $arguments
         ) {
             $process = proc_open([PHP_BINARY, $entry, ...$arguments], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
             self::assertIsResource($process);

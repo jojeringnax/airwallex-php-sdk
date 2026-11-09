@@ -7,7 +7,7 @@ use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SubscriptionWebhookProb
 require dirname(__DIR__) . '/vendor/autoload.php';
 $arguments = $argv ?? [];
 $options = getopt('', ['environment:', 'credentials-file:', 'state-dir:', 'node-bin:', 'cloudflared-bin:',
-    'create-one-subscription-webhook-pair'], $last);
+    'create-one-subscription-webhook-pair', 'management-profile:'], $last);
 $valid = is_array($options) && $last === count($arguments);
 if (!is_array($options)) {
     $options = [];
@@ -18,7 +18,7 @@ foreach (array_slice($arguments, 1) as $argument) {
     if (
         !str_starts_with($argument, '--') || isset($seen[$name])
         || !in_array($name, ['environment', 'credentials-file', 'state-dir', 'node-bin', 'cloudflared-bin',
-            'create-one-subscription-webhook-pair'], true)
+            'create-one-subscription-webhook-pair', 'management-profile'], true)
         || ($name === 'create-one-subscription-webhook-pair'
             ? $argument !== '--create-one-subscription-webhook-pair'
             : !str_contains($argument, '='))

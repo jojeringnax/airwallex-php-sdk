@@ -15,7 +15,7 @@ use RuntimeException;
 use SensitiveParameter;
 use Throwable;
 
-/** Separate DEFAULT-management future-Subscription observer; captures never drive mutations. */
+/** Separate selected-management future-Subscription observer; captures never drive mutations. */
 final class SubscriptionWebhookProbe
 {
     /**
@@ -53,6 +53,10 @@ final class SubscriptionWebhookProbe
             'product_archived' => false, 'price_archived' => false, 'inventory_completeness' => 'unknown'];
         $safe['management_profile'] = 'DEFAULT';
         $safe['collector_context'] = 'account';
+        if (array_key_exists('management-profile', $options)) {
+            $safe['management_profile'] = 'unavailable';
+            $safe['management_context'] = 'unavailable';
+        }
         $runtime = null;
         $api = null;
         $registration = null;
@@ -76,6 +80,13 @@ final class SubscriptionWebhookProbe
         $deadline = NAN;
         try {
             self::validate($options);
+            $selected = $options['management-profile'] ?? 'DEFAULT';
+            if (!is_string($selected) || ($profile = WebhookManagementProfile::tryFrom($selected)) === null) {
+                throw new RuntimeException('The explicit management profile is invalid.');
+            }
+            $managementProfile = $profile;
+            $safe['management_profile'] = $managementProfile->value;
+            $safe['management_context'] = $managementProfile->context();
             $caseStarted = $elapsed();
             $started = self::wall($clock);
             $deadline = SubscriptionWebhookTransport::caseDeadline($caseStarted);
@@ -100,7 +111,7 @@ final class SubscriptionWebhookProbe
             $configuration = Configuration::load('sandbox', $credentials);
             $organization = $configuration->organizationId();
             $safe['organization_comparison'] = $organization === null ? 'unavailable' : 'available';
-            $contexts = SubscriptionWebhookApi::contexts($configuration);
+            $contexts = SubscriptionWebhookApi::contexts($configuration, $managementProfile);
             $fingerprint = $contexts['composite'];
             $safe['context_fingerprints'] = $contexts;
             $safe['phase'] = 'provenance';
@@ -115,7 +126,7 @@ final class SubscriptionWebhookProbe
                 'contexts' => $contexts, 'events' => WebhookDeliveryEvents::Subscription->names(),
                 'api_version' => '2026-08-21',
                 'organization_expectation_sha256' => $contexts['organization_reference'],
-                'management_profile' => 'DEFAULT',
+                'management_profile' => $managementProfile->value,
             ], $fingerprint);
             $store = $stores === null ? new WebhookDeliveryStore($directory, $ledger) : $stores($directory, $ledger);
             $api = new SubscriptionWebhookApi(
@@ -125,7 +136,8 @@ final class SubscriptionWebhookProbe
                 $elapsed,
                 $tools,
                 $ledger->evidence()['source'],
-                $caseStarted
+                $caseStarted,
+                $managementProfile
             );
             $safe['phase'] = 'account_prerequisite';
             $entity = $api->legalEntity();
@@ -482,7 +494,7 @@ final class SubscriptionWebhookProbe
     private static function validate(#[SensitiveParameter] array $options): void
     {
         $allowed = ['environment', 'credentials-file', 'state-dir', 'node-bin', 'cloudflared-bin',
-            'create-one-subscription-webhook-pair'];
+            'create-one-subscription-webhook-pair', 'management-profile'];
         foreach ($options as $name => $value) {
             if (
                 !in_array($name, $allowed, true) || ($name === 'create-one-subscription-webhook-pair'
@@ -539,6 +551,7 @@ final class SubscriptionWebhookProbe
             $hashes[$name] = $hash;
         }
         $hashes['tunnel_runtime'] = '2136431d5eb467bf447d2ee514b713e192719b143aec1d9e09bf7dc290d5bb12';
+        $hashes['management_profile'] = hash('sha256', $managementProfile->value);
         return $hashes;
     }
 

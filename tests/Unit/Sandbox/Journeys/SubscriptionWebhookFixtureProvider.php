@@ -7,6 +7,7 @@ namespace Jojeringnax\Airwallex\Tests\Unit\Sandbox\Journeys;
 use Closure;
 use GuzzleHttp\Psr7\Response;
 use Jojeringnax\Airwallex\Internal\Json\JsonCodec;
+use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\WebhookManagementProfile;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -40,9 +41,12 @@ final class SubscriptionWebhookFixtureProvider implements ClientInterface
     public bool $cancelEffective = true;
     private bool $deleted = false;
     private int $defaultLogins = 0;
+    private int $accountLogins = 0;
 
-    public function __construct(private readonly bool $defaultManagement = true)
-    {
+    public function __construct(
+        private readonly bool $defaultManagement = true,
+        private readonly WebhookManagementProfile $managementProfile = WebhookManagementProfile::DefaultLogin,
+    ) {
     }
 
     public function sendRequest(RequestInterface $request): ResponseInterface
@@ -69,8 +73,11 @@ final class SubscriptionWebhookFixtureProvider implements ClientInterface
         }
         $data = self::nativeIntegers($data);
         if ($path === '/api/v1/authentication/login') {
-            $token = $request->hasHeader('x-login-as') ? 'SYNTHETIC_PRIVATE_ACCOUNT_TOKEN'
-                : ($this->defaultManagement && ++$this->defaultLogins === 1
+            $token = $request->hasHeader('x-login-as')
+                ? ($this->managementProfile === WebhookManagementProfile::Account && ++$this->accountLogins > 1
+                    ? 'SYNTHETIC_PRIVATE_MANAGEMENT_ACCOUNT_TOKEN' : 'SYNTHETIC_PRIVATE_ACCOUNT_TOKEN')
+                : ($this->defaultManagement && $this->managementProfile === WebhookManagementProfile::DefaultLogin
+                    && ++$this->defaultLogins === 1
                     ? 'SYNTHETIC_PRIVATE_DEFAULT_TOKEN' : 'SYNTHETIC_PRIVATE_ORG_TOKEN');
             return self::json(['token' => $token,
                 'expires_at' => '2099-01-01T00:00:00Z'], $this->defaultManagement ? 201 : 200);
@@ -78,7 +85,9 @@ final class SubscriptionWebhookFixtureProvider implements ClientInterface
         if ($this->defaultManagement) {
             $expected = $path === '/api/v1/account' ? 'SYNTHETIC_PRIVATE_ACCOUNT_TOKEN'
                 : (str_starts_with($path, '/api/v1/webhooks/')
-                    ? 'SYNTHETIC_PRIVATE_DEFAULT_TOKEN' : 'SYNTHETIC_PRIVATE_ORG_TOKEN');
+                    ? ($this->managementProfile === WebhookManagementProfile::Account
+                        ? 'SYNTHETIC_PRIVATE_MANAGEMENT_ACCOUNT_TOKEN' : 'SYNTHETIC_PRIVATE_DEFAULT_TOKEN')
+                    : 'SYNTHETIC_PRIVATE_ORG_TOKEN');
             if ($request->getHeaderLine('Authorization') !== 'Bearer ' . $expected) {
                 throw new RuntimeException('Synthetic isolated token role did not match.');
             }
