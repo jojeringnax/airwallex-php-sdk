@@ -583,12 +583,7 @@ final class SubscriptionWebhookTransportTest extends TestCase
         );
         self::assertIsResource($process);
         try {
-            $in = $pipes[0] ?? null;
-            $out = $pipes[1] ?? null;
-            $err = $pipes[2] ?? null;
-            self::assertIsResource($in);
-            self::assertIsResource($out);
-            self::assertIsResource($err);
+            [$in, $out, $err] = self::pipes($pipes);
             fclose($in);
             stream_set_timeout($out, 8);
             $address = fgets($out, 128);
@@ -642,16 +637,66 @@ final class SubscriptionWebhookTransportTest extends TestCase
             fclose($err);
             self::assertSame(0, proc_close($process));
         } finally {
-            foreach ($pipes as $pipe) {
-                if (is_resource($pipe)) {
-                    fclose($pipe);
-                }
-            }
+            self::closePipes($pipes);
             if (is_resource($process)) {
                 proc_terminate($process);
                 proc_close($process);
             }
         }
+    }
+
+    /** @return array{resource,resource,resource} */
+    private static function pipes(mixed $pipes): array
+    {
+        if (
+            !is_array($pipes) || !is_resource($pipes[0] ?? null)
+            || !is_resource($pipes[1] ?? null) || !is_resource($pipes[2] ?? null)
+        ) {
+            throw new RuntimeException('The synthetic native process pipes are unavailable.');
+        }
+        return [$pipes[0], $pipes[1], $pipes[2]];
+    }
+
+    private static function closePipes(mixed $pipes): void
+    {
+        if (is_array($pipes)) {
+            foreach ($pipes as $pipe) {
+                if (is_resource($pipe)) {
+                    fclose($pipe);
+                }
+            }
+        }
+    }
+
+    public function testNativePipeWitnessValidatesShapeAndClosesFailureHandles(): void
+    {
+        $in = fopen('php://temp', 'w+b');
+        $out = fopen('php://temp', 'w+b');
+        $err = fopen('php://temp', 'w+b');
+        self::assertIsResource($in);
+        self::assertIsResource($out);
+        self::assertIsResource($err);
+        $handles = [$in, $out, $err];
+        try {
+            self::assertSame($handles, self::pipes($handles));
+            foreach ([null, [], [$in], [$in, $out], [$in, $out, false]] as $invalid) {
+                try {
+                    self::pipes($invalid);
+                    self::fail('Invalid native pipe shape escaped.');
+                } catch (RuntimeException $error) {
+                    self::assertSame('The synthetic native process pipes are unavailable.', $error->getMessage());
+                }
+            }
+        } finally {
+            self::closePipes($handles);
+            self::closePipes(null);
+        }
+        self::assertSame(
+            ['resource (closed)', 'resource (closed)', 'resource (closed)'],
+            array_map(gettype(...), $handles)
+        );
+        $this->expectException(RuntimeException::class);
+        self::pipes($handles);
     }
     /** @return iterable<string,array{string,mixed}> */
     public static function invalidProductBodies(): iterable

@@ -75,9 +75,7 @@ final class SubscriptionWebhookEvidence
             $rawMetadata = $this->store->read($name, 4096);
             json_decode($rawMetadata, depth: 16, flags: JSON_THROW_ON_ERROR);
             $value = get_object_vars(WebhookDeliveryApi::assertUnambiguousObject($rawMetadata));
-            if (array_is_list($value)) {
-                throw new ProtocolException('Private capture metadata is unavailable.');
-            }
+            self::assertMetadataMap($value);
             $body = $this->store->read(substr($name, 0, -5) . '.body');
             $timestamp = $value['timestamp'] ?? null;
             $signature = $value['signature'] ?? null;
@@ -267,6 +265,14 @@ final class SubscriptionWebhookEvidence
             'typed_owner_verified' => $this->counts['owner_matching_created_count'] > 0
                 && $this->counts['owner_matching_cancelled_count'] > 0
                 && $this->counts['conflicting_event_count'] === 0];
+    }
+
+    /** @param array<array-key,mixed> $value Object properties can have integer array keys in PHP. */
+    private static function assertMetadataMap(#[SensitiveParameter] array $value): void
+    {
+        if (array_is_list($value)) {
+            throw new ProtocolException('Private capture metadata is unavailable.');
+        }
     }
 
     /** @param array<array-key,mixed> $event */

@@ -80,17 +80,120 @@ final class SubscriptionWebhookProbeTest extends TestCase
             $runtime = new WebhookDeliveryFixtureRuntime($config);
             $this->runtime = $runtime;
             $this->http->runtime = $runtime;
-            $runtime->eventFilter = static function (array $event): array {
-                unset($event['account_id']);
-                $event['org_id'] = 'SYNTHETIC_PRIVATE_ORG';
-                return $event;
-            };
+            $runtime->eventFilter = self::organizationEvent(...);
             if ($this->configure !== null) {
                 ($this->configure)($runtime);
             }
             return $runtime;
         }, static fn (): int => WebhookDeliveryFixtureRuntime::NOW, static function (int $milliseconds): void {
         }, $ledgers, $stores);
+    }
+
+    /**
+     * @param array<array-key,mixed> $event
+     * @return array<array-key,mixed>
+     */
+    private static function organizationEvent(array $event): array
+    {
+        unset($event['account_id']);
+        $event['org_id'] = 'SYNTHETIC_PRIVATE_ORG';
+        return $event;
+    }
+
+    /** @param array<array-key,mixed> $metadata */
+    private static function metadataPath(array $metadata): ?string
+    {
+        $path = $metadata['uri'] ?? null;
+        return is_string($path) ? $path : null;
+    }
+
+    /** @return array{resource,resource} */
+    private static function outputPipes(mixed $pipes): array
+    {
+        if (!is_array($pipes) || !is_resource($pipes[1] ?? null) || !is_resource($pipes[2] ?? null)) {
+            throw new RuntimeException('The synthetic process output pipes are unavailable.');
+        }
+        return [$pipes[1], $pipes[2]];
+    }
+
+    public function testNamedEventFixturePreservesUnknownAndNumericKeys(): void
+    {
+        $event = ['account_id' => 'SYNTHETIC_PRIVATE_ACCOUNT', 'name' => 'subscription.created',
+            0 => ['opaque_decimal' => '1.23000', 'overflow' => '999999999999999999999999999999'],
+            'data' => ['unlisted' => [1, '1.0', null]]];
+        self::assertSame(['name' => 'subscription.created', 0 => $event[0], 'data' => $event['data'],
+            'org_id' => 'SYNTHETIC_PRIVATE_ORG'], self::organizationEvent($event));
+        self::assertSame('SYNTHETIC_PRIVATE_ACCOUNT', $event['account_id']);
+    }
+
+    /** @return iterable<string,array{array<array-key,mixed>,?string}> */
+    public static function streamMetadataShapes(): iterable
+    {
+        yield 'missing' => [[], null];
+        yield 'null' => [['uri' => null], null];
+        yield 'numeric' => [['uri' => 123], null];
+        yield 'boolean' => [['uri' => false], null];
+        yield 'array' => [['uri' => []], null];
+        yield 'empty string' => [['uri' => ''], ''];
+        yield 'named file' => [['uri' => '/SYNTHETIC/ledger.json.writing'], '/SYNTHETIC/ledger.json.writing'];
+    }
+
+    /** @param array<array-key,mixed> $metadata */
+    #[DataProvider('streamMetadataShapes')]
+    public function testNativeStreamMetadataUriIsProvedRatherThanAssumed(array $metadata, ?string $expected): void
+    {
+        self::assertSame($expected, self::metadataPath($metadata));
+    }
+
+    public function testCaptureMetadataMapGuardRetainsActualPhpNumericObjectKeyBehavior(): void
+    {
+        $guard = new ReflectionMethod(
+            \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\SubscriptionWebhookEvidence::class,
+            'assertMetadataMap'
+        );
+        foreach (['{}', '{"0":"SYNTHETIC"}'] as $raw) {
+            $object = json_decode($raw, depth: 4, flags: JSON_THROW_ON_ERROR);
+            self::assertInstanceOf(\stdClass::class, $object);
+            try {
+                $guard->invoke(null, get_object_vars($object));
+                self::fail('List-shaped object properties escaped the original metadata guard.');
+            } catch (\Throwable $error) {
+                self::assertInstanceOf(\Jojeringnax\Airwallex\Exception\ProtocolException::class, $error);
+                self::assertSame('Private capture metadata is unavailable.', $error->getMessage());
+            }
+        }
+        foreach (['{"timestamp":"SYNTHETIC"}', '{"2":"SYNTHETIC"}'] as $raw) {
+            $object = json_decode($raw, depth: 4, flags: JSON_THROW_ON_ERROR);
+            self::assertInstanceOf(\stdClass::class, $object);
+            self::assertNull($guard->invoke(null, get_object_vars($object)));
+        }
+    }
+
+    public function testOutputPipeWitnessRejectsMissingWrongAndClosedNativeHandles(): void
+    {
+        $out = fopen('php://temp', 'w+b');
+        $err = fopen('php://temp', 'w+b');
+        self::assertIsResource($out);
+        self::assertIsResource($err);
+        try {
+            self::assertSame([$out, $err], self::outputPipes([1 => $out, 2 => $err]));
+            foreach ([null, [], [1 => $out], [1 => $out, 2 => false]] as $pipes) {
+                try {
+                    self::outputPipes($pipes);
+                    self::fail('Invalid native output pipes escaped.');
+                } catch (RuntimeException $error) {
+                    self::assertSame('The synthetic process output pipes are unavailable.', $error->getMessage());
+                }
+            }
+            fclose($out);
+            $this->expectException(RuntimeException::class);
+            self::outputPipes([1 => $out, 2 => $err]);
+        } finally {
+            if (is_resource($out)) {
+                fclose($out);
+            }
+            fclose($err);
+        }
     }
 
     public function testFreshDefaultSubscriptionPairAndExactCleanup(): void
@@ -243,9 +346,9 @@ final class SubscriptionWebhookProbeTest extends TestCase
             $state,
             $action
         ): bool {
-            $path = stream_get_meta_data($stream)['uri'] ?? null;
+            $path = self::metadataPath(stream_get_meta_data($stream));
             if (
-                !$state->changed && $state->held instanceof RequestInterface && is_string($path)
+                !$state->changed && $state->held instanceof RequestInterface && $path !== null
                 && str_ends_with($path, 'ledger.json.writing')
             ) {
                 $raw = file_get_contents($path);
@@ -351,9 +454,9 @@ final class SubscriptionWebhookProbeTest extends TestCase
             &$changed,
             $failure
         ): bool {
-            $path = stream_get_meta_data($stream)['uri'] ?? null;
+            $path = self::metadataPath(stream_get_meta_data($stream));
             if (
-                !$changed && $ledger instanceof RunLedger && is_string($path)
+                !$changed && $ledger instanceof RunLedger && $path !== null
                 && str_ends_with($path, 'ledger.json.writing')
             ) {
                 $raw = file_get_contents($path);
@@ -566,9 +669,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
                     $action,
                     &$failed
                 ): bool {
-                    $metadata = stream_get_meta_data($stream);
-                    $path = $metadata['uri'] ?? null;
-                    if (is_string($path) && str_ends_with($path, 'ledger.json.writing')) {
+                    $path = self::metadataPath(stream_get_meta_data($stream));
+                    if ($path !== null && str_ends_with($path, 'ledger.json.writing')) {
                         $raw = file_get_contents($path);
                         if (is_string($raw) && str_contains($raw, '"' . $action . '"')) {
                             $failed = true;
@@ -620,10 +722,7 @@ final class SubscriptionWebhookProbeTest extends TestCase
         ) {
             $process = proc_open([PHP_BINARY, $entry, ...$arguments], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
             self::assertIsResource($process);
-            $out = $pipes[1] ?? null;
-            $err = $pipes[2] ?? null;
-            self::assertIsResource($out);
-            self::assertIsResource($err);
+            [$out, $err] = self::outputPipes($pipes);
             $stdout = stream_get_contents($out);
             $stderr = stream_get_contents($err);
             fclose($out);
@@ -711,9 +810,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
                     $state,
                     $time
                 ): bool {
-                    $metadata = stream_get_meta_data($stream);
-                    $path = $metadata['uri'] ?? null;
-                    if (is_string($path) && str_ends_with($path, 'ledger.json.writing')) {
+                    $path = self::metadataPath(stream_get_meta_data($stream));
+                    if ($path !== null && str_ends_with($path, 'ledger.json.writing')) {
                         $raw = file_get_contents($path);
                         if (is_string($raw) && str_contains($raw, '"cancel_subscription_wire"')) {
                             $state->changed = true;
@@ -746,9 +844,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
     {
         $safe = $this->observe(static function (string $context, string $directory): RunLedger {
             return RunLedger::create($context, $directory, synchronize: static function ($stream): bool {
-                $metadata = stream_get_meta_data($stream);
-                $path = $metadata['uri'] ?? null;
-                if (is_string($path) && str_ends_with($path, 'ledger.json.writing')) {
+                $path = self::metadataPath(stream_get_meta_data($stream));
+                if ($path !== null && str_ends_with($path, 'ledger.json.writing')) {
                     $raw = file_get_contents($path);
                     if (is_string($raw)) {
                         $data = json_decode($raw, true, flags: JSON_THROW_ON_ERROR);
@@ -805,9 +902,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
                     $phase,
                     &$failed
                 ): bool {
-                    $metadata = stream_get_meta_data($stream);
-                    $path = $metadata['uri'] ?? null;
-                    if (is_string($path) && str_ends_with($path, 'ledger.json.writing')) {
+                    $path = self::metadataPath(stream_get_meta_data($stream));
+                    if ($path !== null && str_ends_with($path, 'ledger.json.writing')) {
                         $raw = file_get_contents($path);
                         if (is_string($raw) && str_contains($raw, '"' . $phase . '_wire"')) {
                             $failed = true;
@@ -876,9 +972,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
     {
         $safe = $this->observe(stores: static function (string $directory, RunLedger $ledger): WebhookDeliveryStore {
             return new WebhookDeliveryStore($directory, $ledger, static function ($stream): bool {
-                $metadata = stream_get_meta_data($stream);
-                $path = $metadata['uri'] ?? null;
-                return !(is_string($path) && str_ends_with($path, 'registration.json.writing')) && fsync($stream);
+                $path = self::metadataPath(stream_get_meta_data($stream));
+                return !($path !== null && str_ends_with($path, 'registration.json.writing')) && fsync($stream);
             });
         });
         self::assertSame('fail', $safe['result']);
@@ -931,9 +1026,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
                         $entry,
                         &$changed
                     ): bool {
-                        $metadata = stream_get_meta_data($stream);
-                        $path = $metadata['uri'] ?? null;
-                        if (!$changed && is_string($path) && str_ends_with($path, 'ledger.json.writing')) {
+                        $path = self::metadataPath(stream_get_meta_data($stream));
+                        if (!$changed && $path !== null && str_ends_with($path, 'ledger.json.writing')) {
                             $raw = file_get_contents($path);
                             if (is_string($raw) && str_contains($raw, '"create_customer_wire"')) {
                                 file_put_contents($entry, "\n// synthetic provenance change\n", FILE_APPEND);
@@ -1112,9 +1206,8 @@ final class SubscriptionWebhookProbeTest extends TestCase
                 $state,
                 $action
             ): bool {
-                $metadata = stream_get_meta_data($stream);
-                $path = $metadata['uri'] ?? null;
-                if (is_string($path) && str_ends_with($path, 'ledger.json.writing')) {
+                $path = self::metadataPath(stream_get_meta_data($stream));
+                if ($path !== null && str_ends_with($path, 'ledger.json.writing')) {
                     $raw = file_get_contents($path);
                     if (is_string($raw) && str_contains($raw, '"' . $action . '_wire"')) {
                         $state->changed = true;
