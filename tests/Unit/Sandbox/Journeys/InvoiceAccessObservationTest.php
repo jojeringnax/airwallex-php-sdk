@@ -88,8 +88,12 @@ final class InvoiceAccessObservationTest extends TestCase
     /** @param array<string,mixed>|null $invoice
      * @param array<string,mixed>|null $first
      */
-    private function sdk(?array $invoice = null, ?array $first = null, ?Closure $beforeLogin = null): RecordingClient
-    {
+    private function sdk(
+        ?array $invoice = null,
+        ?array $first = null,
+        ?Closure $beforeLogin = null,
+        string $latestInvoiceId = 'PRIVATE_INVOICE',
+    ): RecordingClient {
         return new RecordingClient(new Client(['handler' => new MockHandler([
             static function () use ($beforeLogin): Response {
                 if ($beforeLogin !== null) {
@@ -101,7 +105,7 @@ final class InvoiceAccessObservationTest extends TestCase
                 'default_billing_currency' => 'EUR', 'default_legal_entity_id' => 'PRIVATE_ENTITY']),
             self::json(['id' => 'PRIVATE_SUBSCRIPTION', 'metadata' => ['sdk_validation_run' => $this->marker],
                 'billing_customer_id' => 'PRIVATE_CUSTOMER', 'legal_entity_id' => 'PRIVATE_ENTITY',
-                'currency' => 'EUR', 'collection_method' => 'OUT_OF_BAND', 'latest_invoice_id' => 'PRIVATE_INVOICE']),
+                'currency' => 'EUR', 'collection_method' => 'OUT_OF_BAND', 'latest_invoice_id' => $latestInvoiceId]),
             self::json($first ?? $invoice ?? $this->invoice()), self::json($invoice ?? $this->invoice()),
         ])]));
     }
@@ -244,6 +248,8 @@ final class InvoiceAccessObservationTest extends TestCase
         $before = file_get_contents($this->prior);
         $result = InvoiceAccessCommand::run($this->options(payer: false, follow: true), $this->sdk(), $links);
         self::assertSame('pass', $result['result']);
+        self::assertArrayNotHasKey('payer_sdk_capability_bound', $result);
+        self::assertArrayNotHasKey('payer_capability_correlated_access_observed', $result);
         self::assertSame(301, $result['pdf_http_status']);
         self::assertSame('redirect_unfollowed', $result['pdf_initial_outcome']);
         self::assertSame(200, $result['pdf_redirect_http_status']);
@@ -550,34 +556,153 @@ final class InvoiceAccessObservationTest extends TestCase
         self::sanitized($result);
     }
 
-    /** @return iterable<string,array{string}> */
+    public function testAbsentBodyIdCanOnlyReportAccessThroughTheFreshSdkCapability(): void
+    {
+        $data = self::payer();
+        unset($data['invoice']['id']);
+        $first = $this->invoice();
+        $first['hosted_url'] = InvoiceAccessPolicy::ORIGIN . '/pay?s=PRIVATE_SUPERSEDED';
+        $sdk = $this->sdk(first: $first);
+        $hosted = $this->invoice()['hosted_url'];
+        self::assertIsString($hosted);
+        $before = file_get_contents($this->prior);
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([
+            function (RequestInterface $request) use ($sdk, $data, $hosted): Response {
+                self::assertCount(5, $sdk->requests);
+                self::assertSame('Bearer PRIVATE_CAPABILITY', $request->getHeaderLine('Authorization'));
+                $state = $this->journal();
+                self::assertIsArray($state['actions']);
+                $action = $state['actions']['invoice_payer_read'] ?? null;
+                self::assertIsArray($action);
+                $binding = ['method' => 'GET', 'path' => '/billing/payer-web-api/invoice',
+                    'invoice_id' => 'PRIVATE_INVOICE', 'prior_ledger_sha256' => hash_file('sha256', $this->prior),
+                    'hosted_url_sha256' => hash('sha256', $hosted)];
+                self::assertSame(hash('sha256', json_encode($binding, JSON_THROW_ON_ERROR)), $action['body_hash']);
+                return self::json($data);
+            },
+        ])]));
+        $result = InvoiceAccessCommand::run($this->options(pdf: false), $sdk, $links);
+        self::assertTrue($result['payer_sdk_capability_bound']);
+        self::assertTrue($result['payer_capability_correlated_access_observed']);
+        self::assertFalse($result['payer_id_present']);
+        self::assertFalse($result['payer_id_matched']);
+        self::assertFalse($result['payer_invoice_matched']);
+        self::assertFalse($result['payer_customer_indirect_anchor_matched']);
+        self::assertSame('pending', $result['result']);
+        self::assertSame('invalid_response', $result['payer_outcome']);
+        self::assertSame($before, file_get_contents($this->prior));
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    public function testNativeNumericEchoCannotMatchAStringInvoiceIdWithTheSameText(): void
+    {
+        $invoice = $this->invoice();
+        $invoice['id'] = '123';
+        $data = self::payer();
+        $data['invoice']['id'] = 123;
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([self::json($data)])]));
+        $result = InvoiceAccessCommand::run(
+            $this->options(pdf: false),
+            $this->sdk($invoice, latestInvoiceId: '123'),
+            $links
+        );
+        self::assertTrue($result['payer_sdk_capability_bound']);
+        self::assertTrue($result['payer_id_present']);
+        self::assertFalse($result['payer_id_string']);
+        self::assertFalse($result['payer_id_matched']);
+        self::assertFalse($result['payer_capability_correlated_access_observed']);
+        self::assertSame('pending', $result['result']);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    /** @return iterable<string,array{bool,mixed,bool,mixed,bool,bool}> */
+    public static function correlationPaymentStates(): iterable
+    {
+        yield 'known match' => [true, 'PAID', true, 'PAID', true, true];
+        yield 'known unpaid' => [true, 'UNPAID', true, 'UNPAID', true, true];
+        yield 'known mismatch' => [true, 'PAID', true, 'UNPAID', false, false];
+        yield 'missing payer state' => [true, 'PAID', false, null, false, false];
+        yield 'null payer state' => [true, 'PAID', true, null, false, false];
+        yield 'numeric payer state' => [true, 'PAID', true, 123, false, false];
+        yield 'unknown sdk state' => [true, 'FUTURE', true, 'PAID', true, false];
+        yield 'missing sdk state' => [false, null, true, 'PAID', true, false];
+        yield 'null sdk state' => [true, null, true, 'PAID', true, false];
+    }
+
+    #[DataProvider('correlationPaymentStates')]
+    public function testCorrelatedAccessNeedsKnownPaymentContextWithoutChangingTheLegacyAggregate(
+        bool $sdkPresent,
+        mixed $sdkPayment,
+        bool $payerPresent,
+        mixed $payerPayment,
+        bool $legacyMatch,
+        bool $correlated,
+    ): void {
+        $invoice = $this->invoice();
+        if ($sdkPresent) {
+            $invoice['payment_status'] = $sdkPayment;
+        } else {
+            unset($invoice['payment_status']);
+        }
+        $data = self::payer();
+        if ($payerPresent) {
+            $data['invoice']['paymentStatus'] = $payerPayment;
+        } else {
+            unset($data['invoice']['paymentStatus']);
+        }
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([self::json($data)])]));
+        $result = InvoiceAccessCommand::run($this->options(pdf: false), $this->sdk($invoice), $links);
+        self::assertTrue($result['payer_sdk_capability_bound']);
+        self::assertSame($correlated, $result['payer_capability_correlated_access_observed']);
+        self::assertSame($legacyMatch, $result['payer_invoice_matched']);
+        self::assertSame($legacyMatch ? 'pass' : 'pending', $result['result']);
+        self::assertCount(1, $links->requests);
+        self::sanitized($result);
+    }
+
+    public function testNoPayerSelectionAddsNoCapabilityFactsOrRead(): void
+    {
+        $links = new RecordingClient(new Client(['handler' => new MockHandler([])]));
+        $result = InvoiceAccessCommand::run($this->options(pdf: false, payer: false), $this->sdk(), $links);
+        self::assertArrayNotHasKey('payer_sdk_capability_bound', $result);
+        self::assertArrayNotHasKey('payer_capability_correlated_access_observed', $result);
+        self::assertCount(0, $links->requests);
+        self::sanitized($result);
+    }
+
+    /** @return iterable<string,array{string,bool}> */
     public static function badPayerData(): iterable
     {
         foreach (['id', 'subscriptionId', 'currency', 'collectionMethod', 'status', 'paymentStatus'] as $field) {
             $data = self::payer();
             $data['invoice'][$field] = 'PRIVATE_FOREIGN';
-            yield 'wrong ' . $field => [json_encode($data, JSON_THROW_ON_ERROR)];
+            yield 'wrong ' . $field => [json_encode($data, JSON_THROW_ON_ERROR), false];
             unset($data['invoice'][$field]);
-            yield 'missing ' . $field => [json_encode($data, JSON_THROW_ON_ERROR)];
+            yield 'missing ' . $field => [json_encode($data, JSON_THROW_ON_ERROR), $field === 'id'];
         }
         foreach (
             ['null', '[]', '{}', '{"invoice":[]}', '{"invoice":{"id":123}}',
             '{"invoice":{},"invoice":{}}',
             '{"invoice":{"id":"PRIVATE","\\u0069d":"PRIVATE"}}', "\xff", 'PRIVATE_NOT_JSON'] as $index => $raw
         ) {
-            yield 'shape ' . $index => [$raw];
+            yield 'shape ' . $index => [$raw, false];
         }
     }
 
     #[DataProvider('badPayerData')]
-    public function testPayerWrongMissingDuplicateAndInvalidUtf8NeverProveOwnAccess(string $body): void
-    {
+    public function testPayerWrongMissingDuplicateAndInvalidUtf8KeepStrictInvoiceProof(
+        string $body,
+        bool $correlated,
+    ): void {
         $links = new RecordingClient(new Client(['handler' => new MockHandler([
             new Response(200, ['Content-Type' => 'application/json'], $body),
         ])]));
         $result = InvoiceAccessCommand::run($this->options(false), $this->sdk(), $links);
         self::assertSame('pending', $result['result']);
         self::assertFalse($result['payer_invoice_matched']);
+        self::assertSame($correlated, $result['payer_capability_correlated_access_observed']);
         self::assertSame(200, $result['payer_http_status']);
         self::assertCount(1, $links->requests);
         self::sanitized($result);
@@ -628,6 +753,11 @@ final class InvoiceAccessObservationTest extends TestCase
             }
         }
         self::assertTrue($result['payer_payment_status_matched']);
+        self::assertTrue($result['payer_sdk_capability_bound']);
+        self::assertSame(
+            $field === 'id' && $kind === 'missing',
+            $result['payer_capability_correlated_access_observed']
+        );
         self::assertArrayNotHasKey('pdf_policy', $result);
         self::assertCount(1, $links->requests);
         self::sanitized($result);
@@ -645,6 +775,7 @@ final class InvoiceAccessObservationTest extends TestCase
             }
         }
         self::assertFalse($result['payer_invoice_matched']);
+        self::assertFalse($result['payer_capability_correlated_access_observed']);
         self::assertCount(1, $links->requests);
         self::sanitized($result);
     }
@@ -725,6 +856,8 @@ final class InvoiceAccessObservationTest extends TestCase
         $result = InvoiceAccessCommand::run($this->options(false), $this->sdk(), $links);
         self::assertSame('pending', $result['result']);
         self::assertSame($status, $result['payer_http_status']);
+        self::assertTrue($result['payer_sdk_capability_bound']);
+        self::assertFalse($result['payer_capability_correlated_access_observed']);
         self::assertCount(1, $links->requests);
         self::assertSame(0, $stream->bytes);
         self::assertTrue($stream->closed);
@@ -763,6 +896,8 @@ final class InvoiceAccessObservationTest extends TestCase
         self::assertNotSame('pass', $result['result']);
         self::assertCount($sends, $links->requests);
         self::assertFalse($result['payer_send_started']);
+        self::assertFalse($result['payer_sdk_capability_bound']);
+        self::assertFalse($result['payer_capability_correlated_access_observed']);
         self::sanitized($result);
     }
 
