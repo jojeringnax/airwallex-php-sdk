@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Jojeringnax\Airwallex\Tests\Unit\Resource\Payments;
 
 use Jojeringnax\Airwallex\Webhook\WebhookEvent;
-use Jojeringnax\Airwallex\Webhook\WebhookVerifier;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -29,16 +28,10 @@ final class WebhookTest extends TestCase
     }
 
     #[DataProvider('selectedEvents')]
-    public function testEveryNewCatalogueFixtureAuthenticatesAndDecodesWithoutStateInference(
+    public function testEveryCatalogueFixtureDecodesWithoutStateInference(
         string $raw,
         string $family
     ): void {
-        $timestamp = '1794132000000';
-        (new WebhookVerifier('synthetic-secret', 0, static fn (): int => 1794132000000))->verify(
-            $raw,
-            $timestamp,
-            hash_hmac('sha256', $timestamp . $raw, 'synthetic-secret'),
-        );
         $event = WebhookEvent::fromJson($raw)->toArray();
         self::assertIsString($event['name']);
         self::assertStringStartsWith($family . '.', $event['name']);

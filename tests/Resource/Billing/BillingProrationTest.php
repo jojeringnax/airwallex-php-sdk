@@ -193,18 +193,18 @@ final class BillingProrationTest extends HttpTestCase
         }
     }
 
+    /** @param array<string,mixed> $controls */
     #[DataProvider('failures')]
-    public function testProviderFailurePreservesActionWithoutReplay(int $status, string $code): void
-    {
+    public function testProviderFailurePreservesActionWithoutReplay(
+        int $status,
+        string $code,
+        array $controls,
+    ): void {
         // Synthetic selected endpoint codes: no claim that a specific input always maps to this error.
         $http = $this->scenario([[201, self::LOGIN], [$status, json_encode([
             'code' => $code, 'message' => 'PRIVATE provider detail',
         ], JSON_THROW_ON_ERROR)]]);
-        $body = ['request_id' => 'persisted-proration-action',
-            'proration_date' => '2028-02-29T10:15:30.123456789+01:00', 'items' => [[
-                'id' => 'item', 'quantity' => 3, 'proration_mode' => 'CUSTOM',
-                'proration_value' => ['charge_amount' => '30.000000000000000001', 'credit_amount' => '1.00'],
-            ]]];
+        $body = ['request_id' => 'persisted-proration-action'] + $controls;
         try {
             $this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3))
                 ->billing()->subscriptions()->update('sub_test', $body);
@@ -215,15 +215,27 @@ final class BillingProrationTest extends HttpTestCase
             self::assertStringNotContainsString('PRIVATE', (string) $error);
         }
         self::assertCount(2, $http->requests);
+        self::assertSame('POST', $http->requests[1]->getMethod());
+        self::assertStringEndsWith('/subscriptions/sub_test/update', (string) $http->requests[1]->getUri());
+        self::assertSame('', $http->requests[1]->getHeaderLine('x-on-behalf-of'));
         self::assertSame(json_encode($body, JSON_THROW_ON_ERROR), (string) $http->requests[1]->getBody());
     }
 
-    /** @return iterable<string,array{int,string}> */
+    /** @return iterable<string,array{int,string,array<string,mixed>}> */
     public static function failures(): iterable
     {
-        yield 'calculation-input-rejected' => [400, 'validation_error'];
-        yield 'state-rejected' => [400, 'invalid_status_for_operation'];
-        yield 'duplicate-action' => [400, 'duplicate_request_id'];
-        yield 'server-ambiguity' => [500, 'internal_error'];
+        $custom = ['proration_date' => '2028-02-29T10:15:30.123456789+01:00', 'items' => [[
+            'id' => 'item', 'quantity' => 3, 'proration_mode' => 'CUSTOM',
+            'proration_value' => ['charge_amount' => '30.000000000000000001', 'credit_amount' => '1.00'],
+        ]]];
+        yield 'calculation-input-rejected' => [400, 'validation_error', $custom];
+        yield 'state-rejected' => [400, 'invalid_status_for_operation', $custom];
+        yield 'duplicate-action' => [400, 'duplicate_request_id', $custom];
+        yield 'server-ambiguity' => [500, 'internal_error', $custom];
+        yield 'automatic-calculation-rejected' => [400, 'validation_error', [
+            'items' => [['id' => 'item_test', 'quantity' => 3]],
+            'default_proration_mode' => 'PRORATED',
+            'billing_action' => 'IMMEDIATE_CHARGE_AND_KEEP_CYCLE',
+        ]];
     }
 }

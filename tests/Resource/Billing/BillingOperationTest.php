@@ -6,7 +6,6 @@ namespace Jojeringnax\Airwallex\Tests\Resource\Billing;
 
 use Closure;
 use Jojeringnax\Airwallex\Client;
-use Jojeringnax\Airwallex\Internal\Json\JsonCodec;
 use Jojeringnax\Airwallex\Tests\Support\HttpTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -74,21 +73,14 @@ final class BillingOperationTest extends HttpTestCase
             ),
             'billing_customers/create',
             'POST',
-            (new JsonCodec())->encode(
-                [
-                    'request_id' => 'stable',
-                    'email' => 'buyer@example.test',
-                    'default_legal_entity_id' => 'le_test',
-                ],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","email":"buyer@example.test","default_legal_entity_id":"le_test"}',
         ];
         yield 'customers-update' => [
             static fn(Client $client): array =>
                 $client->billing()->customers()->update('res_test', ['email' => null, 'name' => '']),
             'billing_customers/res_test/update',
             'POST',
-            (new JsonCodec())->encode(['email' => null, 'name' => ''], ['/unit_amount']),
+            '{"email":null,"name":""}',
         ];
         yield 'products-retrieve' => [
             static fn(Client $client): array => $client->billing()->products()->retrieve('res/encoded'),
@@ -108,16 +100,13 @@ final class BillingOperationTest extends HttpTestCase
                 $client->billing()->products()->create(['request_id' => 'stable', 'name' => 'Example service']),
             'products/create',
             'POST',
-            (new JsonCodec())->encode(
-                ['request_id' => 'stable', 'name' => 'Example service'],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","name":"Example service"}',
         ];
         yield 'products-update' => [
             static fn(Client $client): array => $client->billing()->products()->update('res_test', ['active' => false]),
             'products/res_test/update',
             'POST',
-            (new JsonCodec())->encode(['active' => false], ['/unit_amount']),
+            '{"active":false}',
         ];
         yield 'prices-retrieve' => [
             static fn(Client $client): array => $client->billing()->prices()->retrieve('res/encoded'),
@@ -144,23 +133,15 @@ final class BillingOperationTest extends HttpTestCase
             ),
             'prices/create',
             'POST',
-            (new JsonCodec())->encode(
-                [
-                    'request_id' => 'stable',
-                    'product_id' => 'prd_test',
-                    'currency' => 'EUR',
-                    'unit_amount' => '19.90',
-                    'recurring' => ['period_unit' => 'MONTH', 'period' => 1],
-                ],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","product_id":"prd_test","currency":"EUR","unit_amount":19.90,'
+                . '"recurring":{"period_unit":"MONTH","period":1}}',
         ];
         yield 'prices-update' => [
             static fn(Client $client): array =>
                 $client->billing()->prices()->update('res_test', ['active' => false, 'description' => null]),
             'prices/res_test/update',
             'POST',
-            (new JsonCodec())->encode(['active' => false, 'description' => null], ['/unit_amount']),
+            '{"active":false,"description":null}',
         ];
         yield 'paymentSources-retrieve' => [
             static fn(Client $client): array => $client->billing()->paymentSources()->retrieve('res/encoded'),
@@ -186,15 +167,8 @@ final class BillingOperationTest extends HttpTestCase
             ),
             'payment_sources/create',
             'POST',
-            (new JsonCodec())->encode(
-                [
-                    'request_id' => 'stable',
-                    'billing_customer_id' => 'bcus_test',
-                    'external_id' => 'method_test',
-                    'linked_payment_account_id' => 'acct_test',
-                ],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","billing_customer_id":"bcus_test","external_id":"method_test",'
+                . '"linked_payment_account_id":"acct_test"}',
         ];
         yield 'checkouts-retrieve' => [
             static fn(Client $client): array => $client->billing()->checkouts()->retrieve('res/encoded'),
@@ -214,23 +188,15 @@ final class BillingOperationTest extends HttpTestCase
             ),
             'billing_checkouts/create',
             'POST',
-            (new JsonCodec())->encode(
-                [
-                    'request_id' => 'stable',
-                    'mode' => 'SETUP',
-                    'currency' => 'EUR',
-                    'billing_customer_id' => 'bcus_test',
-                    'ui_mode' => 'ELEMENTS',
-                ],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","mode":"SETUP","currency":"EUR",'
+                . '"billing_customer_id":"bcus_test","ui_mode":"ELEMENTS"}',
         ];
         yield 'checkouts-update' => [
             static fn(Client $client): array =>
                 $client->billing()->checkouts()->update('res_test', ['metadata' => ['order' => '0019.90']]),
             'billing_checkouts/res_test/update',
             'POST',
-            (new JsonCodec())->encode(['metadata' => ['order' => '0019.90']], ['/unit_amount']),
+            '{"metadata":{"order":"0019.90"}}',
         ];
         yield 'checkouts-cancel' => [
             static fn(Client $client): array => $client->billing()->checkouts()->cancel('res_test'),
@@ -263,16 +229,8 @@ final class BillingOperationTest extends HttpTestCase
             ),
             'subscriptions/create',
             'POST',
-            (new JsonCodec())->encode(
-                [
-                    'request_id' => 'stable',
-                    'billing_customer_id' => 'bcus_test',
-                    'collection_method' => 'AUTO_CHARGE',
-                    'payment_source_id' => 'source_test',
-                    'items' => [['price_id' => 'pri_test', 'quantity' => 1]],
-                ],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","billing_customer_id":"bcus_test","collection_method":"AUTO_CHARGE",'
+                . '"payment_source_id":"source_test","items":[{"price_id":"pri_test","quantity":1}]}',
         ];
         yield 'subscriptions-update' => [
             static fn(Client $client): array => $client->billing()->subscriptions()->update(
@@ -285,14 +243,8 @@ final class BillingOperationTest extends HttpTestCase
             ),
             'subscriptions/res_test/update',
             'POST',
-            (new JsonCodec())->encode(
-                [
-                    'request_id' => 'stable',
-                    'items' => [['id' => 'item_test', 'quantity' => 3]],
-                    'default_proration_mode' => 'PRORATED',
-                ],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","items":[{"id":"item_test","quantity":3}],'
+                . '"default_proration_mode":"PRORATED"}',
         ];
         yield 'subscriptions-cancel' => [
             static fn(Client $client): array => $client->billing()->subscriptions()->cancel(
@@ -301,10 +253,7 @@ final class BillingOperationTest extends HttpTestCase
             ),
             'subscriptions/res_test/cancel',
             'POST',
-            (new JsonCodec())->encode(
-                ['request_id' => 'stable', 'proration_behavior' => 'NONE'],
-                ['/unit_amount']
-            ),
+            '{"request_id":"stable","proration_behavior":"NONE"}',
         ];
         yield 'subscriptions-retrieveItem' => [
             static fn(Client $client): array =>

@@ -297,44 +297,12 @@ final class BillingWorkflowTest extends HttpTestCase
             ]
         );
         $body = (string) $http->requests[1]->getBody();
-        self::assertStringContainsString('"default_proration_mode":"' . $proration . '"', $body);
-        self::assertStringContainsString('"billing_action":"' . $action . '"', $body);
-        self::assertStringContainsString('"proration_mode":"NONE"', $body);
         self::assertSame(
             '{"request_id":"item-change","items":[{"id":"item_test","quantity":3,"proration_mode":"NONE"}],'
                 . '"default_proration_mode":"' . $proration . '","billing_action":"' . $action . '"}',
             $body,
         );
     }
-    public function testRejectedProrationActionPreservesIdentityAndErrorWithoutReplay(): void
-    {
-        // This selected error fixture does not declare the valid tuple universally unsupported.
-        $http = $this->scenario([
-            [201, self::LOGIN],
-            [400, '{"code":"validation_error","message":"fixture-private-proration-rejection"}'],
-        ]);
-        $body = [
-            'request_id' => 'persisted-proration-action',
-            'items' => [['id' => 'item_test', 'quantity' => 3]],
-            'default_proration_mode' => 'PRORATED',
-            'billing_action' => 'IMMEDIATE_CHARGE_AND_KEEP_CYCLE',
-        ];
-        try {
-            $this->client($http, retryPolicy: new RetryPolicy(maxAttempts: 3))
-                ->billing()->subscriptions()->update('sub_test', $body);
-            self::fail('Expected the provider rejection for this action.');
-        } catch (ApiException $error) {
-            self::assertSame(400, $error->httpStatus());
-            self::assertSame('validation_error', $error->providerCode());
-            self::assertStringNotContainsString('fixture-private-proration-rejection', (string) $error);
-        }
-        self::assertCount(2, $http->requests); // One login and one original mutation; no implicit reads/replay.
-        self::assertSame('POST', $http->requests[1]->getMethod());
-        self::assertStringEndsWith('/subscriptions/sub_test/update', (string) $http->requests[1]->getUri());
-        self::assertSame(json_encode($body, JSON_THROW_ON_ERROR), (string) $http->requests[1]->getBody());
-        self::assertSame('', $http->requests[1]->getHeaderLine('x-on-behalf-of'));
-    }
-
     /** @return iterable<string,array{string,string}> */
     public static function prorationControls(): iterable
     {

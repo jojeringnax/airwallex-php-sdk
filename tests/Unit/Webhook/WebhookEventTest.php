@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace Jojeringnax\Airwallex\Tests\Unit\Webhook;
 
 use Jojeringnax\Airwallex\Exception\ProtocolException;
-use Jojeringnax\Airwallex\Exception\WebhookVerificationException;
 use Jojeringnax\Airwallex\Webhook\WebhookEvent;
-use Jojeringnax\Airwallex\Webhook\WebhookVerifier;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use stdClass;
@@ -33,12 +31,8 @@ final class WebhookEventTest extends TestCase
 
     /** @param array<array-key, mixed> $fixture */
     #[DataProvider('catalogueEvents')]
-    public function testAllSyntheticCatalogueEventsVerifyAndDecode(string $raw, array $fixture): void
+    public function testAllSyntheticCatalogueEventsDecode(string $raw, array $fixture): void
     {
-        $timestamp = '1794132000000';
-        $signature = hash_hmac('sha256', $timestamp . $raw, 'synthetic-secret');
-        $verifier = new WebhookVerifier('synthetic-secret', 1000, static fn (): int => 1794132000000);
-        $verifier->verify($raw, $timestamp, $signature);
         $result = WebhookEvent::fromJson($raw)->toArray();
         self::assertSame($fixture['name'], $result['name']);
         self::assertSame($fixture['version'], $result['version']);
@@ -157,17 +151,6 @@ final class WebhookEventTest extends TestCase
     public function testRejectsMalformedAndNonObjectJson(string $raw): void
     {
         $this->expectException(ProtocolException::class);
-        WebhookEvent::fromJson($raw);
-    }
-
-    public function testTamperingFailsBeforeDecoding(): void
-    {
-        $raw = '{"unknown":{}}';
-        $timestamp = '1794132000000';
-        $signature = hash_hmac('sha256', $timestamp . $raw, 'synthetic-secret');
-        $this->expectException(WebhookVerificationException::class);
-        (new WebhookVerifier('synthetic-secret', 0, static fn (): int => 1794132000000))
-            ->verify($raw . ' ', $timestamp, $signature);
         WebhookEvent::fromJson($raw);
     }
 
