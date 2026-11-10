@@ -1,10 +1,22 @@
 # Consumer guide
 
-Use this guide to install the development package and connect the implemented SDK calls to your application's buyer, account and operation records. [Consumer interfaces](consumer-interfaces.md) define the public signatures; [Billing resources](billing-resources.md), [Payments contracts](payments-contracts.md) and the [webhook catalogue](webhook-contracts.md) own operation-specific behavior.
+Use this guide to install the SDK and connect the implemented SDK calls to your application's buyer, account and operation records. [Consumer interfaces](consumer-interfaces.md) define the public signatures; [Billing resources](billing-resources.md), [Payments contracts](payments-contracts.md) and the [webhook catalogue](webhook-contracts.md) own operation-specific behavior.
+
+## Install
+
+Use **64-bit PHP 8.3, 8.4 or 8.5** and Composer 2. The [runtime boundary](architecture.md#package-and-runtime-support) and Composer platform checks apply to the complete SDK, including webhook verification. In your application, install the `0.1` release line:
+
+```sh
+composer require "jojeringnax/airwallex-php-sdk:^0.1"
+```
+
+Retain your application's `composer.lock` and review dependency changes before updating. The `^0.1` constraint accepts compatible patch releases within `0.1`; breaking changes require a new minor under the [pre-1.0 compatibility policy](release-policy.md#versioning-and-public-surface).
+
+The SDK requires the approved PSR HTTP/client/factory/cache interfaces and supplies no concrete HTTP client. The [architecture](architecture.md#dependencies-and-transport) owns those dependency lines. One consumer choice is [Guzzle](https://docs.guzzlephp.org/en/stable/overview.html), installed in your application with `composer require guzzlehttp/guzzle:^7.10`; its PSR-7 package provides `GuzzleHttp\Psr7\HttpFactory`.
 
 ## Install the unreleased development source
 
-Use **64-bit PHP 8.3, 8.4 or 8.5** and Composer 2. The [runtime boundary](architecture.md#package-and-runtime-support) and Composer platform checks apply to the complete SDK, including webhook verification. No stable SDK tag or package-registry release is available. In a consuming application's `composer.json`, register the repository and require its development branch:
+For contributions or unreleased changes, register the repository in a consuming application's `composer.json` and require its development branch:
 
 ```json
 {
@@ -37,8 +49,6 @@ For a clean local source checkout without credential files, replace the VCS entr
 ```
 
 Point it to the complete checkout, including `resources/contracts`, rather than copying only `src`. Keep the same SDK requirement and update from your application. Repository contributors use the separate [development setup](https://github.com/jojeringnax/airwallex-php-sdk/blob/main/CONTRIBUTING.md).
-
-The SDK requires the approved PSR HTTP/client/factory/cache interfaces and supplies no concrete HTTP client. The [architecture](architecture.md#dependencies-and-transport) owns those dependency lines. One consumer choice is [Guzzle](https://docs.guzzlephp.org/en/stable/overview.html), installed in your application with `composer require guzzlehttp/guzzle:^7.10`; its PSR-7 package provides `GuzzleHttp\Psr7\HttpFactory`.
 
 ## Configure an explicit environment and owner
 
@@ -177,7 +187,7 @@ After timeout or transport failure, a mutation might already have reached Airwal
 
 ## Capability and validation boundary
 
-API and webhook contracts target **2026-08-21**. The [compatibility policy](release-policy.md) describes the planned `0.1.0` cut and pre-1.0 changes; that target is not a published release or a final candidate validation result. The [documentation-based completion policy](release-policy.md#documentation-based-completion) defines acceptance of the full SDK scope. Repository checks execute the exact recipe files and provider-shaped failure fixtures. Account-specific Sandbox/provider confirmations are supplemental and do not block SDK acceptance; actual account activation, method acceptance, collection linkage and delivery behavior remain separate deployment facts.
+API and webhook contracts target **2026-08-21**. The [compatibility policy](release-policy.md) governs `0.1.0` and pre-1.0 changes. The [documentation-based completion policy](release-policy.md#documentation-based-completion) defines acceptance of the full SDK scope. Repository checks execute the exact recipe files and provider-shaped failure fixtures. Account-specific Sandbox/provider confirmations are supplemental and do not block SDK acceptance; actual account activation, method acceptance, collection linkage and delivery behavior remain separate deployment facts.
 
 The accepted scope and deferrals live in [planning](planning.md). OAuth, hosted Billing portal sessions, subscription pause/reactivation, discounts/coupons, tax calculation and usage-based Billing are outside the implemented initial boundary. Nonmetered Volume and Graduated Price creation is included; see [tier rules and examples](billing-resources.md#price-models-and-tiers).
 
