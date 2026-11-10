@@ -65,3 +65,20 @@ The implementation covers the accepted resource and webhook interfaces described
 Known boundaries remain authoritative in [planning](planning.md), [Billing capabilities](billing-capabilities.md) and [connected-account evidence](connected-account-contracts.md#evidence-still-needed). The full accepted Billing/Payments scope and both connected-account models remain included; #37–41 retain their explicit deferrals, and synchronization remains application-owned. Unknown provider fields/states remain available for consumer inspection; mutation replay stays disabled. Invoice expiry/renewal and broader schedule reversal retain their recorded observational limits; the positive finite-restoration case does not establish other configurations. Product activation, method eligibility, provider deliveries and both connected-account journeys remain account-specific deployment facts. Their supplemental confirmation does not block SDK acceptance, and a clean archive or deterministic fixture does not establish those facts.
 
 [#44](https://github.com/jojeringnax/airwallex-php-sdk/issues/44) owns the final claim-to-evidence record and independent candidate review. Keep it open until the exact candidate's required CI, retained archives and review are complete. Record the merged commit, exact matrix/check results, known limitations and migration requirements there, with any supplemental Sandbox observations separately scoped. No final candidate or new passing checks are designated by this document.
+
+## Publish to Packagist
+
+The **Publish to Packagist** workflow (`.github/workflows/publish.yml`) requests a refresh of the registered package when a GitHub release is published, including pre-releases. Using release publication as the trigger keeps the refresh tied to the maintainer's release decision. Complete the [release gates](release-policy.md#observable-release-gates) before publishing the release.
+
+Configure these repository secrets in **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `PACKAGIST_USERNAME` | Packagist username with maintainer access to `jojeringnax/airwallex-php-sdk` |
+| `PACKAGIST_API_TOKEN` | That account's SAFE API token from its [Packagist profile](https://packagist.org/profile/) |
+
+The workflow uses the [Packagist update API](https://packagist.org/apidoc#update-a-package), which accepts the SAFE token and Bearer authentication. Credentials are sent in the authorization header. It needs no GitHub token permissions, source checkout or dependency installation. Missing secrets, HTTP failures and responses without `status: success` fail the job.
+
+To retry a refresh or sync an existing release after this workflow is merged, open **Actions → Publish to Packagist → Run workflow**, select `main`, and run it. This calls the same repository-wide refresh; it does not select or create a version. Packagist discovers tags and branches from the registered Git repository, so this action uploads no archive and creates no tag or GitHub release. Keep version numbers in Git tags rather than adding a `version` field to `composer.json`, as described in [Packagist version management](https://packagist.org/about#managing-package-versions).
+
+A successful job means Packagist accepted the asynchronous refresh. Check the [package page](https://packagist.org/packages/jojeringnax/airwallex-php-sdk) for the expected version and verify installation from a clean consumer before reporting publication complete. Packagist's GitHub hook, if configured separately, can also refresh on pushes; this workflow does not restrict which existing repository versions Packagist indexes.
