@@ -154,13 +154,6 @@ final class WebhookSchema
         ) {
             return [];
         }
-        if (
-            $family === 'payment_consent' && isset($resource['connected_account_id'])
-            && $resource['connected_account_id'] !== $envelope[$owner]
-        ) {
-            return [];
-        }
-
         return array_map(static fn (string $path): string => $prefix . $path, self::INTEGER_PATHS[$family]);
     }
 }

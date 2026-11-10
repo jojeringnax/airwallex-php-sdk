@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace Jojeringnax\Airwallex\Tests\Unit\Sandbox\Journeys;
 
+use Jojeringnax\Airwallex\Tests\Support\HistoricalAlipayCleanupTestCase;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentDisableCleanupCommand;
 use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
-final class AlipayConsentDisableCleanupCommandTest extends TestCase
+#[RunTestsInSeparateProcesses]
+#[PreserveGlobalState(false)]
+final class AlipayConsentDisableCleanupCommandTest extends HistoricalAlipayCleanupTestCase
 {
     /**
      * @return iterable<string,array{list<string>}> */
@@ -31,7 +35,7 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
     #[DataProvider('invalidArguments')]
     public function testFixedCliRejectsBeforeAuthenticationAndAlwaysPreservesPendingDisposition(array $arguments): void
     {
-        [$exit, $raw, $errors] = self::child([PHP_BINARY, dirname(__DIR__, 4)
+        [$exit, $raw, $errors] = self::child([PHP_BINARY, self::sdkRoot()
             . '/tools/alipay-consent-disable-cleanup.php', ...$arguments]);
         self::assertSame(1, $exit);
         self::assertSame('', $errors);
@@ -87,11 +91,12 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
     {
         return <<<'PHP'
         $deprecations = [];
+        $dependencyAutoload = $argv[4] ?? $argv[1];
         set_error_handler(static function (
             int $severity, string $message, string $file
-        ) use (&$deprecations, $argv): bool {
+        ) use (&$deprecations, $dependencyAutoload): bool {
             if ($severity !== E_DEPRECATED
-                || $file !== dirname($argv[1]) . '/psr/http-factory/src/UploadedFileFactoryInterface.php') {
+                || $file !== dirname($dependencyAutoload) . '/psr/http-factory/src/UploadedFileFactoryInterface.php') {
                 return false;
             }
             $prefix = 'Psr\\Http\\Message\\UploadedFileFactoryInterface::createUploadedFile(): '
@@ -113,7 +118,7 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
         $code = self::childDiagnosticCollector() . <<<'PHP'
         $handler = set_error_handler(static fn (): bool => false);
         restore_error_handler();
-        $file = dirname($argv[1]) . '/psr/http-factory/src/UploadedFileFactoryInterface.php';
+        $file = dirname($argv[4] ?? $argv[1]) . '/psr/http-factory/src/UploadedFileFactoryInterface.php';
         $message = 'Psr\\Http\\Message\\UploadedFileFactoryInterface::createUploadedFile(): '
             . 'Implicitly marking parameter $size as nullable is deprecated, '
             . 'the explicit nullable type must be used instead';
@@ -127,15 +132,16 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
         restore_error_handler();
         echo json_encode([$checks, $deprecations], JSON_THROW_ON_ERROR);
         PHP;
-        [$exit, $raw, $errors] = self::child([
-            PHP_BINARY, '-r', $code, dirname(__DIR__, 4) . '/vendor/autoload.php',
-        ]);
-        self::assertSame(0, $exit);
-        self::assertSame('', $errors);
-        self::assertSame(
-            [[false, false, false, true, false], ['size']],
-            json_decode($raw, true, flags: JSON_THROW_ON_ERROR)
-        );
+        $dependencies = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        foreach ([[$dependencies], [self::sdkRoot() . '/vendor/autoload.php', '', '', $dependencies]] as $arguments) {
+            [$exit, $raw, $errors] = self::child([PHP_BINARY, '-r', $code, ...$arguments]);
+            self::assertSame(0, $exit);
+            self::assertSame('', $errors);
+            self::assertSame(
+                [[false, false, false, true, false], ['size']],
+                json_decode($raw, true, flags: JSON_THROW_ON_ERROR)
+            );
+        }
     }
 
     public function testTwoFreshProcessesRaceOneImmutableOriginalClaimAndOnlyOneCanInvokeDisable(): void
@@ -195,8 +201,9 @@ final class AlipayConsentDisableCleanupCommandTest extends TestCase
             echo json_encode(['result' => $r, 'dependency_deprecations' => $deprecations], JSON_THROW_ON_ERROR);
             CHILD;
             foreach (['one', 'two'] as $index) {
-                $process = proc_open([PHP_BINARY, '-r', $code, dirname(__DIR__, 4) . '/vendor/autoload.php',
-                    $fixture, $index], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+                $command = [PHP_BINARY, '-r', $code, self::sdkRoot() . '/vendor/autoload.php',
+                    $fixture, $index, dirname(__DIR__, 4) . '/vendor/autoload.php'];
+                $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
                 self::assertIsResource($process);
                 $processes[] = $process;
                 $allPipes[] = $pipes;

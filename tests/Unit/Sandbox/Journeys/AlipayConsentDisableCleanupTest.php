@@ -6,15 +6,19 @@ namespace Jojeringnax\Airwallex\Tests\Unit\Sandbox\Journeys;
 
 use GuzzleHttp\Psr7\Response;
 use Jojeringnax\Airwallex\Internal\Json\JsonCodec;
+use Jojeringnax\Airwallex\Tests\Support\HistoricalAlipayCleanupTestCase;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentDisableCleanupCommand;
-use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
 use RuntimeException;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 
-final class AlipayConsentDisableCleanupTest extends TestCase
+#[RunTestsInSeparateProcesses]
+#[PreserveGlobalState(false)]
+final class AlipayConsentDisableCleanupTest extends HistoricalAlipayCleanupTestCase
 {
     /** @var list<string> */
     private array $bases = [];
@@ -84,7 +88,7 @@ final class AlipayConsentDisableCleanupTest extends TestCase
             $prior
         );
         self::assertSame([], $f['provider']->requests);
-        $path = dirname(__DIR__, 4) . '/src/RetryPolicy.php';
+        $path = self::sdkRoot() . '/src/RetryPolicy.php';
         $original = file_get_contents($path);
         self::assertIsString($original);
         $priorHash = hash_file('sha256', $f['prior']);
@@ -301,7 +305,7 @@ final class AlipayConsentDisableCleanupTest extends TestCase
         $this->bases[] = $f['base'];
         $clock = 0.0;
         $fired = false;
-        $sourcePath = dirname(__DIR__, 4) . '/tests/Support/Sandbox/Journeys/AlipayConsentReconciliation.php';
+        $sourcePath = self::sdkRoot() . '/tests/Support/Sandbox/Journeys/AlipayConsentReconciliation.php';
         $sourceBefore = file_get_contents($sourcePath);
         self::assertIsString($sourceBefore);
         $factory = static function (
