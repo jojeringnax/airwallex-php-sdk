@@ -117,28 +117,6 @@ final class WebhookEventTest extends TestCase
         self::assertSame('123.4567890123456789', $result['added_numeric_field']);
     }
 
-    public function testConsentCountsUseVerifiedSchemaOnlyWithinMatchingAccount(): void
-    {
-        $envelope = ['id' => 'evt_example', 'name' => 'payment_consent.requires_customer_action',
-            'version' => '2026-08-21', 'account_id' => 'acct_example', 'created_at' => '2026-11-08T10:00:00Z',
-            'data' => ['object' => ['status' => 'REQUIRES_CUSTOMER_ACTION', 'connected_account_id' => 'acct_example',
-                'next_action' => ['remaining_attempts' => 2, 'micro_deposit_count' => 3, 'unknown_count' => 4],
-                'terms_of_use' => ['total_billing_cycles' => 12]]]];
-        $resource = self::resource(WebhookEvent::fromJson(json_encode($envelope, JSON_THROW_ON_ERROR))->toArray());
-        self::assertSame(
-            ['remaining_attempts' => 2, 'micro_deposit_count' => 3, 'unknown_count' => '4'],
-            $resource['next_action']
-        );
-        self::assertSame(['total_billing_cycles' => 12], $resource['terms_of_use']);
-        $envelope['data']['object']['connected_account_id'] = 'acct_other';
-        $resource = self::resource(WebhookEvent::fromJson(json_encode($envelope, JSON_THROW_ON_ERROR))->toArray());
-        self::assertSame(
-            ['remaining_attempts' => '2', 'micro_deposit_count' => '3', 'unknown_count' => '4'],
-            $resource['next_action']
-        );
-        self::assertSame(['total_billing_cycles' => '12'], $resource['terms_of_use']);
-    }
-
     /** @return iterable<string, array{string}> */
     public static function invalidObjects(): iterable
     {

@@ -16,11 +16,12 @@ use RuntimeException;
 use SplFileInfo;
 use Throwable;
 
-/** Runs the current historical-reconciliation harness with its original SDK in an isolated PHP process. */
+/** Runs the current historical-reconciliation harness with a pinned SDK in an isolated PHP process. */
 abstract class HistoricalAlipayTestCase extends TestCase
 {
     // The SDK used by the original ledger, independently of the current branch's SDK.
-    private const string SOURCE = 'e089ff21de8d255990fc704506898201546c5467';
+    protected const string SOURCE = 'e089ff21de8d255990fc704506898201546c5467';
+    protected const string SDK = AlipayConsentReconciliation::SDK;
     private static ?string $root = null;
 
     protected function setUp(): void
@@ -39,16 +40,19 @@ abstract class HistoricalAlipayTestCase extends TestCase
         self::assertIsString($root);
         self::$root = $root;
         try {
-            self::git(['archive', '--format=tar', '--output=' . $root . '/sdk.tar', self::SOURCE,
+            self::git(['archive', '--format=tar', '--output=' . $root . '/sdk.tar', static::SOURCE,
                 'src', 'resources/contracts', 'composer.json']);
             (new PharData($root . '/sdk.tar'))->extractTo($root);
             unlink($root . '/sdk.tar');
             // Package archives omit dotfiles, but source fingerprints include this tracked placeholder.
-            file_put_contents($root . '/src/.gitkeep', self::git(['show', self::SOURCE . ':src/.gitkeep']));
+            file_put_contents($root . '/src/.gitkeep', self::git(['show', static::SOURCE . ':src/.gitkeep']));
             $current = dirname(__DIR__, 2);
             self::copyTree($current . '/tests/Support/Sandbox', $root . '/tests/Support/Sandbox');
             mkdir($root . '/tools', 0700);
-            foreach (['sandbox.php', 'alipay-hk-consent-reuse.php', 'alipay-consent-reconciliation.php'] as $tool) {
+            foreach (
+                ['sandbox.php', 'alipay-hk-consent-reuse.php', 'alipay-consent-reconciliation.php',
+                'alipay-consent-disable-cleanup.php'] as $tool
+            ) {
                 self::assertTrue(copy($current . '/tools/' . $tool, $root . '/tools/' . $tool));
             }
             // Reuse local objects for the harness's immutable-source/ancestor proofs without creating a worktree.
@@ -64,7 +68,7 @@ abstract class HistoricalAlipayTestCase extends TestCase
             file_put_contents($root . '/vendor/autoload.php', $autoload);
             require $root . '/vendor/autoload.php';
             self::assertSame($root . '/src/Client.php', (new ReflectionClass(Client::class))->getFileName());
-            self::assertSame(AlipayConsentReconciliation::SDK, SourceEvidence::capture()['sdk_digest']);
+            self::assertSame(static::SDK, SourceEvidence::capture()['sdk_digest']);
         } catch (Throwable $failure) {
             self::tearDownAfterClass();
             throw $failure;
