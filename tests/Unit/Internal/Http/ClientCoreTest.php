@@ -449,26 +449,6 @@ final class ClientCoreTest extends HttpTestCase
         }
     }
 
-    public function testInvalidPagingIsRejectedBeforeAuthentication(): void
-    {
-        $http = $this->scenario([]);
-        $this->expectException(ValidationException::class);
-        try {
-            $this->send(
-                $this->client($http),
-                new Operation(
-                    method: 'GET',
-                    path: '/api/v1/pa/payment_intents',
-                    family: 'payments',
-                    pagination: 'payments'
-                ),
-                query: ['page_num' => -1]
-            );
-        } finally {
-            self::assertSame([], $http->requests);
-        }
-    }
-
     public function testCredentialsAndClientsRedactDebugOutputAndBlockSerialization(): void
     {
         $credentials = new Credentials('test_client_id', 'test_api_key');
@@ -554,6 +534,7 @@ final class ClientCoreTest extends HttpTestCase
         yield 'string-size' => [['page_size' => '20'], 'billing'];
         yield 'null-size' => [['page_size' => null], 'billing'];
         yield 'float-size' => [['page_size' => 20.0], 'payments'];
+        yield 'negative-page-num' => [['page_num' => -1], 'payments'];
         yield 'string-page-num' => [['page_num' => '0'], 'payments'];
         yield 'billing-page-num' => [['page_num' => 0], 'billing'];
         yield 'payments-bookmark' => [['page' => 'bookmark'], 'payments'];
