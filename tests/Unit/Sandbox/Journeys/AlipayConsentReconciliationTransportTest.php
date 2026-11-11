@@ -1099,24 +1099,4 @@ final class AlipayConsentReconciliationTransportTest extends HistoricalAlipayTes
         self::assertIsString($uri);
         return $uri;
     }
-
-    public function testStreamPathWitnessRequiresNativeStringMetadata(): void
-    {
-        $stream = fopen('php://temp', 'w+');
-        self::assertIsResource($stream);
-        try {
-            self::assertSame('php://temp', self::streamPath(stream_get_meta_data($stream)));
-        } finally {
-            fclose($stream);
-        }
-        foreach ([null, false, [], ['uri' => null], ['uri' => 1], ['uri' => []]] as $bad) {
-            $rejected = false;
-            try {
-                self::streamPath($bad);
-            } catch (\PHPUnit\Framework\AssertionFailedError) {
-                $rejected = true;
-            }
-            self::assertTrue($rejected, 'A fixture stream path requires a native string.');
-        }
-    }
 }

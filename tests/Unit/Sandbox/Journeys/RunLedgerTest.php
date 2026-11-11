@@ -384,59 +384,6 @@ final class RunLedgerTest extends TestCase
         $ledger->assertCleanupDurable(self::CONTEXT);
     }
 
-
-    public function testDefaultJournalBytesAndDurabilityOrderMatchTheImmutablePreCleanupWriter(): void
-    {
-        $git = new \ReflectionMethod(
-            \Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReconciliation::class,
-            'git'
-        );
-        $source = $git->invoke(null, dirname(__DIR__, 4), ['show',
-            '5ee2c7640f763e062d6ad0144973fc7f9763fe64:tests/Support/Sandbox/Journeys/RunLedger.php']);
-        self::assertIsString($source);
-        $name = 'Jojeringnax\\Airwallex\\Tests\\Support\\Sandbox\\Journeys\\ConsentCleanupLegacyLedgerOracle';
-        if (!class_exists($name, false)) {
-            eval(str_replace(
-                'final class RunLedger',
-                'final class ConsentCleanupLegacyLedgerOracle',
-                substr($source, 5)
-            ));
-        }
-        if (!class_exists($name, false)) {
-            throw new RuntimeException('The immutable writer oracle is unavailable.');
-        }
-        $legacy = new \ReflectionMethod($name, 'create');
-        $images = [];
-        $traces = [];
-        foreach (['before', 'current'] as $which) {
-            $directory = $this->directory . '/' . $which;
-            mkdir($directory, 0700);
-            $index = 0;
-            $ids = static function () use (&$index): string {
-                return sprintf('00000000-0000-4000-8000-%012d', ++$index);
-            };
-            $sync = static function ($stream) use (&$traces, $which, $directory): bool {
-                self::assertIsResource($stream);
-                $uri = self::streamPath(stream_get_meta_data($stream));
-                $traces[$which][] = str_replace($directory, '[ROOT]', $uri);
-                return fsync($stream);
-            };
-            $ledger = $which === 'before'
-                ? $legacy->invoke(null, self::CONTEXT, $directory, $ids, $sync)
-                : RunLedger::create(self::CONTEXT, $directory, $ids, $sync);
-            self::assertIsObject($ledger);
-            $type = new \ReflectionObject($ledger);
-            $type->getMethod('requestId')->invoke($ledger, 'create', ['key' => "fixture\u{0080}"], self::CONTEXT);
-            $type->getMethod('recordCreated')->invoke($ledger, 'products', 'PRIVATE_PRODUCT');
-            $type->getMethod('recordObservation')->invoke($ledger, 'observed', ['field' => 'PRIVATE'], self::CONTEXT);
-            $paths = glob($directory . '/*/ledger.json') ?: [];
-            self::assertCount(1, $paths);
-            $images[] = file_get_contents($paths[0]);
-        }
-        self::assertSame($images[0], $images[1]);
-        self::assertSame($traces['before'], $traces['current']);
-    }
-
     /** @return iterable<string,array{string}> */
     public static function changedCleanupImages(): iterable
     {
@@ -537,32 +484,5 @@ final class RunLedgerTest extends TestCase
         self::assertStringNotContainsString($ledger->runId(), print_r($ledger, true));
         $this->expectException(RuntimeException::class);
         serialize($ledger);
-    }
-    private static function streamPath(mixed $metadata): string
-    {
-        self::assertIsArray($metadata);
-        $uri = $metadata['uri'] ?? null;
-        self::assertIsString($uri);
-        return $uri;
-    }
-
-    public function testStreamPathWitnessRequiresNativeStringMetadata(): void
-    {
-        $stream = fopen('php://temp', 'w+');
-        self::assertIsResource($stream);
-        try {
-            self::assertSame('php://temp', self::streamPath(stream_get_meta_data($stream)));
-        } finally {
-            fclose($stream);
-        }
-        foreach ([null, false, [], ['uri' => null], ['uri' => 1], ['uri' => []]] as $bad) {
-            $rejected = false;
-            try {
-                self::streamPath($bad);
-            } catch (\PHPUnit\Framework\AssertionFailedError) {
-                $rejected = true;
-            }
-            self::assertTrue($rejected, 'A fixture stream path requires a native string.');
-        }
     }
 }

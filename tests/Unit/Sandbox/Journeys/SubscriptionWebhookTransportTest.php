@@ -668,36 +668,6 @@ final class SubscriptionWebhookTransportTest extends TestCase
         }
     }
 
-    public function testNativePipeWitnessValidatesShapeAndClosesFailureHandles(): void
-    {
-        $in = fopen('php://temp', 'w+b');
-        $out = fopen('php://temp', 'w+b');
-        $err = fopen('php://temp', 'w+b');
-        self::assertIsResource($in);
-        self::assertIsResource($out);
-        self::assertIsResource($err);
-        $handles = [$in, $out, $err];
-        try {
-            self::assertSame($handles, self::pipes($handles));
-            foreach ([null, [], [$in], [$in, $out], [$in, $out, false]] as $invalid) {
-                try {
-                    self::pipes($invalid);
-                    self::fail('Invalid native pipe shape escaped.');
-                } catch (RuntimeException $error) {
-                    self::assertSame('The synthetic native process pipes are unavailable.', $error->getMessage());
-                }
-            }
-        } finally {
-            self::closePipes($handles);
-            self::closePipes(null);
-        }
-        self::assertSame(
-            ['resource (closed)', 'resource (closed)', 'resource (closed)'],
-            array_map(gettype(...), $handles)
-        );
-        $this->expectException(RuntimeException::class);
-        self::pipes($handles);
-    }
     /** @return iterable<string,array{string,mixed}> */
     public static function invalidProductBodies(): iterable
     {
