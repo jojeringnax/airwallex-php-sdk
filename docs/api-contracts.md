@@ -61,7 +61,7 @@ Permission labels come from the [API-key scope catalogue](https://www.airwallex.
 | Payment Attempts | Retrieve/list payment status details | [API](https://www.airwallex.com/docs/api/payments/payment_attempts) | [Payments data model](https://www.airwallex.com/docs/payments/about-airwallex-payments/payments-data-model) |
 | Refunds | Create, retrieve/list | [API](https://www.airwallex.com/docs/api/payments/refunds) | [Refunds](https://www.airwallex.com/docs/payments/payment-operations/manage-payments/refunds) |
 
-Credit notes/Billing transactions need a separate coverage decision beyond the accepted invoice retrieval and Payments refund workflows. Coupons, tax and usage resources remain deferred under planning; their presence in provider documentation does not authorize implementation.
+The [adoption extension](planning.md#adoption-extension) accepts read-only Billing Transactions; its selected-version permission, schema provenance and allocation limits are in [Billing resources](billing-resources.md#billing-transactions). Credit Note writes, coupons, tax and usage resources retain their separate scope decisions; their presence in provider documentation does not authorize implementation.
 
 For implemented Billing routes, request validation, source snapshots and remaining runtime evidence, see [Billing resources](billing-resources.md).
 

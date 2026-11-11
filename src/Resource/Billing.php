@@ -13,6 +13,7 @@ use Jojeringnax\Airwallex\Resource\Billing\PaymentSources;
 use Jojeringnax\Airwallex\Resource\Billing\Prices;
 use Jojeringnax\Airwallex\Resource\Billing\Products;
 use Jojeringnax\Airwallex\Resource\Billing\Subscriptions;
+use Jojeringnax\Airwallex\Resource\Billing\Transactions;
 
 final readonly class Billing
 {
@@ -60,6 +61,11 @@ final readonly class Billing
     public function invoices(): Invoices
     {
         return new Invoices($this->transport);
+    }
+
+    public function transactions(): Transactions
+    {
+        return new Transactions($this->transport);
     }
 
     /** @return array<string,never> */

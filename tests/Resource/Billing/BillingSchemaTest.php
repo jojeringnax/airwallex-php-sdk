@@ -16,13 +16,17 @@ final class BillingSchemaTest extends TestCase
     {
         $files = glob(dirname(__DIR__, 3) . '/resources/contracts/billing/*.json');
         self::assertNotFalse($files);
-        self::assertCount(7, $files);
+        self::assertCount(8, $files);
         $count = 0;
         foreach ($files as $file) {
             $decoded = json_decode((string) file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
             self::assertIsArray($decoded);
             self::assertSame('2026-08-21', $decoded['version']);
-            self::assertSame('f3dcbacb0453ce7a4808b6e97305dac6', $decoded['provider_md5']);
+            self::assertSame(
+                str_ends_with($file, '/billing_transactions.json')
+                    ? '6caa23f3759634e64859ff6aa8c37336' : 'f3dcbacb0453ce7a4808b6e97305dac6',
+                $decoded['provider_md5']
+            );
             self::assertIsString($decoded['source']);
             self::assertStringStartsWith('https://www.airwallex.com/docs/api/billing/', $decoded['source']);
             self::assertIsArray($decoded['endpoints']);
@@ -38,7 +42,7 @@ final class BillingSchemaTest extends TestCase
                 $count++;
             }
         }
-        self::assertSame(30, $count);
+        self::assertSame(32, $count);
     }
 
     public function testFieldPathsFollowResolvedSchemaTypesRatherThanPropertyNames(): void
