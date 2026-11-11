@@ -48,7 +48,7 @@ For invoice documents, self-service, checkout UI modes, trials and cancellation/
 
 ## Adoption extension
 
-[Read-only Billing Transactions #159](https://github.com/jojeringnax/airwallex-php-sdk/issues/159) extends invoice inspection with retrieve/list observations under API `2026-08-21`. It does not activate Credit Note writes or a payment ledger. [Transaction contracts](billing-resources.md#billing-transactions) define the accounting evidence limits. This addition is unreleased; downstream qualification must pin its exact commit/archive until a separately authorized tagged release exists.
+[Read-only Billing Transactions #159](https://github.com/jojeringnax/airwallex-php-sdk/issues/159), available in SDK v0.1.2, extends invoice inspection with retrieve/list observations under API `2026-08-21`. It does not activate Credit Note writes or a payment ledger. [Transaction contracts](billing-resources.md#billing-transactions) define the accounting evidence limits. Downstream qualification selects the released feature version and retains its exact source/dist provenance.
 
 ## Advanced Billing extension
 
