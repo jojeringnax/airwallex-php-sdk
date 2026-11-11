@@ -48,7 +48,7 @@ Transaction `amount` is its total exact major-unit amount. `type` describes `PAY
 
 `out_of_band=true` means manually marked succeeded. False means either not yet succeeded or processed on Airwallex; it is insufficient without status/type. The [invoice guide](https://www.airwallex.com/docs/billing/invoicing/get-started-with-invoicing) permits PAID through payments, adjustments or credits. Invoice PAID, an external ID, or a succeeded transaction alone establishes neither settlement nor an application cash allocation. The schema has a singular invoice association but no allocated amount, allocation list or exclusivity guarantee that its total is cash attributable to exactly that invoice. A consumer verifies canonical invoice/customer/collector linkage, stable transaction identity, type/status and explicit out-of-band evidence; any accounting allocation or Payments cross-check must preserve that missing proof. Do not sum total amounts into invoice cash receipts by assumption.
 
-This API is an unreleased additive extension of v0.1.1. Development consumers use an exact-commit SDK archive; final tagged-release qualification remains pending. No sibling path repository or version alias proves release qualification.
+This additive API is available in SDK v0.1.2. Select that feature version explicitly and retain its ordinary registry source/dist provenance; an older SDK or a sibling version alias does not provide the released interface.
 
 ## Price models and tiers
 
