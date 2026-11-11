@@ -198,14 +198,17 @@ final class ResponseObjectsTest extends HttpTestCase
 
     public function testObjectModeRetainsSafeApiErrors(): void
     {
-        $http = $this->scenario([[201, self::LOGIN], [400, '{"code":"validation_error","message":"private"}']]);
+        $http = $this->scenario([
+            [201, self::LOGIN],
+            [400, '{"code":"validation_error","message":"provider-error-canary-63d992e8"}'],
+        ]);
         try {
             $this->client($http, preserveResponseObjects: true)->billing()->customers()->retrieve('customer');
             self::fail('Expected an API error.');
         } catch (ApiException $error) {
             self::assertSame(400, $error->httpStatus());
             self::assertSame('validation_error', $error->providerCode());
-            self::assertStringNotContainsString('private', (string) $error);
+            self::assertStringNotContainsString('provider-error-canary-63d992e8', (string) $error);
         }
     }
 }
