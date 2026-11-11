@@ -26,6 +26,8 @@ The **2026-11-09** implementation review rechecked Subscription Update's `curren
 
 ## Authorization and ownership
 
+The **2026-11-11** [adoption timing review](billing-capabilities.md#adoption-timing-and-restoration-contracts) checked fresh selected Subscription metadata against v0.1.1 for the required timing/restoration fields. It records the exact page advertisement, compared subjects and remaining state/collection guarantees without repinning the API or changing runtime request schemas.
+
 The [API-key guide](https://www.airwallex.com/docs/developer-tools/api/manage-api-keys) independently identifies Billing as organization-level and Payments as account-level. Scoped keys may grant both. Resource Read permissions cover GET operations; Write includes reads and mutations. These are API-key permission labels, not OAuth scope strings.
 
 | Key configuration | Login account selection | Token access |

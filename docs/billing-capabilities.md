@@ -57,6 +57,41 @@ A [fresh Sandbox control](https://github.com/jojeringnax/airwallex-php-sdk/issue
 
 For recovery, the [API inventory](api-contracts.md#payment-recovery-conflict) records the fixed-retry API introduction versus configurable [dunning guide](https://www.airwallex.com/docs/billing/subscriptions/dunning). Preserve observed `UNPAID`/`ACTIVE`/`CANCELLED` state and account settings; no universal retry schedule, inevitable cancellation, SDK collection scheduler or automatic access cutoff follows from this review.
 
+### Adoption timing and restoration contracts
+
+[Research #158](https://github.com/jojeringnax/airwallex-php-sdk/issues/158) rechecked the official [Subscription API](https://www.airwallex.com/docs/api/billing/subscriptions), [API guide](https://www.airwallex.com/docs/billing/subscriptions/subscriptions-via-api) and [management guide](https://www.airwallex.com/docs/billing/subscriptions/get-started-with-subscription-management) on **2026-11-11** for [the downstream consumer contract](https://github.com/jojeringnax/airwallex-laravel/issues/47). The page selected `currentVersion=2026-08-21`, specification `airwallex-openapi-2026-08-21.yaml`, advertised MD5 `6caa23f3759634e64859ff6aa8c37336`. Update's `starts_at`, `trial_ends_at`, `duration`, `remaining_duration`, `ends_at`, `cancel_at_period_end`, `billing_action`, `default_proration_mode` and `payment_source_id` schemas match the released snapshot, including descriptions. The create `duration`/`ends_at` descriptions now explicitly explain indefinite continuation and mutual exclusion; the released SDK already supports that representation. This targeted comparison establishes neither whole-schema equality nor provider/account execution. API date remains unchanged.
+
+| Required scenario | Documented support and adoption strategy |
+| --- | --- |
+| Future initial start / initial free period | Native create `starts_at` and `trial_ends_at`; PENDING start can be edited and PENDING/IN_TRIAL trial end can be extended. Persist resolved commercial dates and the original action. Only canonical state establishes the provider transition; the application dates its own access. |
+| Immediate upgrade | ACTIVE item update with explicit proration and billing action. Existing item price cannot be changed: delete that item and add the new `price_id`. Immediate billing can generate an invoice/collection attempt; lifecycle ACTIVE alone proves no cash payment. |
+| Next-cycle downgrade | Native `default_proration_mode=NONE` documents no unused-time credit and new fees from next cycle. The API guide further describes changes taking effect next cycle; the schema does not expose separate current/future effective item sets. Application access must retain its confirmed old entitlement until its own boundary and must not treat the immediate item projection as a new entitlement or payment proof. Qualify required invoicing/item timing independently. |
+| Arbitrary future price/tier phases or a downgrade after an earned free period | No phase list, future-effective item timestamp or schedule resource was found among the seven inspected Subscription operations. Use a durable application/package due transition with one exact intended update, or keep exact provider-boundary parity unavailable. `DEFER_CHARGE_AND_KEEP_CYCLE` delays proration invoicing; it is not a general future execution timestamp. |
+| Extend an existing earned/free period | IN_TRIAL can extend trial end. ACTIVE cannot change trial duration under the product guide. Local free access does not suppress provider invoices. A commercially required ACTIVE billing holiday therefore needs an independently verified billing strategy; do not disguise it as an ACTIVE trial extension or an invented coupon. |
+| Auto-renew off | Persist original bound intent, exact observed bounds/cycle, source/collector and separate schedule/restoration action identities before requesting period-end cancellation. Observe the resulting finite schedule cap; preserve the reservation through ambiguity. |
+| Auto-renew on | The finite ACTIVE OUT_OF_BAND restoration above is verified only within its stated evidence. An indefinite request is representable as false plus explicit null `duration`, `remaining_duration` and `ends_at`, but that composition is not an observed universal reversal guarantee. Required AUTO_CHARGE/indefinite combinations remain unavailable to a high-level guaranteed-restoration workflow pending [confirmation #161](https://github.com/jojeringnax/airwallex-php-sdk/issues/161). |
+| Already CANCELLED / UNPAID / unknown state | CANCELLED reactivation is expressly unsupported. The update guide names only PENDING, IN_TRIAL and ACTIVE and gives no complete UNPAID update/restoration contract. Preserve unknown values and reconcile; do not infer allowed updates from a schema accepting the fields. A replacement subscription is a separately authorized financial action, never ambiguity recovery. |
+
+For the documented next-cycle billing request, the SDK already accepts:
+
+```php
+$changed = $client->billing()->subscriptions()->update($subscriptionId, [
+    'request_id' => $persistedActionId,
+    'items' => [
+        ['id' => $oldItemId, 'deleted' => true],
+        ['price_id' => $nextPriceId, 'quantity' => 1],
+    ],
+    'default_proration_mode' => 'NONE',
+    'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE',
+]);
+```
+
+Authorize and canonically preflight the same customer, subscription generation, context, supported state and complete item set first. The returned item update does not establish a completed charge, a future entitlement or exclusive effective-state proof. For deferred execution, store the due date, expected generation/cycle/items, lateness policy and stable command before dispatch; recheck them before submitting once. Worker delay can cross a renewal boundary. A mismatch or disallowed lateness holds the transition for an explicit decision instead of silently applying another period's billing semantics. An ambiguous write holds the same command and permits read recovery only. Concurrent source changes may immediately retry a failed invoice and require a separate explicit financial action. Previously created invoices are not changed by ordinary subscription edits.
+
+The low-level indefinite-restoration candidate contains `cancel_at_period_end=false`, `duration=null`, `remaining_duration=null`, `ends_at=null` together. Update documents clearing and indefinite continuation for that exact null triplet, while omission leaves fields unchanged. Do not substitute omission or false alone, clear a deliberately finite lifetime, discard the original bound, or erase an access cap on a successful POST without canonical restoration proof. The existing finite restoration recipe remains deliberately narrow. No new SDK scheduler, automatic restoration helper or endpoint is added by this research.
+
+[Question #161](https://github.com/jojeringnax/airwallex-php-sdk/issues/161) records alternatives, the provisional conservative strategy, consequences and change cost. Remaining external evidence is precisely the required indefinite/AUTO_CHARGE and other-state reversal combinations, NONE effective-item/invoice timing during renewal races, and any stronger native phase guarantee. Scoped observations must retain exact candidates, original bounds, owned invoices/collections and cleanup; deterministic fixtures establish only request representation and failure handling. Missing evidence limits these adoption claims while other SDK capabilities remain available.
+
 ## Delivery and evidence gates
 
 This reference records contract boundaries and bounded observations. Executable Billing resource interfaces and deterministic examples are documented in [Billing resources](billing-resources.md). The [documentation-based completion rule](release-policy.md#documentation-based-completion) applies to every first-release issue. Account-specific Sandbox journeys, product entitlements and provider confirmation are supplemental evidence; missing, blocked or failed observations do not block SDK completion. They still limit claims about observed provider behavior and account availability.
