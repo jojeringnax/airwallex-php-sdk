@@ -10,11 +10,13 @@ permissions:
   contents: read
 
 jobs:
-  browser-policies:
-    name: Node 22 browser policies
+  tools:
+    name: Development tools / PHP 8.4 / Node 22
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -24,8 +26,12 @@ jobs:
           extensions: dom, mbstring, xml, xmlwriter
           coverage: none
           tools: composer:v2
-      - name: Install PHP fixture bridge
+      - name: Install development dependencies
         run: composer install --prefer-dist --no-interaction
+      - name: Run deterministic PHP development-tool tests
+        env:
+          COMPOSER_PROCESS_TIMEOUT: '1800'
+        run: composer test:tools
       - name: Run deterministic browser and webhook policies
         run: node --test --test-concurrency=1 tools/browser/*.test.cjs tools/webhooks/*.test.cjs
   checks:

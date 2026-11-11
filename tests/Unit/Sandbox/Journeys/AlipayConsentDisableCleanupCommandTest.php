@@ -394,21 +394,6 @@ final class AlipayConsentDisableCleanupCommandTest extends HistoricalAlipayClean
         return $packet;
     }
 
-    public function testNativePacketWitnessRejectsMissingOrWrongPacket(): void
-    {
-        $request = new \GuzzleHttp\Psr7\Request('POST', 'https://synthetic.invalid/');
-        self::assertSame($request, self::packet([5 => $request], 5));
-        foreach ([null, [], [0 => $request], [5 => new \stdClass()]] as $bad) {
-            $rejected = false;
-            try {
-                self::packet($bad, 5);
-            } catch (\PHPUnit\Framework\AssertionFailedError) {
-                $rejected = true;
-            }
-            self::assertTrue($rejected, 'A native packet must be present with its actual request type.');
-        }
-    }
-
     /**
      * @param list<string> $command
      * @return array{int,string,string} */

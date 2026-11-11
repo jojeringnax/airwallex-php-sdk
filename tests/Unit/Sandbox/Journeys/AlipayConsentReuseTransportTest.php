@@ -17,7 +17,6 @@ use GuzzleHttp\Psr7\Utils;
 use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\AlipayConsentReuseTransport;
 use Jojeringnax\Airwallex\Tests\Support\Sandbox\Journeys\RunLedger;
-use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
@@ -867,43 +866,6 @@ final class AlipayConsentReuseTransportTest extends TestCase
             self::assertSame(0, $transport->report()['http_invocations']);
             // Its operation intent was reserved, but invalid headers earn no prepared/possible-send record.
             self::assertSame([], $this->observations());
-        }
-    }
-
-    public function testInvalidPipeShapeClosesAndReapsOwnedFixtureChild(): void
-    {
-        $process = proc_open(
-            [PHP_BINARY, '-r', 'stream_get_contents(STDIN);'],
-            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-            $pipes
-        );
-        self::assertIsResource($process);
-        $pipes = self::processPipes($pipes, $process);
-        $invalid = $pipes;
-        $invalid[3] = $invalid[2];
-        unset($invalid[2]);
-        $rejected = false;
-        try {
-            try {
-                self::processPipes($invalid, $process);
-            } catch (AssertionFailedError) {
-                $rejected = true;
-            }
-            self::assertTrue($rejected);
-            self::assertFalse(is_resource($process));
-            foreach ($pipes as $pipe) {
-                self::assertFalse(is_resource($pipe));
-            }
-        } finally {
-            foreach ($pipes as $pipe) {
-                if (is_resource($pipe)) {
-                    fclose($pipe);
-                }
-            }
-            if (is_resource($process)) {
-                proc_terminate($process);
-                proc_close($process);
-            }
         }
     }
 

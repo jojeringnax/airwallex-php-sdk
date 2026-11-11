@@ -6,8 +6,14 @@
          failOnRisky="true"
          failOnWarning="true">
     <testsuites>
-        <testsuite name="unit">
+        <testsuite name="sdk">
             <directory>tests</directory>
+            <exclude>tests/Unit/Sandbox</exclude>
+            <exclude>tests/Unit/Tools</exclude>
+        </testsuite>
+        <testsuite name="tools">
+            <directory>tests/Unit/Sandbox</directory>
+            <directory>tests/Unit/Tools</directory>
         </testsuite>
     </testsuites>
 </phpunit>

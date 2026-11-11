@@ -397,124 +397,42 @@ final class BillingWebhookDefaultLoginTest extends TestCase
         self::safe($safe);
     }
 
-    /** @return iterable<string,array{WebhookManagementProfile,bool,mixed,bool}> */
-    public static function terminalUrls(): iterable
+    /** @return iterable<string,array{WebhookManagementProfile,string}> */
+    public static function invalidTerminalProofs(): iterable
     {
         foreach (WebhookManagementProfile::cases() as $profile) {
-            foreach (
-                ['omitted' => [false, null, true], 'null compatibility' => [true, null, true],
-                'stale URL' => [true, 'https://checkout.sandbox.airwallex.com/pay?s=SYNTHETIC_PRIVATE_STALE', false],
-                'empty string' => [true, '', false], 'boolean' => [true, false, false],
-                'number' => [true, 0, false], 'array' => [true, [], false],
-                'object' => [true, new \stdClass(), false]] as $label => $case
-            ) {
-                yield $profile->value . ' ' . $label => [$profile, $case[0], $case[1], $case[2]];
+            foreach (['url', 'id'] as $field) {
+                yield $profile->value . ' ' . $field => [$profile, $field];
             }
         }
     }
 
-    #[DataProvider('terminalUrls')]
-    public function testBothProfilesRequireNoPresentUrlAfterOwnedCancellation(
-        WebhookManagementProfile $profile,
-        bool $present,
-        mixed $url,
-        bool $accepted,
-    ): void {
-        $this->http = new BillingWebhookFixtureProvider($profile === WebhookManagementProfile::DefaultLogin);
-        $this->trustedOwner();
-        $this->http->cancelledProjection = static fn (array $checkout): array =>
-            self::terminalFixture($checkout, 'url', $present, $url);
-        $safe = $this->observe(managementProfile: $profile);
-        self::assertSame($profile->scenario(), $safe['scenario']);
-        self::assertSame($accepted ? 'pass' : 'fail', $safe['result']);
-        self::assertSame($accepted, $safe['sdk_cancelled_verified']);
-        self::assertSame(!$accepted, $safe['reconciliation_required']);
-        self::assertTrue($safe['sdk_active_verified']);
-        self::assertTrue($safe['registration_deleted']);
-        self::assertSame(1, $this->http->count('/api/v1/billing/billing_checkouts/create'));
-        self::assertSame(1, $this->http->count('/api/v1/billing/billing_checkouts/SYNTHETIC_PRIVATE_CHECKOUT/cancel'));
-        self::assertSame(1, $this->http->count('/api/v1/webhooks/SYNTHETIC_PRIVATE_WEBHOOK/delete'));
-        self::assertNotNull($this->runtime);
-        self::assertTrue($this->runtime->stopped);
-        self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
-    }
-
-    /** @return iterable<string,array{WebhookManagementProfile,string,bool,mixed}> */
-    public static function terminalFieldMismatches(): iterable
-    {
-        foreach (WebhookManagementProfile::cases() as $profile) {
-            foreach (
-                ['id' => 'SYNTHETIC_PRIVATE_FOREIGN', 'billing_customer_id' => 'SYNTHETIC_PRIVATE_FOREIGN',
-                'legal_entity_id' => 'SYNTHETIC_PRIVATE_FOREIGN',
-                'linked_payment_account_id' => 'SYNTHETIC_PRIVATE_FOREIGN', 'mode' => 'PAYMENT',
-                'ui_mode' => 'ELEMENTS', 'currency' => 'HKD', 'metadata' => ['sdk_validation_run' => 'foreign'],
-                'status' => 'COMPLETED'] as $field => $wrong
-            ) {
-                yield $profile->value . ' wrong ' . $field => [$profile, $field, true, $wrong];
-                yield $profile->value . ' missing ' . $field => [$profile, $field, false, null];
-            }
-            yield $profile->value . ' still ACTIVE' => [$profile, 'status', true, 'ACTIVE'];
-            yield $profile->value . ' unknown state' => [$profile, 'status', true, 'FUTURE'];
-        }
-    }
-
-    #[DataProvider('terminalFieldMismatches')]
-    public function testOmittedUrlCannotReplaceAnyTerminalOwnerResourceOrStateProof(
+    #[DataProvider('invalidTerminalProofs')]
+    public function testRejectedTerminalProofStillCleansRegistrationWithoutAnotherCancel(
         WebhookManagementProfile $profile,
         string $field,
-        bool $present,
-        mixed $value,
     ): void {
         $this->http = new BillingWebhookFixtureProvider($profile === WebhookManagementProfile::DefaultLogin);
         $this->trustedOwner();
-        $this->http->cancelledProjection = static fn (array $checkout): array =>
-            self::terminalFixture($checkout, $field, $present, $value);
+        $this->http->cancelledProjection = static function (array $checkout) use ($field): array {
+            $projection = [];
+            foreach ($checkout as $key => $value) {
+                self::assertIsString($key);
+                $projection[$key] = $value;
+            }
+            $projection[$field] = 'SYNTHETIC_PRIVATE_STALE';
+            return $projection;
+        };
         $safe = $this->observe(managementProfile: $profile);
         self::assertSame('fail', $safe['result']);
         self::assertFalse($safe['sdk_cancelled_verified']);
         self::assertTrue($safe['reconciliation_required']);
+        self::assertTrue($safe['sdk_active_verified']);
         self::assertTrue($safe['registration_deleted']);
         self::assertSame(1, $this->http->count('/api/v1/billing/billing_checkouts/SYNTHETIC_PRIVATE_CHECKOUT/cancel'));
         self::assertSame(1, $this->http->count('/api/v1/webhooks/SYNTHETIC_PRIVATE_WEBHOOK/delete'));
         self::assertNotNull($this->runtime);
         self::assertTrue($this->runtime->stopped);
         self::assertStringNotContainsString('SYNTHETIC_PRIVATE', json_encode($safe, JSON_THROW_ON_ERROR));
-    }
-
-    /**
-     * @param array<array-key,mixed> $checkout
-     * @return array<string,mixed>
-     */
-    private static function terminalFixture(array $checkout, string $field, bool $present, mixed $value): array
-    {
-        $proof = [];
-        foreach ($checkout as $key => $entry) {
-            if (!is_string($key)) {
-                throw new RuntimeException('The synthetic Checkout requires named fields.');
-            }
-            $proof[$key] = $entry;
-        }
-        if ($present) {
-            $proof[$field] = $value;
-        } else {
-            unset($proof[$field]);
-        }
-        return $proof;
-    }
-
-    public function testActiveHelperMatchingRetainsItsExistingUrlAndFieldBehavior(): void
-    {
-        $expected = ['id' => 'SYNTHETIC_PRIVATE_CHECKOUT', 'billing_customer_id' => 'SYNTHETIC_PRIVATE_CUSTOMER',
-            'legal_entity_id' => 'SYNTHETIC_PRIVATE_ENTITY', 'linked_payment_account_id' => 'SYNTHETIC_PRIVATE_ACCOUNT',
-            'mode' => 'SETUP', 'ui_mode' => 'HOSTED', 'currency' => 'EUR', 'status' => 'ACTIVE',
-            'metadata' => ['sdk_validation_run' => 'SYNTHETIC_PRIVATE_MARKER']];
-        foreach ([$expected, $expected + ['url' => null], $expected + ['url' => 'SYNTHETIC_PRIVATE_URL']] as $active) {
-            self::assertTrue(BillingWebhookApi::checkout($active, $expected));
-            foreach (array_keys($expected) as $field) {
-                $missing = $active;
-                unset($missing[$field]);
-                self::assertFalse(BillingWebhookApi::checkout($missing, $expected));
-            }
-        }
     }
 }

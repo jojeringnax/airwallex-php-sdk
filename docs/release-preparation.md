@@ -17,6 +17,7 @@ Run the repository's deterministic checks and both clean consumer modes using th
 ```sh
 composer validate --strict
 composer check
+composer test:tools
 composer check:consumer
 composer check:consumer -- --lowest
 composer check:artifact
@@ -27,7 +28,7 @@ composer check:artifact -- --lowest
 
 `check:artifact` builds a Composer tar archive, checks its complete content list and every file hash against an immutable byte inventory, and installs a second clean consumer from that exact archive through a local package repository. It does not substitute a working-tree path repository for archive installation. The local `dev-main` repository version identifies the installation fixture; it is not a release version or tag. Both artifact modes use the same meaningful consumer behavior check as the source installation.
 
-CI runs metadata, deterministic tests, style/static analysis, clean consumer and archive installation checks for PHP 8.3, 8.4 and 8.5, each with lowest and latest allowed dependency resolution. The chosen Composer resolver's security policy remains enabled. Record the actual resolved versions and results, rather than assuming all declared historical patch combinations were installed. Missing or failed jobs remain missing or failed evidence.
+CI runs metadata, deterministic SDK/example tests, style/static analysis, clean consumer and archive installation checks for PHP 8.3, 8.4 and 8.5, each with lowest and latest allowed dependency resolution. The separate development-tools job runs `composer test:tools` once on PHP 8.4 and the deterministic browser/webhook policies on Node 22. Both PHP suites remain required in CI; `composer test:all` runs both locally. [Contributing](../CONTRIBUTING.md#development-setup) defines their boundaries and test commands. The chosen Composer resolver's security policy remains enabled. Record the actual resolved versions and results, rather than assuming all declared historical patch combinations were installed. Missing or failed jobs remain missing or failed evidence.
 
 ## Distribution contents
 
@@ -58,7 +59,7 @@ New manifests omit the former global `release_ready`, mandatory-provider `requir
 At historical merged `5ee2c7640f763e062d6ad0144973fc7f9763fe64`, [all six supported PHP/dependency CI jobs](https://github.com/jojeringnax/airwallex-php-sdk/actions/runs/42597743848) passed, including both consumer modes. This checkpoint does not validate a later candidate. The [readiness record](release-readiness.md#delivery-priorities) separates SDK/package acceptance from supplemental provider observations.
 
 1. After the intended changes are reviewed and merged, name the clean candidate commit and map the full accepted scope to the official contract references, implementation, examples and meaningful deterministic tests. Exclude optional drafts; a later merge requires its own exact-source evidence.
-2. Record that revision's six supported PHP/dependency CI results, deterministic Node policy job and actual dependency versions. Historical three-profile or browser runs keep their original commits; do not relabel them as new candidate runs.
+2. Record that revision's six supported PHP/dependency CI results, development-tools job (PHP tooling and Node policies) and actual dependency versions. Historical three-profile or browser runs keep their original commits; do not relabel them as new candidate runs.
 3. Use the existing source and archive consumer commands above. Retain lowest/latest archives in separate new directories, with manifest/archive hashes, the exact commit and the known-limit record in the issue owning that candidate. Current transaction-extension evidence belongs to [#159](https://github.com/jojeringnax/airwallex-php-sdk/issues/159); closed #44 retains the original release record. No provider call is needed for these package checks.
 4. Independently review archive membership/bytes, installed examples, contract coverage, CI results, known limitations and claim-to-evidence completeness. Declare candidate readiness only after these checks actually pass. Retain the separate limits of any supplemental Sandbox/provider evidence. A retained development artifact grants no release/tag/registry publication authorization.
 

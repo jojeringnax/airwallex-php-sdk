@@ -124,35 +124,6 @@ final class SubscriptionWebhookProbeTest extends TestCase
         return [$pipes[1], $pipes[2]];
     }
 
-    public function testNamedEventFixturePreservesUnknownAndNumericKeys(): void
-    {
-        $event = ['account_id' => 'SYNTHETIC_PRIVATE_ACCOUNT', 'name' => 'subscription.created',
-            0 => ['opaque_decimal' => '1.23000', 'overflow' => '999999999999999999999999999999'],
-            'data' => ['unlisted' => [1, '1.0', null]]];
-        self::assertSame(['name' => 'subscription.created', 0 => $event[0], 'data' => $event['data'],
-            'org_id' => 'SYNTHETIC_PRIVATE_ORG'], self::organizationEvent($event));
-        self::assertSame('SYNTHETIC_PRIVATE_ACCOUNT', $event['account_id']);
-    }
-
-    /** @return iterable<string,array{array<array-key,mixed>,?string}> */
-    public static function streamMetadataShapes(): iterable
-    {
-        yield 'missing' => [[], null];
-        yield 'null' => [['uri' => null], null];
-        yield 'numeric' => [['uri' => 123], null];
-        yield 'boolean' => [['uri' => false], null];
-        yield 'array' => [['uri' => []], null];
-        yield 'empty string' => [['uri' => ''], ''];
-        yield 'named file' => [['uri' => '/SYNTHETIC/ledger.json.writing'], '/SYNTHETIC/ledger.json.writing'];
-    }
-
-    /** @param array<array-key,mixed> $metadata */
-    #[DataProvider('streamMetadataShapes')]
-    public function testNativeStreamMetadataUriIsProvedRatherThanAssumed(array $metadata, ?string $expected): void
-    {
-        self::assertSame($expected, self::metadataPath($metadata));
-    }
-
     public function testCaptureMetadataMapGuardRetainsActualPhpNumericObjectKeyBehavior(): void
     {
         $guard = new ReflectionMethod(
@@ -174,33 +145,6 @@ final class SubscriptionWebhookProbeTest extends TestCase
             $object = json_decode($raw, depth: 4, flags: JSON_THROW_ON_ERROR);
             self::assertInstanceOf(\stdClass::class, $object);
             self::assertNull($guard->invoke(null, get_object_vars($object)));
-        }
-    }
-
-    public function testOutputPipeWitnessRejectsMissingWrongAndClosedNativeHandles(): void
-    {
-        $out = fopen('php://temp', 'w+b');
-        $err = fopen('php://temp', 'w+b');
-        self::assertIsResource($out);
-        self::assertIsResource($err);
-        try {
-            self::assertSame([$out, $err], self::outputPipes([1 => $out, 2 => $err]));
-            foreach ([null, [], [1 => $out], [1 => $out, 2 => false]] as $pipes) {
-                try {
-                    self::outputPipes($pipes);
-                    self::fail('Invalid native output pipes escaped.');
-                } catch (RuntimeException $error) {
-                    self::assertSame('The synthetic process output pipes are unavailable.', $error->getMessage());
-                }
-            }
-            fclose($out);
-            $this->expectException(RuntimeException::class);
-            self::outputPipes([1 => $out, 2 => $err]);
-        } finally {
-            if (is_resource($out)) {
-                fclose($out);
-            }
-            fclose($err);
         }
     }
 

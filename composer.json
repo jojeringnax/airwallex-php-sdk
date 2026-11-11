@@ -34,7 +34,9 @@
         }
     },
     "scripts": {
-        "test": "phpunit",
+        "test": "phpunit --testsuite sdk",
+        "test:tools": ["Composer\\Config::disableProcessTimeout", "phpunit --testsuite tools"],
+        "test:all": ["Composer\\Config::disableProcessTimeout", "phpunit"],
         "style": "phpcs",
         "style:fix": "phpcbf",
         "analyse": "phpstan analyse --no-progress --memory-limit=512M",
