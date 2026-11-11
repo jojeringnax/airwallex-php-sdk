@@ -156,6 +156,8 @@ Pass money as major-unit strings, such as `['amount' => '19.90', 'currency' => '
 
 Omission differs from explicit null, and `false`, zero, an empty string, an empty array and an empty object have distinct meanings. Send null only where the operation permits it; use `new stdClass()` for an empty JSON object. Read [payload precision](payload-precision.md) and the [shared representation contract](consumer-interfaces.md#interface-conventions) before transforming provider arrays.
 
+When reads must distinguish numeric-key objects from lists, use the [object-preserving examples](consumer-examples.md#object-preserving-reads-and-webhook-views) and review their [availability and proof limits](payload-precision.md#object-shape-and-proof-limits). Existing clients and `WebhookEvent::toArray()` retain their default representation.
+
 List calls retrieve one explicit page. Billing uses `page` bookmarks with native `page_after`/`page_before`; Payments uses zero-based `page_num` and `has_more`. Carry the original filters and the same client to the next call; do not reuse a bookmark under another owner. The [executed page recipes](../examples/explicit-pages.php) call public resource methods once per invocation. For example, retain `$filters` and choose the next Billing page only after inspecting its native bookmark:
 
 ```php

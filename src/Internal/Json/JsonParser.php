@@ -22,6 +22,7 @@ final class JsonParser
         #[SensitiveParameter] private readonly string $json,
         private readonly array $decimalPaths,
         private readonly array $integerPaths,
+        private readonly bool $preserveObjects = false,
     ) {
     }
 
@@ -82,7 +83,7 @@ final class JsonParser
             $this->skipWhitespace();
             if ($this->peek() === '}') {
                 ++$this->offset;
-                return $result;
+                return $this->preserveObjects ? (object) $result : $result;
             }
             $this->consume(',');
         } while (true);

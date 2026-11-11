@@ -105,6 +105,7 @@ abstract class HttpTestCase extends TestCase
         ?RetryPolicy $retryPolicy = null,
         ?CacheInterface $cache = null,
         ?Credentials $credentials = null,
+        bool $preserveResponseObjects = false,
     ): Client {
         return new Client(
             environment: $environment,
@@ -116,6 +117,7 @@ abstract class HttpTestCase extends TestCase
             tokenCache: $cache,
             clock: $clock ?? static fn (): int => 100,
             retryPolicy: $retryPolicy ?? new RetryPolicy(maxAttempts: 1),
+            preserveResponseObjects: $preserveResponseObjects,
         );
     }
 }

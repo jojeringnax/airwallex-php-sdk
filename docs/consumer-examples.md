@@ -270,6 +270,51 @@ try {
 
 HTTP retries and provider collection retries remain separate. Preserve original payload and identity if replay becomes independently safe. Unknown provider state is returned for consumer review, never mapped to paid/access-granted.
 
+## Object-preserving reads and webhook views
+
+For read evidence that depends on numeric-key object shape, construct a client with the optional final argument:
+
+```php
+use Jojeringnax\Airwallex\Client;
+use Jojeringnax\Airwallex\Credentials;
+use Jojeringnax\Airwallex\Environment;
+
+$client = new Client(
+    environment: Environment::Sandbox,
+    credentials: new Credentials('<client-id>', '<api-key>'),
+    httpClient: $httpClient,
+    requestFactory: $requestFactory,
+    streamFactory: $streamFactory,
+    preserveResponseObjects: true,
+);
+$customer = $client->billing()->customers()->retrieve('<billing-customer-id>');
+$metadata = $customer['metadata'] ?? null;
+if ($metadata instanceof \stdClass && property_exists($metadata, '0')) {
+    $valueAtNumericKey = $metadata->{'0'};
+}
+```
+
+The root stays an array. `{"metadata":{"0":"zero"}}` returns `stdClass` metadata with property `'0'`; `{"metadata":["zero"]}` returns a list and fails the object check. The same mode applies recursively to objects in lists, empty objects, Payments reads and mutation responses. Adapt nested access from array offsets to properties wherever the selected response contains objects. Requests still use the existing array interface. These options are an [unreleased addition with explicit proof limits](payload-precision.md#object-shape-and-proof-limits).
+
+After the [raw-body verification](#webhook-boundary), select an independent object view of the event:
+
+```php
+use Jojeringnax\Airwallex\Webhook\WebhookEvent;
+
+$event = WebhookEvent::fromJson($rawBody);
+$envelope = $event->toArray(preserveObjects: true);
+$data = $envelope['data'] ?? null;
+$resource = $data instanceof \stdClass && property_exists($data, 'object')
+    ? $data->object : $data;
+// Both direct data and generic data.object retain their supplied nesting.
+if ($resource instanceof \stdClass && property_exists($resource, 'metadata')) {
+    $metadataIsObject = $resource->metadata instanceof \stdClass;
+}
+$defaultEnvelope = $event->toArray(); // Existing array representation remains available.
+```
+
+Shape checks supplement the application's owner, version, identity and operation-correlation checks. They do not prove arbitrary request equivalence, distinguish every numeric token from a quoted string, detect duplicate keys or authorize replay after an uncertain write.
+
 ## Webhook boundary
 
 ```php
@@ -287,7 +332,7 @@ $verifier->verify($rawBody, $timestampHeader, $signatureHeader); // void or exce
 
 `verify(string $rawBody, string $timestamp, string $signature): void` throws `WebhookVerificationException` (an SDK exception) on malformed, invalid or out-of-tolerance deliveries. Freshness tolerance is required explicitly, a non-negative integer in milliseconds; no undocumented provider default is selected. Reject timestamps beyond tolerance in either direction. Verification uses the exact timestamp string plus raw body, HMAC-SHA256 and constant-time comparison; header parsing, numeric decoding and error behavior are documented in the [implemented webhook boundary](webhook-contracts.md#php-verification-and-decoding).
 
-After successful verification, `WebhookEvent::fromJson($rawBody)` in the same namespace losslessly decodes a JSON object and exposes `toArray(): array`. This method converts the root envelope to an array, including `[]` for an empty root object; nested empty objects retain `stdClass` under the shared representation rules. Malformed JSON or a non-object root throws `ProtocolException`.
+After successful verification, `WebhookEvent::fromJson($rawBody)` in the same namespace decodes a JSON object and exposes `toArray(bool $preserveObjects = false): array`. This method converts the root envelope to an array, including `[]` for an empty root object; nested empty objects retain `stdClass` under the shared representation rules. Malformed JSON or a non-object root throws `ProtocolException`. For numeric-key object evidence, see [object-preserving reads and webhook views](#object-preserving-reads-and-webhook-views).
 
 A valid JSON object with an unknown name, missing or unsupported version, conflicting envelope fields or unknown resource status remains unrecognized and available for consumer inspection; it receives no typed state transition. Preserve supplied fields without normalizing ownership or assigning the SDK version. Consumers retain the original `$rawBody` alongside the decoded fields when inspection or quarantine needs the exact bytes; storage and retention belong to the application. The [webhook catalogue](webhook-contracts.md#unknown-events-versions-and-reconciliation) defines interpretation and supplemental delivery observations. Configure the provider webhook subscription to the SDK baseline independently of request headers.
 
