@@ -46,6 +46,10 @@ Both Billing models are included to cover platform service subscriptions and mer
 
 For invoice documents, self-service, checkout UI modes, trials and cancellation/grace boundaries, consult [Billing capability boundaries](billing-capabilities.md).
 
+## Adoption extension
+
+[Read-only Billing Transactions #159](https://github.com/jojeringnax/airwallex-php-sdk/issues/159) extends invoice inspection with retrieve/list observations under API `2026-08-21`. It does not activate Credit Note writes or a payment ledger. [Transaction contracts](billing-resources.md#billing-transactions) define the accounting evidence limits. This addition is unreleased; downstream qualification must pin its exact commit/archive until a separately authorized tagged release exists.
+
 ## Price-model coverage
 
 Initial Price creation includes nonmetered `FLAT`, `PER_UNIT`, `VOLUME` and `GRADUATED` models, for one-time or recurring purchases. Quantity tiers are accepted initial-release scope under the [decision in #64](https://github.com/jojeringnax/airwallex-php-sdk/issues/64#issuecomment-6749373954): they support quantity-based catalogue pricing independently of metered usage. Metered billing, usage-event reporting and usage-priced Rate Cards remain deferred under [#40](https://github.com/jojeringnax/airwallex-php-sdk/issues/40) / [#41](https://github.com/jojeringnax/airwallex-php-sdk/issues/41). [Billing resources](billing-resources.md#price-models-and-tiers) owns the request rules and verified sources.

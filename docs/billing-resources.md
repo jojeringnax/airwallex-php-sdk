@@ -4,7 +4,7 @@ Use the resource methods below with an organization-authorized client from [init
 
 ## Operations and contract sources
 
-Every route below is under `/api/v1/billing`. All 30 operations independently declare organization ownership, no on-behalf-of support and the corresponding Billing resource read/write permission in the selected provider metadata. A delegated Payments client cannot call Billing. `linked_payment_account_id` selects an eligible collector; it grants no Billing permission or account eligibility.
+Every route below is under `/api/v1/billing`. All 32 operations independently declare organization ownership, no on-behalf-of support and the corresponding Billing resource read/write permission in the selected provider metadata. A delegated Payments client cannot call Billing. `linked_payment_account_id` selects an eligible collector; it grants no Billing permission or account eligibility.
 
 | Resource accessor | Methods | Official contract / bundled schema |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ Every route below is under `/api/v1/billing`. All 30 operations independently de
 | `checkouts()` | `create`, `retrieve`, `update`, `cancel` | [Billing Checkouts](https://www.airwallex.com/docs/api/billing/billing_checkouts), [schema](../resources/contracts/billing/billing_checkouts.json) |
 | `subscriptions()` | `create`, `retrieve`, `list`, `update`, `cancel`, `retrieveItem`, `listItems` | [Subscriptions](https://www.airwallex.com/docs/api/billing/subscriptions), [schema](../resources/contracts/billing/subscriptions.json) |
 | `invoices()` | `retrieve`, `list`, `retrieveLineItem`, `listLineItems` | [Invoices](https://www.airwallex.com/docs/api/billing/invoices), [schema](../resources/contracts/billing/invoices.json) |
+| `transactions()` | `retrieve`, `list` | [Billing Transactions](https://www.airwallex.com/docs/api/billing/billing_transactions), [schema](../resources/contracts/billing/billing_transactions.json) |
 
 `create(array $body): array`, `retrieve(string $id): array`, `list(array $query = []): array` and `update(string $id, array $body): array` follow the shared signatures. Checkout `cancel(string $id): array` sends no request body. Subscription `cancel(string $id, array $body): array` requires the original action's `request_id` and explicit `proration_behavior`.
 
@@ -35,6 +36,18 @@ Price amounts and tier upper bounds use decimal strings and exact JSON numbers; 
 Response numeric types follow resolved schemas. Monetary values and schema `number` fields remain strings with their original numeric text. For example, a Subscription Item's response `quantity` is a schema `number`, although request `quantity` is an integer. Known integer counts and periods become PHP integers when representable; additional numeric fields remain strings. The SDK computes no proration, tax, currency conversion or entitlement state.
 
 Lists return native `items`, `page_after` and `page_before` fields. `page_size` is an integer from 1 to 1000, defaulting at the provider to 20 when omitted. Pass the next bookmark through `page`, retaining original filters and the same organization context. There is no automatic network iteration.
+
+## Billing transactions
+
+Use `billing()->transactions()->retrieve(id: $transactionId)` or `list(query: ['invoice_id' => $invoiceId])`. List requires exactly one nonempty `invoice_id` or `credit_note_id`; the remaining supported filters are `from_created_at` (inclusive), `to_created_at` (exclusive), `page` and `page_size`. It has no customer, status or type filter. The [executable recipe](../examples/billing-transactions.php) retains the parent on subsequent pages. Credit Note filtering is read-only and introduces no Credit Note write workflow.
+
+The **2026-11-11** official page selected `currentVersion=2026-08-21`, specification `airwallex-openapi-2026-08-21.yaml`, advertised MD5 `6caa23f3759634e64859ff6aa8c37336`. Both GET operations independently declare organization ownership, no OBO support and API-key-supported `billing.transaction:read`. The bundled snapshot contains their request parameters, response schemas and permission evidence. This is page-metadata provenance, not a downloaded whole-specification hash or account observation. Earlier resource snapshots retain their own provenance.
+
+Transaction `amount` is its total exact major-unit amount. `type` describes `PAYMENT` or `REFUND`; `status` describes `CREATED`, `SUCCEEDED`, `CANCELLED` or `FAILED`. Unknown values remain unchanged. `CREATED` is pending, and failed/cancelled records establish no successful payment/refund. `external_id` refers to a Payment Intent for payments or a Refund for refunds. These and `invoice_id`, `credit_note_id`, `linked_payment_account_id`, `payment_source_id`, `out_of_band` and `type` are optional response fields. Missing linkage remains missing; the SDK neither fabricates it nor discards the record.
+
+`out_of_band=true` means manually marked succeeded. False means either not yet succeeded or processed on Airwallex; it is insufficient without status/type. The [invoice guide](https://www.airwallex.com/docs/billing/invoicing/get-started-with-invoicing) permits PAID through payments, adjustments or credits. Invoice PAID, an external ID, or a succeeded transaction alone establishes neither settlement nor an application cash allocation. The schema has a singular invoice association but no allocated amount, allocation list or exclusivity guarantee that its total is cash attributable to exactly that invoice. A consumer verifies canonical invoice/customer/collector linkage, stable transaction identity, type/status and explicit out-of-band evidence; any accounting allocation or Payments cross-check must preserve that missing proof. Do not sum total amounts into invoice cash receipts by assumption.
+
+This API is an unreleased additive extension of v0.1.1. Development consumers use an exact-commit SDK archive; final tagged-release qualification remains pending. No sibling path repository or version alias proves release qualification.
 
 ## Price models and tiers
 
