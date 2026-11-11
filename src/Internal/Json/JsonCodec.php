@@ -31,14 +31,15 @@ final class JsonCodec
         #[SensitiveParameter] string $json,
         array $decimalPaths = [],
         array $integerPaths = [],
+        bool $preserveObjects = false,
     ): array {
-        $parser = new JsonParser($json, $decimalPaths, $integerPaths);
+        $parser = new JsonParser($json, $decimalPaths, $integerPaths, $preserveObjects);
         $result = $parser->parse();
         if (!$parser->rootIsObject() || (!is_array($result) && !$result instanceof stdClass)) {
             throw new ProtocolException('Expected a JSON object response.');
         }
 
-        return $result instanceof stdClass ? [] : $result;
+        return $result instanceof stdClass ? get_object_vars($result) : $result;
     }
 
     /** @param list<string> $patterns */

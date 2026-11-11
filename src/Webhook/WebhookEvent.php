@@ -6,6 +6,7 @@ namespace Jojeringnax\Airwallex\Webhook;
 
 use Jojeringnax\Airwallex\Internal\Json\JsonCodec;
 use SensitiveParameter;
+use stdClass;
 
 final readonly class WebhookEvent
 {
@@ -17,18 +18,35 @@ final readonly class WebhookEvent
     public static function fromJson(#[SensitiveParameter] string $rawBody): self
     {
         $codec = new JsonCodec();
-        $envelope = $codec->decodeObject($rawBody);
-        $integerPaths = WebhookSchema::integerPaths($envelope);
+        $event = new self($codec->decodeObject($rawBody, preserveObjects: true));
+        $integerPaths = WebhookSchema::integerPaths($event->toArray());
         if ($integerPaths !== []) {
-            $envelope = $codec->decodeObject($rawBody, integerPaths: $integerPaths);
+            return new self($codec->decodeObject($rawBody, integerPaths: $integerPaths, preserveObjects: true));
         }
 
-        return new self($envelope);
+        return $event;
     }
 
     /** @return array<array-key, mixed> */
-    public function toArray(): array
+    public function toArray(bool $preserveObjects = false): array
     {
-        return $this->envelope;
+        return array_map(
+            static fn (mixed $value): mixed => self::copyValue($value, $preserveObjects),
+            $this->envelope,
+        );
+    }
+
+    private static function copyValue(#[SensitiveParameter] mixed $value, bool $preserveObjects): mixed
+    {
+        if ($value instanceof stdClass || is_array($value)) {
+            $properties = array_map(
+                static fn (mixed $child): mixed => self::copyValue($child, $preserveObjects),
+                $value instanceof stdClass ? get_object_vars($value) : $value,
+            );
+            return $value instanceof stdClass && ($preserveObjects || $properties === [])
+                ? (object) $properties : $properties;
+        }
+
+        return $value;
     }
 }
