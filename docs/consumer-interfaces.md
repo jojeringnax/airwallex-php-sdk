@@ -43,6 +43,8 @@ For implemented environment, token, transport, retry and diagnostic behavior, se
 
 The [advanced Billing extension](planning.md#advanced-billing-extension) adds `billing()->coupons()` with the standard create/retrieve/list/update signatures. Supporting `invoices()` writes use standard create/update, `addLineItems(string $id, array $body): array`, `updateLineItems(string $id, array $body): array`, and bodyless `finalize(string $id): array`. [Coupon usage](billing-resources.md#coupons-and-one-off-invoice-application) owns request conditions, examples and unreleased availability.
 
+The same extension's `billing()->creditNotes()` follows standard create/retrieve/list, explicit-parent line-item creation/reads, `finalize(string $id, array $body): array` and bodyless `void(string $id): array`. The [Credit Note contract](billing-resources.md#credit-note-adjustments) distinguishes draft creation, Invoice credit, original-method refunds and out-of-band adjustments.
+
 Read the relevant [consumer example](consumer-examples.md) when implementing or reviewing a workflow:
 
 | Work | Reference |

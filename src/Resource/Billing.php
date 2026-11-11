@@ -8,6 +8,7 @@ use Jojeringnax\Airwallex\Exception\ConfigurationException;
 use Jojeringnax\Airwallex\Internal\Http\ApiTransport;
 use Jojeringnax\Airwallex\Resource\Billing\Checkouts;
 use Jojeringnax\Airwallex\Resource\Billing\Coupons;
+use Jojeringnax\Airwallex\Resource\Billing\CreditNotes;
 use Jojeringnax\Airwallex\Resource\Billing\Customers;
 use Jojeringnax\Airwallex\Resource\Billing\Invoices;
 use Jojeringnax\Airwallex\Resource\Billing\PaymentSources;
@@ -72,6 +73,11 @@ final readonly class Billing
     public function coupons(): Coupons
     {
         return new Coupons($this->transport);
+    }
+
+    public function creditNotes(): CreditNotes
+    {
+        return new CreditNotes($this->transport);
     }
 
     /** @return array<string,never> */
