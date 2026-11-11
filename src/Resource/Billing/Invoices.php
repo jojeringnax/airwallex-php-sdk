@@ -13,6 +13,48 @@ final class Invoices extends Resource
         return 'invoices';
     }
 
+    /**
+     * @param array<string,mixed> $body
+     * @return array<array-key,mixed>
+     */
+    public function create(#[SensitiveParameter] array $body): array
+    {
+        return $this->call('createInvoice', body: $body);
+    }
+
+    /**
+     * @param array<string,mixed> $body
+     * @return array<array-key,mixed>
+     */
+    public function update(#[SensitiveParameter] string $id, #[SensitiveParameter] array $body): array
+    {
+        return $this->call('updateInvoice', ids: ['id' => $id], body: $body);
+    }
+
+    /** @return array<array-key,mixed> */
+    public function finalize(#[SensitiveParameter] string $id): array
+    {
+        return $this->call('invoices_finalize', ids: ['id' => $id]);
+    }
+
+    /**
+     * @param array<string,mixed> $body
+     * @return array<array-key,mixed>
+     */
+    public function addLineItems(#[SensitiveParameter] string $id, #[SensitiveParameter] array $body): array
+    {
+        return $this->call('invoices_addLineItems', ids: ['id' => $id], body: $body);
+    }
+
+    /**
+     * @param array<string,mixed> $body
+     * @return array<array-key,mixed>
+     */
+    public function updateLineItems(#[SensitiveParameter] string $id, #[SensitiveParameter] array $body): array
+    {
+        return $this->call('invoices_updateLineItems', ids: ['id' => $id], body: $body);
+    }
+
     /** @return array<array-key,mixed> */
     public function retrieve(#[SensitiveParameter] string $id): array
     {

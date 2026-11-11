@@ -41,6 +41,8 @@ $mock = new MockHandler([
     new Response(201, [], '{"id":"synthetic-intent","amount":19.90,"unknown_numeric":12345678901234567890.123400}'),
     new Response(200, [], '{"items":[],"has_more":false}'),
     new Response(200, [], '{"id":"synthetic-subscription","status":"ACTIVE"}'),
+    new Response(201, [], '{"id":"synthetic-coupon","amount_off":10.000000000001}'),
+    new Response(201, [], '{"id":"synthetic-invoice","status":"DRAFT"}'),
 ]);
 $handler = HandlerStack::create($mock);
 $handler->push(Middleware::history($history));
@@ -78,10 +80,21 @@ $subscription = $client->billing()->subscriptions()->update('synthetic-subscript
     'proration_date' => '2028-02-29T10:15:30.123456789+01:00',
 ]);
 $expectConsumer($subscription['id'] === 'synthetic-subscription', 'Installed Subscription Update failed.');
+$coupon = $client->billing()->coupons()->create([
+    'request_id' => 'persisted-coupon-action', 'name' => 'Exact flat coupon', 'discount_model' => 'FLAT',
+    'amount_off' => '10.000000000001', 'currency' => 'USD', 'duration_type' => 'ONCE',
+]);
+$expectConsumer($coupon['amount_off'] === '10.000000000001', 'Installed coupon schema lost exact money.');
+$invoice = $client->billing()->invoices()->create([
+    'request_id' => 'persisted-invoice-action', 'billing_customer_id' => 'synthetic-billing-customer',
+    'currency' => 'USD', 'collection_method' => 'OUT_OF_BAND',
+    'discounts' => [['type' => 'COUPON', 'coupon' => ['id' => 'synthetic-coupon']]],
+]);
+$expectConsumer($invoice['id'] === 'synthetic-invoice', 'Installed Invoice creation failed.');
 if (!is_array($history)) {
     throw new RuntimeException('Consumer request capture is unavailable.');
 }
-$expectConsumer(count($history) === 6, 'Installed SDK did not reuse its authentication token.');
+$expectConsumer(count($history) === 8, 'Installed SDK did not reuse its authentication token.');
 $requests = [];
 foreach ($history as $entry) {
     $request = is_array($entry) ? ($entry['request'] ?? null) : null;
@@ -102,6 +115,10 @@ $expectConsumer(
         . '"charge_amount":"100.000000000000000001","credit_amount":"20.00"}}],'
         . '"proration_date":"2028-02-29T10:15:30.123456789+01:00"}',
     'Installed custom amounts or calculation timestamp changed.'
+);
+$expectConsumer(
+    str_contains((string) $requests[6]->getBody(), '"amount_off":10.000000000001'),
+    'Installed coupon wire amount changed.'
 );
 $body = '{"name":"future.event","amount":19.9000,"nested":{},"list":[]}';
 $timestamp = '1700000000000';

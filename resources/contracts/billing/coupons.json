@@ -1,0 +1,588 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/coupons",
+  "reviewed": "2026-11-12",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+  "endpoints": {
+    "createCoupon": {
+      "apiPath": "/api/v1/billing/coupons/create",
+      "method": "post",
+      "description": "Creates a new coupon template that can be redeemed in purchases.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "discount_model",
+                "duration_type",
+                "name",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "amount_off": {
+                  "maximum": 9999999999,
+                  "minimum": 0,
+                  "type": "number",
+                  "description": "The fixed amount to deduct when `discount_model` is `FLAT`."
+                },
+                "currency": {
+                  "type": "string",
+                  "description": "The currency of `amount_off` when `discount_model` is `FLAT`."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Description of the coupon providing business context."
+                },
+                "discount_model": {
+                  "pattern": "^(FLAT|PERCENTAGE)$",
+                  "type": "string",
+                  "description": "Specified how to calculate the discount amount when applied, one of \n- `FLAT`: fixed amount off.\n- `PERCENTAGE`: percentage off."
+                },
+                "duration": {
+                  "required": [
+                    "period",
+                    "period_unit"
+                  ],
+                  "type": "object",
+                  "description": "The duration of the coupon to apply, when `duration_type`is `CUSTOM`. `null` if `duration_type` is `ONCE` or `INDEFINITELY`.",
+                  "properties": {
+                    "period": {
+                      "minimum": 1,
+                      "type": "integer",
+                      "description": "The number of `period_unit`.",
+                      "format": "int32"
+                    },
+                    "period_unit": {
+                      "pattern": "^(DAY|WEEK|MONTH|YEAR)$",
+                      "type": "string",
+                      "description": "Specifies duration. One of `DAY`, `WEEK`, `MONTH`, `YEAR`."
+                    }
+                  },
+                  "nullable": true
+                },
+                "duration_type": {
+                  "pattern": "^(ONCE|CUSTOM|INDEFINITELY)$",
+                  "type": "string",
+                  "description": "Determines how long the coupon's discount remains active after being applied. Possible values: \n- `ONCE`: Applies only to the first charge of a subscription or a one-off invoice.\n- `CUSTOM`: Applies to all charges within a specified number of billing cycles, as defined by duration.\n- `INDEFINITELY`: Applies to all future charges for the subscription until it is removed."
+                },
+                "expires_at": {
+                  "type": "string",
+                  "description": "Time after which the coupon can no longer be redeemed."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Name of the coupon."
+                },
+                "percentage_off": {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "number",
+                  "description": "The percentage between 0 to 100 to be applied to deduct when `discount_model` is `PERCENTAGE`."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Coupon"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.discount:write",
+          "group": "Billing",
+          "resource_name": "Discounts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrieveCoupon": {
+      "apiPath": "/api/v1/billing/coupons/{id}",
+      "method": "get",
+      "description": "Retrieves the coupon details by the ID.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Coupon"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Coupon object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.discount:read",
+          "group": "Billing",
+          "resource_name": "Discounts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listCoupons": {
+      "apiPath": "/api/v1/billing/coupons",
+      "method": "get",
+      "description": "Get a list of coupons.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseCoupon"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "Specified how to calculate the discount amount when applied, one of \n- `FLAT`: fixed amount off.\n- `PERCENTAGE`: percentage off.",
+          "in": "query",
+          "name": "discount_model",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "`true` if the coupon is available to be applied to objects. `false` otherwise.",
+          "in": "query",
+          "name": "active",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "description": "Determines how long the coupon's discount remains active after being applied. Possible values: \n- `ONCE`: Applies only to the first charge of a subscription or a one-off invoice.\n- `CUSTOM`: Applies to all charges within a specified number of billing cycles, as defined by duration.\n- `INDEFINITELY`: Applies to all future charges for the subscription until it is removed.",
+          "in": "query",
+          "name": "duration_type",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The start time of expires_at in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_expires_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end time of expires_at in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_expires_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The start time of created_at in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end time of created_at in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of results per page. Defaults to 20.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.discount:read",
+          "group": "Billing",
+          "resource_name": "Discounts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "updateCoupon": {
+      "apiPath": "/api/v1/billing/coupons/{id}/update",
+      "method": "post",
+      "description": "Updates a coupon. Before first redemption, all fields can be adjusted; after redemption, only non-billing fields (name, description, expires_at, metadata) can be updated to maintain contractual integrity.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "Whether the coupon is active and can be redeemed. Set to false to deactivate the coupon."
+                },
+                "amount_off": {
+                  "type": "number",
+                  "description": "The fixed amount to deduct when `discount_model` is `FLAT`.\n This field cannot be updated once the coupon has been redeemed."
+                },
+                "currency": {
+                  "type": "string",
+                  "description": "The currency of `amount_off` when `discount_model` is `FLAT`. \nThis field cannot be updated once the coupon has been redeemed."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Description of the coupon providing business context."
+                },
+                "discount_model": {
+                  "pattern": "^(FLAT|PERCENTAGE)$",
+                  "type": "string",
+                  "description": "Specified how to calculate the discount amount when applied, one of \n- `FLAT`: fixed amount off.\n- `PERCENTAGE`: percentage off.\nThis field cannot be updated once the coupon has been redeemed."
+                },
+                "duration": {
+                  "required": [
+                    "period",
+                    "period_unit"
+                  ],
+                  "type": "object",
+                  "description": "The duration of the coupon to apply, when `duration_type`is `CUSTOM`. `null` if `duration_type` is `ONCE` or `INDEFINITELY`. \nThis field cannot be updated once the coupon has been redeemed.",
+                  "properties": {
+                    "period": {
+                      "minimum": 1,
+                      "type": "integer",
+                      "description": "The number of `period_unit`.",
+                      "format": "int32"
+                    },
+                    "period_unit": {
+                      "pattern": "^(DAY|WEEK|MONTH|YEAR)$",
+                      "type": "string",
+                      "description": "Specifies duration. One of `DAY`, `WEEK`, `MONTH`, `YEAR`."
+                    }
+                  },
+                  "nullable": true
+                },
+                "duration_type": {
+                  "pattern": "^(ONCE|CUSTOM|INDEFINITELY)$",
+                  "type": "string",
+                  "description": "Determines how long the coupon's discount remains active after being applied. Possible values: \n- `ONCE`: Applies only to the first charge of a subscription or a one-off invoice.\n- `CUSTOM`: Applies to all charges within a specified number of billing cycles, as defined by duration.\n- `INDEFINITELY`: Applies to all future charges for the subscription until it is removed.\nThis field cannot be updated once the coupon has been redeemed."
+                },
+                "expires_at": {
+                  "type": "string",
+                  "description": "Time after which the coupon can no longer be redeemed."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the coupon."
+                },
+                "percentage_off": {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "number",
+                  "description": "The percentage to deduct when discount_model is PERCENTAGE. \nThis field cannot be updated once the coupon has been redeemed."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Coupon"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Coupon object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.discount:write",
+          "group": "Billing",
+          "resource_name": "Discounts",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    }
+  },
+  "schemas": {
+    "Coupon": {
+      "required": [
+        "active",
+        "created_at",
+        "discount_model",
+        "duration_type",
+        "id",
+        "name",
+        "times_redeemed",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean",
+          "description": " `true` if the coupon is available to be applied to objects. `false` otherwise."
+        },
+        "amount_off": {
+          "type": "number",
+          "description": "The fixed amount to deduct when `discount_model` is `FLAT`."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when the coupon was created.",
+          "format": "date-time"
+        },
+        "currency": {
+          "type": "string",
+          "description": "The currency of `amount_off` when `discount_model` is `FLAT`."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the coupon providing business context."
+        },
+        "discount_model": {
+          "type": "string",
+          "description": "Specified how to calculate the discount amount when applied, one of \n- `FLAT`: fixed amount off.\n- `PERCENTAGE`: percentage off."
+        },
+        "duration": {
+          "$ref": "#/components/schemas/CouponDuration",
+          "description": "The duration of the coupon to apply, when `duration_type`is `CUSTOM`. `null` if `duration_type` is `ONCE` or `INDEFINITELY`."
+        },
+        "duration_type": {
+          "type": "string",
+          "description": "Determines how long the coupon's discount remains active after being applied. Possible values: \n- `ONCE`: Applies only to the first charge of a subscription or a one-off invoice.\n- `CUSTOM`: Applies to all charges within a specified number of billing cycles, as defined by duration.\n- `INDEFINITELY`: Applies to all future charges for the subscription until it is removed."
+        },
+        "expires_at": {
+          "type": "string",
+          "description": "Time after which the coupon can no longer be redeemed."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Coupon object."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the coupon."
+        },
+        "percentage_off": {
+          "type": "number",
+          "description": "The percentage between 0 to 100 to be applied to deduct when `discount_model` is `PERCENTAGE`."
+        },
+        "times_redeemed": {
+          "type": "integer",
+          "description": "The number of times this coupon has been redeemed.",
+          "format": "int32"
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when the coupon was updated.",
+          "format": "date-time"
+        }
+      }
+    },
+    "CouponDuration": {
+      "required": [
+        "period",
+        "period_unit"
+      ],
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "The number of period units.",
+          "format": "int32",
+          "minimum": 1
+        },
+        "period_unit": {
+          "type": "string",
+          "description": "Specifies duration. One of `DAY`, `WEEK`, `MONTH`, `YEAR`.",
+          "pattern": "^(DAY|WEEK|MONTH|YEAR)$"
+        }
+      },
+      "description": "The duration of the coupon to apply, when `duration_type`is `CUSTOM`. `null` if `duration_type` is `ONCE` or `INDEFINITELY`."
+    },
+    "CursorPaginationClientApiResponseCoupon": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/Coupon"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  },
+  "sdk_annotations": {
+    "duration.nullable": "The selected field description explicitly says null for ONCE/INDEFINITELY."
+  }
+}

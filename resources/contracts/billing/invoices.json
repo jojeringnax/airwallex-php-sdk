@@ -313,6 +313,816 @@
       ],
       "sdkClearable": false,
       "sdkPagination": true
+    },
+    "createInvoice": {
+      "apiPath": "/api/v1/billing/invoices/create",
+      "method": "post",
+      "description": "Creates a one-off Invoice.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "billing_customer_id",
+                "currency",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "billing_customer_id": {
+                  "type": "string",
+                  "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) who will be charged."
+                },
+                "collection_method": {
+                  "pattern": "^(CHARGE_ON_CHECKOUT|OUT_OF_BAND|AUTO_CHARGE)$",
+                  "type": "string",
+                  "description": "Specify how payment is collected, one of `AUTO_CHARGE`, `CHARGE_ON_CHECKOUT` or `OUT_OF_BAND`."
+                },
+                "currency": {
+                  "type": "string",
+                  "description": "The currency of the Invoice in 3-letter ISO-4217 format."
+                },
+                "days_until_due": {
+                  "type": "integer",
+                  "description": "Number of days from invoice finalization until payment is due. Only one of `days_until_due` and `due_at` should be passed.",
+                  "format": "int32"
+                },
+                "default_tax_percent": {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "number",
+                  "description": "The tax percent between `0` and `100` to be applied to each Line Item's price. The tax will be exclusive. Defaults to `0`."
+                },
+                "discounts": {
+                  "maxItems": 1,
+                  "minItems": 0,
+                  "type": "array",
+                  "description": "List of discounts to be applied to the invoice. Invoice line item discounts are applied before invoice discounts. Currently, only one element is supported.",
+                  "items": {
+                    "required": [
+                      "coupon",
+                      "type"
+                    ],
+                    "type": "object",
+                    "properties": {
+                      "coupon": {
+                        "required": [
+                          "id"
+                        ],
+                        "type": "object",
+                        "description": "Coupon to redeem into a discount for this resource. Only required when `type` = `COUPON`.",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Id of the Coupon object."
+                          }
+                        }
+                      },
+                      "type": {
+                        "pattern": "^(COUPON)$",
+                        "type": "string",
+                        "description": "Specifies how to obtain the discount. One of: `COUPON`."
+                      }
+                    }
+                  }
+                },
+                "due_at": {
+                  "type": "string",
+                  "description": "Due date set by the merchant for this invoice, if any. Only one of `days_until_due` and `due_at` should be passed."
+                },
+                "enable_automatic_tax": {
+                  "type": "boolean",
+                  "description": "Whether automatic tax is enabled for this invoice. When enabled, the system attempts to calculate taxes automatically. Defaults to `false`."
+                },
+                "footer": {
+                  "type": "string",
+                  "description": "Additional payment instructions or supplementary information that merchants can share with their customers. Displayed in the Invoice PDF."
+                },
+                "legal_entity_id": {
+                  "type": "string",
+                  "description": "ID of the legal entity to be used as billing entity. You can find this ID in the Airwallex web app > Settings. Required if you have more than 1 entity in your organisation."
+                },
+                "linked_payment_account_id": {
+                  "type": "string",
+                  "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section. If `collection_method` is `CHARGE_ON_CHECKOUT` and your organisation has only one payment account, it will be automatically populated with that account by default."
+                },
+                "memo": {
+                  "maxLength": 500,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "String used for merchants to share a custom message to their customers. Referenced as memo or invoice note in Webapp."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                },
+                "number": {
+                  "type": "string",
+                  "description": "Unique invoice number specified by the merchant. If omitted, Airwallex generates one automatically."
+                },
+                "payment_options": {
+                  "type": "object",
+                  "description": "Payment settings of this Invoice. Only applicable if collection_method is `CHARGE_ON_CHECKOUT`.",
+                  "properties": {
+                    "payment_method_save": {
+                      "type": "object",
+                      "description": "Settings for saving this payment method for future use.",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "description": "Controls whether the payment method can be saved for future use. Possible values: `ENABLED`, `DISABLED`, or `COLLECT_CONSENT`.  \n`ENABLED`: The payment method will be saved for future use.  \n`DISABLED`: The payment method will not be saved.  \n`COLLECT_CONSENT`: The digital invoice UI asks the customer whether they want to save the payment method. Only applicable to cards."
+                        },
+                        "next_triggered_by": {
+                          "type": "string",
+                          "description": "Indicates who will use the saved payment source to trigger future payments. One of `MERCHANT` or `CUSTOMER`.  \nIf `MERCHANT`, a Payment Source is created for future use. If `CUSTOMER`, the payment method is saved only with the payment provider."
+                        }
+                      }
+                    },
+                    "payment_method_types": {
+                      "type": "array",
+                      "description": "Specify which payment methods to display on the digital invoice page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the digital invoice page.  \nPossible enum values: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bank_transfer`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`.",
+                      "items": {
+                        "type": "string",
+                        "description": "Specify which payment methods to display on the digital invoice page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the digital invoice page.  \nPossible enum values: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bank_transfer`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`."
+                      }
+                    }
+                  }
+                },
+                "payment_source_id": {
+                  "type": "string",
+                  "description": "ID of the [Payment Source](/docs/api/billing/payment_sources) to pay for the invoice. Required when `collection_method` is `AUTO_CHARGE`.  \nIf `collection_method` is `CHARGE_ON_CHECKOUT`, a Payment Source is automatically created during invoice payment when `payment_options.payment_method_save.next_triggered_by` is `MERCHANT` and `payment_options.payment_method_save.mode` is `ENABLED`, or when it is `COLLECT_CONSENT` and the customer has given consent."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                },
+                "ui_options": {
+                  "type": "object",
+                  "description": "UI configuration for the digital invoice page.",
+                  "properties": {
+                    "theme_id": {
+                      "type": "string",
+                      "description": "ID of the theme to apply to this invoice, overriding the theme configured for its legal entity. You can find the theme ID in the Airwallex web app under Settings > Themes."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:write",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "updateInvoice": {
+      "apiPath": "/api/v1/billing/invoices/{id}/update",
+      "method": "post",
+      "description": "Updates a draft Invoice. Only fields provided in the request are updated, while omitted fields remain unchanged. Array fields are fully replaced if included. Set a field to null or an empty string (for strings) to clear its value.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "billing_customer_id": {
+                  "type": "string",
+                  "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) who this Invoice is to be issued to."
+                },
+                "collection_method": {
+                  "pattern": "^(CHARGE_ON_CHECKOUT|OUT_OF_BAND|AUTO_CHARGE)$",
+                  "type": "string",
+                  "description": "Specify how payment is collected, one of `AUTO_CHARGE`, `CHARGE_ON_CHECKOUT` or `OUT_OF_BAND`."
+                },
+                "currency": {
+                  "type": "string",
+                  "description": "The currency of the Invoice in 3-letter ISO-4217 format."
+                },
+                "days_until_due": {
+                  "type": "integer",
+                  "description": "Number of days from invoice finalization until payment is due. Only one of `days_until_due` and `due_at` should be passed.",
+                  "format": "int32"
+                },
+                "default_tax_percent": {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "number",
+                  "description": "The tax percent between `0` and `100` to be applied to each Line Item's price. The tax will be exclusive."
+                },
+                "discounts": {
+                  "type": "array",
+                  "description": "Desired set of invoice-level discounts. If provided, replaces all existing discounts. Currently, only one element is supported.",
+                  "items": {
+                    "required": [
+                      "coupon"
+                    ],
+                    "type": "object",
+                    "properties": {
+                      "coupon": {
+                        "required": [
+                          "id"
+                        ],
+                        "type": "object",
+                        "description": "Coupon to redeem into a discount for this resource. Only required when `type` = `COUPON`.",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Id of the Coupon object."
+                          }
+                        }
+                      },
+                      "type": {
+                        "pattern": "^(COUPON)$",
+                        "type": "string",
+                        "description": "Specifies how to obtain a new discount. One of: `COUPON`."
+                      }
+                    }
+                  }
+                },
+                "due_at": {
+                  "type": "string",
+                  "description": "Due date set by the merchant for this invoice, if any. Only one of `days_until_due` and `due_at` should be passed."
+                },
+                "enable_automatic_tax": {
+                  "type": "boolean",
+                  "description": "Whether automatic tax is enabled for this invoice. When enabled, the system attempts to calculate taxes automatically."
+                },
+                "footer": {
+                  "type": "string",
+                  "description": "Additional payment instructions or supplementary information that merchants can share with their customers. Displayed in the Invoice PDF."
+                },
+                "legal_entity_id": {
+                  "type": "string",
+                  "description": "ID of the legal entity to be used as billing entity. You can find this ID in the Airwallex web app > Settings."
+                },
+                "linked_payment_account_id": {
+                  "type": "string",
+                  "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section. Required if `collection_method` is `CHARGE_ON_CHECKOUT` when the invoice is finalized."
+                },
+                "memo": {
+                  "type": "string",
+                  "description": "String used to describe the object. Referenced as memo or invoice note in Webapp."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of key-value pairs that you can attach to an invoice object. It can be useful for storing additional information about the invoice in a structured format."
+                  },
+                  "description": "A set of key-value pairs that you can attach to an invoice object. It can be useful for storing additional information about the invoice in a structured format."
+                },
+                "payment_options": {
+                  "type": "object",
+                  "description": "Payment settings of this Invoice. Only applicable if collection_method is `CHARGE_ON_CHECKOUT`.",
+                  "properties": {
+                    "payment_method_save": {
+                      "type": "object",
+                      "description": "Settings for saving this payment method for future use.",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "description": "Controls whether the payment method can be saved for future use. Possible values: `ENABLED`, `DISABLED`, or `COLLECT_CONSENT`.  \n`ENABLED`: The payment method will be saved for future use.  \n`DISABLED`: The payment method will not be saved.  \n`COLLECT_CONSENT`: The digital invoice UI asks the customer whether they want to save the payment method. Only applicable to cards."
+                        },
+                        "next_triggered_by": {
+                          "type": "string",
+                          "description": "Indicates who will use the saved payment source to trigger future payments. One of `MERCHANT` or `CUSTOMER`.  \nIf `MERCHANT`, a Payment Source is created for future use. If `CUSTOMER`, the payment method is saved only with the payment provider."
+                        }
+                      }
+                    },
+                    "payment_method_types": {
+                      "type": "array",
+                      "description": "Specify which payment methods to display on the digital invoice page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the digital invoice page.  \nPossible enum values: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bank_transfer`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`.",
+                      "items": {
+                        "type": "string",
+                        "description": "Specify which payment methods to display on the digital invoice page and set their display order. Only methods supported for the specified currency and the customer's country code will appear on the digital invoice page.  \nPossible enum values: `afterpay`, `airwallex_pay`, `alfamart`, `alipaycn`, `alipayhk`, `applepay`, `atome`, `au_pay`, `axs_kiosk`, `bancontact`, `bank_transfer`, `bigc`,`bitpay`, `bkash`, `blik`, `boost`, `card`, `cash_app_pay`, `dana`, `doku_ewallet`, `dragonpay`, `duit_now`, `d_barai`, `enets`, `eps`, `esun`, `family_mart`, `fps`, `fpx`, `gcash`, `giropay`, `googlepay`, `go_pay`, `grabpay`, `hi_life`, `ideal`, `indomaret`, `jenius_pay`, `kakaopay`, `klarna`, `konbini`, `korean_local_card`, `laybuy`, `line_pay`, `linkaja`, `maxima`, `merpay`, `multibanco`, `mybank`, `narvesen`, `naver_pay`, `online_banking`, `ovo`, `p24`, `paybybankapp`, `payco`, `payeasy`, `payeasy_atm`, `payme`, `paypal`, `paypay`, `paypost`, `paysafecard`, `paysafecash`, `paysera`, `payu`, `pay_now`, `perlas_terminals`, `permatanet`, `permata_atm`, `pix`, `poli`, `prompt_pay`, `rabbit_line_pay`, `rakuten_pay`, `safetypay`, `samsung_pay`, `sam_kiosk`, `satispay`, `seven_eleven`, `shopee_pay`, `skrill`, `sofort`, `spei`, `tesco_lotus`, `tng`, `toss_pay`, `truemoney`, `trustly`, `twint`, `upi`, `venmo`, `verkkopankki`, `wechatpay`, `zip`."
+                      }
+                    }
+                  }
+                },
+                "payment_source_id": {
+                  "type": "string",
+                  "description": "ID of the [Payment Source](/docs/api/billing/payment_sources) to pay for the invoice. Required when `collection_method` is `AUTO_CHARGE`.  \nIf `collection_method` is `CHARGE_ON_CHECKOUT`, a Payment Source is automatically created during invoice payment when `payment_options.payment_method_save.next_triggered_by` is `MERCHANT` and `payment_options.payment_method_save.mode` is `ENABLED`, or when it is `COLLECT_CONSENT` and the customer has given consent."
+                },
+                "ui_options": {
+                  "type": "object",
+                  "description": "UI configuration for the digital invoice page.",
+                  "properties": {
+                    "theme_id": {
+                      "type": "string",
+                      "description": "ID of the theme to apply to this invoice, overriding the theme configured for its legal entity. You can find the theme ID in the Airwallex web app under Settings > Themes."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Invoice object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:write",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": true,
+      "sdkPagination": false
+    },
+    "invoices_finalize": {
+      "apiPath": "/api/v1/billing/invoices/{id}/finalize",
+      "method": "post",
+      "description": "Finalizes a draft invoice.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Invoice object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:write",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "invoices_addLineItems": {
+      "apiPath": "/api/v1/billing/invoices/{id}/add_line_items",
+      "method": "post",
+      "description": "This is only possible when the status of an [Invoice](/docs/api/billing/invoices) is in `DRAFT`. You can add up to 100 line items at a time. This bulk operation is atomic.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "line_items",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "line_items": {
+                  "maxItems": 100,
+                  "minItems": 0,
+                  "type": "array",
+                  "description": "List of Invoice Line Item to be created.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "description": {
+                        "maxLength": 500,
+                        "minLength": 0,
+                        "type": "string",
+                        "description": "Description of the Invoice Line Item."
+                      },
+                      "discounts": {
+                        "maxItems": 1,
+                        "minItems": 0,
+                        "type": "array",
+                        "description": "A list of discounts to be applied to the invoice line item. Discounts of invoice line items are applied before invoice discounts. Currently, only one element is supported.",
+                        "items": {
+                          "required": [
+                            "coupon",
+                            "type"
+                          ],
+                          "type": "object",
+                          "properties": {
+                            "coupon": {
+                              "required": [
+                                "id"
+                              ],
+                              "type": "object",
+                              "description": "Coupon to redeem into a discount for this resource. Only required when `type` = `COUPON`.",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "description": "Id of the Coupon object."
+                                }
+                              }
+                            },
+                            "type": {
+                              "pattern": "^(COUPON)$",
+                              "type": "string",
+                              "description": "Specifies how to obtain the discount. One of: `COUPON`."
+                            }
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                        },
+                        "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                      },
+                      "price": {
+                        "required": [
+                          "pricing_model"
+                        ],
+                        "type": "object",
+                        "description": "One-time price definition following the same schema as the [Price](/docs/api/billing/prices) resource. Exactly one of `price_id` or `price` is required.",
+                        "properties": {
+                          "description": {
+                            "maxLength": 500,
+                            "minLength": 0,
+                            "type": "string",
+                            "description": "Price description."
+                          },
+                          "flat_amount": {
+                            "maximum": 9999999999,
+                            "minimum": 0,
+                            "type": "number",
+                            "description": "The fixed amount to be charged. Only required when the pricing model is `FLAT`."
+                          },
+                          "pricing_model": {
+                            "type": "string",
+                            "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `FLAT`: a fixed price.\n- `PER_UNIT`: a fixed price per unit quantity."
+                          },
+                          "product": {
+                            "required": [
+                              "name"
+                            ],
+                            "type": "object",
+                            "description": "One-time product definition following the same schema as the [Product](/docs/api/billing/products). Exactly one of `product_id` or `product` is required.",
+                            "properties": {
+                              "description": {
+                                "maxLength": 500,
+                                "minLength": 0,
+                                "type": "string",
+                                "description": "Product description. Used for internal classification and identification."
+                              },
+                              "metadata": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                                },
+                                "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                              },
+                              "name": {
+                                "maxLength": 200,
+                                "minLength": 0,
+                                "type": "string",
+                                "description": "Product name."
+                              },
+                              "tax_code": {
+                                "type": "string",
+                                "description": "The tax category of the product."
+                              },
+                              "unit": {
+                                "maxLength": 30,
+                                "minLength": 0,
+                                "type": "string",
+                                "description": "Product unit."
+                              }
+                            }
+                          },
+                          "product_id": {
+                            "type": "string",
+                            "description": "ID of the [Product](/docs/api/billing/products) object this price is associated with. Exactly one of `product_id` or `product` is required."
+                          },
+                          "tax_included": {
+                            "type": "boolean",
+                            "description": "Whether the price includes tax. Defaults to `false`."
+                          },
+                          "unit_amount": {
+                            "maximum": 9999999999,
+                            "minimum": 0,
+                            "type": "number",
+                            "description": "The amount to be charged per product unit. Only required when the pricing model is `PER_UNIT`."
+                          }
+                        }
+                      },
+                      "price_id": {
+                        "type": "string",
+                        "description": "ID of the price object. Exactly one of `price` or `price_id` is required."
+                      },
+                      "quantity": {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "The product quantity.",
+                        "format": "int32"
+                      },
+                      "tax_percent": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "The effective tax percent of this subscription item."
+                      }
+                    }
+                  }
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Invoice object that this Invoice Line Item belongs to.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:write",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "invoices_updateLineItems": {
+      "apiPath": "/api/v1/billing/invoices/{id}/update_line_items",
+      "method": "post",
+      "description": "This is only possible when the status of an [Invoice](/docs/api/billing/invoices) is in `DRAFT`. You can update up to 100 line items at a time. This bulk operation is atomic.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "line_items"
+              ],
+              "type": "object",
+              "properties": {
+                "line_items": {
+                  "maxItems": 100,
+                  "minItems": 0,
+                  "type": "array",
+                  "description": "List of Invoice Line Item to be updated.",
+                  "items": {
+                    "required": [
+                      "id"
+                    ],
+                    "type": "object",
+                    "properties": {
+                      "description": {
+                        "type": "string",
+                        "description": "Description of the Invoice Line Item."
+                      },
+                      "discounts": {
+                        "type": "array",
+                        "description": "Desired set of invoice line item level discounts. If provided, replaces all existing discounts. Currently, only one element is supported.",
+                        "items": {
+                          "required": [
+                            "coupon"
+                          ],
+                          "type": "object",
+                          "properties": {
+                            "coupon": {
+                              "required": [
+                                "id"
+                              ],
+                              "type": "object",
+                              "description": "Coupon to redeem into a discount for this resource. Only required when `type` = `COUPON`.",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "description": "Id of the Coupon object."
+                                }
+                              }
+                            },
+                            "type": {
+                              "pattern": "^(COUPON)$",
+                              "type": "string",
+                              "description": "Specifies how to obtain a new discount. One of: `COUPON`."
+                            }
+                          }
+                        }
+                      },
+                      "id": {
+                        "type": "string",
+                        "description": "ID of the Invoice Line Item."
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                        },
+                        "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+                      },
+                      "quantity": {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "The product quantity.",
+                        "format": "int32"
+                      },
+                      "tax_percent": {
+                        "type": "number",
+                        "description": "The effective tax percent of this subscription item."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Invoice object that this Invoice Line Item belongs to.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.invoice:write",
+          "group": "Billing",
+          "resource_name": "Invoices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
     }
   },
   "schemas": {
@@ -368,6 +1178,10 @@
         "bank_transfer_instructions": {
           "$ref": "#/components/schemas/InvoiceBankTransferInstructions",
           "description": "Bank transfer instructions for paying this Invoice. Included when bank transfer is enabled, the Invoice currency is supported, and the Billing Customer is eligible."
+        },
+        "billing_customer": {
+          "$ref": "#/components/schemas/Billing_BillingCustomerSnapshot",
+          "description": "Snapshot of the [Billing Customer](/docs/api/billing/billing_customers) captured on this invoice."
         },
         "billing_customer_id": {
           "type": "string",
@@ -1396,6 +2210,87 @@
           "description": "The page cursor used for search before page."
         }
       }
+    },
+    "Billing_BillingCustomerSnapshot": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/components/schemas/CustomerAddress",
+          "description": "Address of the billing customer."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the billing customer."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the billing customer."
+        },
+        "phone_number": {
+          "type": "string",
+          "description": "Phone number of the billing customer."
+        },
+        "tax_identification_number": {
+          "type": "string",
+          "description": "Tax identification number of the billing customer."
+        },
+        "type": {
+          "type": "string",
+          "description": "Type of the billing customer.",
+          "enum": [
+            "BUSINESS",
+            "INDIVIDUAL"
+          ],
+          "x-enumDescriptions": {
+            "BUSINESS": "A business entity billing customer.",
+            "INDIVIDUAL": "An individual billing customer."
+          }
+        }
+      },
+      "description": "Snapshot of the billing customer."
+    },
+    "CustomerAddress": {
+      "required": [
+        "country_code"
+      ],
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "description": "City of the address."
+        },
+        "country_code": {
+          "type": "string",
+          "description": "The two-letter country code in ISO 3166-1 alpha-2 format."
+        },
+        "postcode": {
+          "type": "string",
+          "description": "PostCode of the address."
+        },
+        "state": {
+          "type": "string",
+          "description": "State or province of the address."
+        },
+        "street": {
+          "type": "string",
+          "description": "Street of the address."
+        }
+      },
+      "description": "Address of the billing customer."
     }
+  },
+  "request_updates": {
+    "reviewed": "2026-11-12",
+    "source": "https://www.airwallex.com/docs/api/billing/invoices",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "operations": [
+      "createInvoice",
+      "updateInvoice",
+      "invoices_addLineItems",
+      "invoices_updateLineItems",
+      "invoices_finalize"
+    ],
+    "response_addition": "Invoice.billing_customer and its reachable snapshot schemas; other shared schemas unchanged."
   }
 }
