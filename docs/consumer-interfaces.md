@@ -32,6 +32,7 @@ Billing item and line-item reads use the direct methods accepted in [#61](https:
 | --- | --- |
 | `subscriptions()` | `retrieveItem(string $id, string $itemId): array`, `listItems(string $id, array $query = []): array` |
 | `invoices()` | `retrieveLineItem(string $id, string $itemId): array`, `listLineItems(string $id, array $query = []): array` |
+| `transactions()` | `retrieve(string $id): array`, `list(array $query): array`; exactly one `invoice_id` or `credit_note_id` is required in the query |
 
 The direct resource structure keeps item reads discoverable alongside the parent operations. Every call retains the explicit parent ID; individual reads also take the item ID. Responses remain native arrays, and list calls return one bookmark-paginated page. The names and parameter shapes follow the shared compatibility policy once released. See the [executed item-read recipe](../examples/billing-item-reads.php) for all four calls and [Billing resources](billing-resources.md) for schema provenance and remaining provider evidence.
 

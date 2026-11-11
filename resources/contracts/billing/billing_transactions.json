@@ -1,0 +1,275 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/billing_transactions",
+  "reviewed": "2026-11-11",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+  "endpoints": {
+    "retrieveBillingTransaction": {
+      "apiPath": "/api/v1/billing/billing_transactions/{id}",
+      "method": "get",
+      "description": "Retrieves the details of a Billing Transaction.",
+      "parameters": [
+        {
+          "description": "ID of the Billing Transaction object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Transaction"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.transaction:read",
+          "group": "Billing",
+          "resource_name": "Billing Transactions",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listBillingTransactions": {
+      "apiPath": "/api/v1/billing/billing_transactions",
+      "method": "get",
+      "description": "Retrieves a list of Billing Transactions based on the query parameters.",
+      "parameters": [
+        {
+          "description": "ID of the [Invoice](/docs/api/billing/invoices) this Billing Transaction is associated with. Exactly one of `invoice_id` or `credit_note_id` is required.",
+          "in": "query",
+          "name": "invoice_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "ID of the [Credit Note](/docs/api/billing/credit_notes) this Billing Transaction is associated with. Exactly one of `invoice_id` or `credit_note_id` is required.",
+          "in": "query",
+          "name": "credit_note_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "example": "crn_hkpda1313adfadfa"
+          }
+        },
+        {
+          "description": "The start date of `created_at` in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end date of `created_at` in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of Billing Transactions per page. Defaults to `20`.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseTransaction"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.transaction:read",
+          "group": "Billing",
+          "resource_name": "Billing Transactions",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    }
+  },
+  "schemas": {
+    "Transaction": {
+      "required": [
+        "amount",
+        "billing_customer_id",
+        "created_at",
+        "currency",
+        "id",
+        "status",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number",
+          "description": "The total amount of this billing transaction."
+        },
+        "billing_customer_id": {
+          "type": "string",
+          "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) who is making this Billing Transaction."
+        },
+        "cancelled_at": {
+          "type": "string",
+          "description": "Time when this billing transaction was cancelled."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when this billing transaction was created."
+        },
+        "currency": {
+          "type": "string",
+          "description": "The currency of the Billing Transaction in 3-letter ISO-4217 format."
+        },
+        "external_id": {
+          "type": "string",
+          "description": "ID of the [Payment Intent](/docs/api/payments/payment_intents) associated with the Billing Transaction when type is `PAYMENT`, or ID of the [Refund](/docs/api/payments/refunds) when type is `REFUND`."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Billing Transaction object."
+        },
+        "invoice_id": {
+          "type": "string",
+          "description": "ID of the [Invoice](/docs/api/billing/invoices) this billing transaction is associated with."
+        },
+        "linked_payment_account_id": {
+          "type": "string",
+          "description": "ID of the linked payment account to collect payment. You can find this ID in the Airwallex web app > Settings > Account details, within the Account Information section."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "out_of_band": {
+          "type": "boolean",
+          "description": "Returns true if the billing transaction was manually marked as succeeded, returns false if the transaction hasn't succeeded yet or was processed on Airwallex."
+        },
+        "payment_source_id": {
+          "type": "string",
+          "description": "ID of the [Payment Source](/docs/api/billing/payment_sources) for which this billing transaction is made."
+        },
+        "status": {
+          "type": "string",
+          "description": "Status of the billing transaction, one of `CREATED`, `SUCCEEDED`, `CANCELLED` and `FAILED`."
+        },
+        "succeeded_at": {
+          "type": "string",
+          "description": "The time that the billing transaction succeeded."
+        },
+        "type": {
+          "type": "string",
+          "description": "Type of the billing transaction. One of `PAYMENT` or `REFUND`."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when this billing transaction was last updated."
+        },
+        "credit_note_id": {
+          "type": "string",
+          "description": "ID of the [Credit Note](/docs/api/billing/credit_notes) this Billing Transaction is associated with."
+        }
+      }
+    },
+    "CursorPaginationClientApiResponseTransaction": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/Transaction"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  }
+}
