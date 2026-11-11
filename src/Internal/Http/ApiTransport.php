@@ -23,6 +23,7 @@ final readonly class ApiTransport
         private RetryPolicy $retryPolicy,
         #[SensitiveParameter] private ?string $delegatedAccountId,
         private JsonCodec $codec = new JsonCodec(),
+        private bool $preserveResponseObjects = false,
     ) {
     }
 
@@ -95,6 +96,7 @@ final readonly class ApiTransport
                     $operation->responseDecimalPaths,
                     $operation->responseIntegerPaths,
                     [...$sensitive, ...$this->tokens->sensitiveValues()],
+                    preserveObjects: $this->preserveResponseObjects,
                 );
             } catch (ApiException $error) {
                 if ($error->httpStatus() === 401) {

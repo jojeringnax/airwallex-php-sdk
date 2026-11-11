@@ -28,6 +28,7 @@ final readonly class ResponseDecoder
         array $decimalPaths = [],
         array $integerPaths = [],
         #[SensitiveParameter] array $sensitiveValues = [],
+        bool $preserveObjects = false,
     ): array {
         $status = $response->getStatusCode();
         try {
@@ -59,7 +60,7 @@ final readonly class ResponseDecoder
             ];
             throw new ApiException($status, $code, in_array($source, $safeRoots, true) ? $source : null);
         }
-        return $this->codec->decodeObject($raw, $decimalPaths, $integerPaths);
+        return $this->codec->decodeObject($raw, $decimalPaths, $integerPaths, $preserveObjects);
     }
 
     /** @param list<string> $sensitiveValues */

@@ -35,6 +35,7 @@ final class Client
         private readonly ?CacheInterface $tokenCache = null,
         ?Closure $clock = null,
         ?RetryPolicy $retryPolicy = null,
+        private readonly bool $preserveResponseObjects = false,
     ) {
         if ($loginAccountId !== null) {
             self::validateAccount($loginAccountId);
@@ -91,7 +92,14 @@ final class Client
             $this->tokenCache,
             $this->clock
         );
-        return new ApiTransport($exchange, $tokens, $decoder, $this->retryPolicy, $this->delegatedAccountId);
+        return new ApiTransport(
+            $exchange,
+            $tokens,
+            $decoder,
+            $this->retryPolicy,
+            $this->delegatedAccountId,
+            preserveResponseObjects: $this->preserveResponseObjects,
+        );
     }
 
     private static function validateAccount(#[SensitiveParameter] string $id): void
