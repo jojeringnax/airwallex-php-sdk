@@ -574,5 +574,14 @@
         }
       }
     }
+  },
+  "tax_review": {
+    "reviewed": "2026-11-12",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "request_paths_unchanged": [
+      "createBillingCustomer/content/application/json/schema/properties/tax_identification_number",
+      "updateBillingCustomer/content/application/json/schema/properties/tax_identification_number"
+    ]
   }
 }

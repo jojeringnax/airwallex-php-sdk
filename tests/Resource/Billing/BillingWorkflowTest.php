@@ -769,9 +769,9 @@ final class BillingWorkflowTest extends HttpTestCase
                     'request_id' => 'x', 'discounts' => [['coupon' => ['id' => '']]],
                 ]),
         ];
-        yield 'deferred-tax' => [
+        yield 'invalid-tax-flag' => [
             static fn(Client $c): array =>
-                $c->billing()->subscriptions()->update('sub', ['request_id' => 'x', 'enable_automatic_tax' => true]),
+                $c->billing()->subscriptions()->update('sub', ['request_id' => 'x', 'enable_automatic_tax' => 'true']),
         ];
     }
     #[DataProvider('providerFailures')]

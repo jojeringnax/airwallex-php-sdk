@@ -43,6 +43,8 @@ For implemented environment, token, transport, retry and diagnostic behavior, se
 
 The [advanced Billing extension](planning.md#advanced-billing-extension) adds `billing()->coupons()` with the standard create/retrieve/list/update signatures. Supporting `invoices()` writes use standard create/update, `addLineItems(string $id, array $body): array`, `updateLineItems(string $id, array $body): array`, and bodyless `finalize(string $id): array`. [Coupon usage](billing-resources.md#coupons-and-one-off-invoice-application) owns request conditions, examples and unreleased availability.
 
+The [tax extension](billing-resources.md#tax-controls) uses existing provider-shaped arrays: exact-string manual percentages and boolean automatic-tax flags. It introduces no tax calculator or new resource accessor. Applications select their approved mode and prepare location, category and registration prerequisites.
+
 Read the relevant [consumer example](consumer-examples.md) when implementing or reviewing a workflow:
 
 | Work | Reference |

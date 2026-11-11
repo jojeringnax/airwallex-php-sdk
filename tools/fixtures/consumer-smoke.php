@@ -88,6 +88,7 @@ $expectConsumer($coupon['amount_off'] === '10.000000000001', 'Installed coupon s
 $invoice = $client->billing()->invoices()->create([
     'request_id' => 'persisted-invoice-action', 'billing_customer_id' => 'synthetic-billing-customer',
     'currency' => 'USD', 'collection_method' => 'OUT_OF_BAND',
+    'enable_automatic_tax' => false, 'default_tax_percent' => '7.125000000001',
     'discounts' => [['type' => 'COUPON', 'coupon' => ['id' => 'synthetic-coupon']]],
 ]);
 $expectConsumer($invoice['id'] === 'synthetic-invoice', 'Installed Invoice creation failed.');
@@ -119,6 +120,10 @@ $expectConsumer(
 $expectConsumer(
     str_contains((string) $requests[6]->getBody(), '"amount_off":10.000000000001'),
     'Installed coupon wire amount changed.'
+);
+$expectConsumer(
+    str_contains((string) $requests[7]->getBody(), '"default_tax_percent":7.125000000001'),
+    'Installed tax rate lost precision.'
 );
 $body = '{"name":"future.event","amount":19.9000,"nested":{},"list":[]}';
 $timestamp = '1700000000000';
