@@ -52,7 +52,7 @@ try {
         throw new RuntimeException('Package source changed during artifact validation.');
     }
     $manifest = [
-        'intended_release' => '0.1.0', 'source_commit' => $commit, 'source_clean' => $clean,
+        'intended_release' => null, 'source_commit' => $commit, 'source_clean' => $clean,
         'api_version' => '2026-08-21', 'webhook_version' => '2026-08-21',
         'php_version' => PHP_VERSION, 'dependencies' => $lowest ? 'lowest' : 'latest',
         'composer_version' => capturePackageCommand([...consumerComposerCommand(), '--version', '--no-ansi'], $root),
