@@ -7,6 +7,7 @@ namespace Jojeringnax\Airwallex\Resource;
 use Jojeringnax\Airwallex\Exception\ConfigurationException;
 use Jojeringnax\Airwallex\Internal\Http\ApiTransport;
 use Jojeringnax\Airwallex\Resource\Billing\Checkouts;
+use Jojeringnax\Airwallex\Resource\Billing\Coupons;
 use Jojeringnax\Airwallex\Resource\Billing\Customers;
 use Jojeringnax\Airwallex\Resource\Billing\Invoices;
 use Jojeringnax\Airwallex\Resource\Billing\PaymentSources;
@@ -66,6 +67,11 @@ final readonly class Billing
     public function transactions(): Transactions
     {
         return new Transactions($this->transport);
+    }
+
+    public function coupons(): Coupons
+    {
+        return new Coupons($this->transport);
     }
 
     /** @return array<string,never> */

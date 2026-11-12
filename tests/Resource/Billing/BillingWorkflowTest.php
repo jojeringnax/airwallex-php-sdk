@@ -763,9 +763,11 @@ final class BillingWorkflowTest extends HttpTestCase
                 ]
             ),
         ];
-        yield 'deferred-coupon' => [
+        yield 'invalid-coupon' => [
             static fn(Client $c): array =>
-                $c->billing()->subscriptions()->update('sub', ['request_id' => 'x', 'discounts' => []]),
+                $c->billing()->subscriptions()->update('sub', [
+                    'request_id' => 'x', 'discounts' => [['coupon' => ['id' => '']]],
+                ]),
         ];
         yield 'deferred-tax' => [
             static fn(Client $c): array =>

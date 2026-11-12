@@ -18,6 +18,22 @@ final class Rules
     {
         $body = self::normalizeForConditions($body);
         self::unsupportedControls($body);
+        if (in_array($operation, ['createCoupon', 'updateCoupon'], true)) {
+            self::coupon($body);
+        }
+        if ($operation === 'invoices_addLineItems') {
+            foreach (self::itemObjects($body['line_items'] ?? []) as $item) {
+                self::itemPrice($item, true);
+            }
+        }
+        if ($operation === 'createInvoice' && ($body['collection_method'] ?? null) === 'AUTO_CHARGE') {
+            self::requireKeys($body, ['payment_source_id']);
+        }
+        if ($operation === 'createInvoice' || $operation === 'updateInvoice') {
+            if (isset($body['days_until_due'], $body['due_at'])) {
+                Validator::fail();
+            }
+        }
         if ($operation === 'createPrice') {
             self::price($body);
         }
@@ -274,10 +290,24 @@ final class Rules
         foreach ($value as $key => $child) {
             if (
                 ($key === 'metered' && $child !== false)
-                || in_array($key, ['discounts', 'meter_id', 'rate_card_id', 'rate_card_version',
+                || in_array($key, ['meter_id', 'rate_card_id', 'rate_card_version',
                 'enable_automatic_tax', 'default_tax_percent', 'tax_percent'], true)
             ) {
                 Validator::fail();
+            }
+            if ($key === 'discounts' && $child !== null) {
+                if (!is_array($child) || !array_is_list($child) || count($child) > 1) {
+                    Validator::fail();
+                }
+                foreach (self::itemObjects($child) as $discount) {
+                    if (($discount['type'] ?? 'COUPON') !== 'COUPON' || !is_array($discount['coupon'] ?? null)) {
+                        Validator::fail();
+                    }
+                    $couponId = $discount['coupon']['id'] ?? null;
+                    if (!is_string($couponId) || $couponId === '') {
+                        Validator::fail();
+                    }
+                }
             }
             if ($key !== 'metadata' && is_array($child)) {
                 if (array_is_list($child)) {
@@ -292,6 +322,33 @@ final class Rules
                     self::unsupportedControls($child);
                 }
             }
+        }
+    }
+
+    /** @param array<string,mixed> $body */
+    private static function coupon(#[SensitiveParameter] array $body): void
+    {
+        if (($body['discount_model'] ?? null) === 'FLAT') {
+            self::requireKeys($body, ['amount_off', 'currency']);
+        } elseif (($body['discount_model'] ?? null) === 'PERCENTAGE') {
+            self::requireKeys($body, ['percentage_off']);
+        }
+        if (isset($body['percentage_off'])) {
+            Validator::validate($body['percentage_off'], ['type' => 'number', 'minimum' => 0, 'maximum' => 100], []);
+        }
+        if (isset($body['amount_off'])) {
+            Validator::validate($body['amount_off'], ['type' => 'number', 'minimum' => 0], []);
+        }
+        if (($body['duration_type'] ?? null) === 'CUSTOM') {
+            self::requireKeys($body, ['duration']);
+        } elseif (isset($body['duration_type']) && isset($body['duration'])) {
+            Validator::fail();
+        }
+        if (isset($body['expires_at'])) {
+            if (!is_string($body['expires_at'])) {
+                Validator::fail();
+            }
+            Validator::timestamp($body['expires_at']);
         }
     }
 

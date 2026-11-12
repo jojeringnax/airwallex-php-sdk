@@ -4,7 +4,7 @@ Use the resource methods below with an organization-authorized client from [init
 
 ## Operations and contract sources
 
-Every route below is under `/api/v1/billing`. All 32 operations independently declare organization ownership, no on-behalf-of support and the corresponding Billing resource read/write permission in the selected provider metadata. A delegated Payments client cannot call Billing. `linked_payment_account_id` selects an eligible collector; it grants no Billing permission or account eligibility.
+Every route below is under `/api/v1/billing`. All 41 operations independently declare organization ownership, no on-behalf-of support and the corresponding Billing resource read/write permission in the selected provider metadata. A delegated Payments client cannot call Billing. `linked_payment_account_id` selects an eligible collector; it grants no Billing permission or account eligibility.
 
 | Resource accessor | Methods | Official contract / bundled schema |
 | --- | --- | --- |
@@ -14,8 +14,9 @@ Every route below is under `/api/v1/billing`. All 32 operations independently de
 | `paymentSources()` | `create`, `retrieve`, `list` | [Payment Sources](https://www.airwallex.com/docs/api/billing/payment_sources), [schema](../resources/contracts/billing/payment_sources.json) |
 | `checkouts()` | `create`, `retrieve`, `update`, `cancel` | [Billing Checkouts](https://www.airwallex.com/docs/api/billing/billing_checkouts), [schema](../resources/contracts/billing/billing_checkouts.json) |
 | `subscriptions()` | `create`, `retrieve`, `list`, `update`, `cancel`, `retrieveItem`, `listItems` | [Subscriptions](https://www.airwallex.com/docs/api/billing/subscriptions), [schema](../resources/contracts/billing/subscriptions.json) |
-| `invoices()` | `retrieve`, `list`, `retrieveLineItem`, `listLineItems` | [Invoices](https://www.airwallex.com/docs/api/billing/invoices), [schema](../resources/contracts/billing/invoices.json) |
+| `invoices()` | `create`, `retrieve`, `list`, `update`, `finalize`, `addLineItems`, `updateLineItems`, `retrieveLineItem`, `listLineItems` | [Invoices](https://www.airwallex.com/docs/api/billing/invoices), [schema](../resources/contracts/billing/invoices.json) |
 | `transactions()` | `retrieve`, `list` | [Billing Transactions](https://www.airwallex.com/docs/api/billing/billing_transactions), [schema](../resources/contracts/billing/billing_transactions.json) |
+| `coupons()` | `create`, `retrieve`, `list`, `update` | [Coupons](https://www.airwallex.com/docs/api/billing/coupons), [schema](../resources/contracts/billing/coupons.json) |
 
 `create(array $body): array`, `retrieve(string $id): array`, `list(array $query = []): array` and `update(string $id, array $body): array` follow the shared signatures. Checkout `cancel(string $id): array` sends no request body. Subscription `cancel(string $id, array $body): array` requires the original action's `request_id` and explicit `proration_behavior`.
 
@@ -47,7 +48,7 @@ Transaction `amount` is its total exact major-unit amount. `type` describes `PAY
 
 `out_of_band=true` means manually marked succeeded. False means either not yet succeeded or processed on Airwallex; it is insufficient without status/type. The [invoice guide](https://www.airwallex.com/docs/billing/invoicing/get-started-with-invoicing) permits PAID through payments, adjustments or credits. Invoice PAID, an external ID, or a succeeded transaction alone establishes neither settlement nor an application cash allocation. The schema has a singular invoice association but no allocated amount, allocation list or exclusivity guarantee that its total is cash attributable to exactly that invoice. A consumer verifies canonical invoice/customer/collector linkage, stable transaction identity, type/status and explicit out-of-band evidence; any accounting allocation or Payments cross-check must preserve that missing proof. Do not sum total amounts into invoice cash receipts by assumption.
 
-This API is an unreleased additive extension of v0.1.1. Development consumers use an exact-commit SDK archive; final tagged-release qualification remains pending. No sibling path repository or version alias proves release qualification.
+This additive API is available in SDK v0.1.2. Select that feature version explicitly and retain its ordinary registry source/dist provenance; an older SDK or a sibling version alias does not provide the released interface.
 
 ## Price models and tiers
 
@@ -72,9 +73,35 @@ Use the [accepted examples](consumer-examples.md) for customer/source linkage, c
 - Subscription item changes retain omitted existing items. Existing IDs request quantity/metadata changes or deletion; a Price replacement submits deletion plus a new item. Refresh and reconcile returned item references before a later mutation; ID retention is not guaranteed. `default_proration_mode` accepts `NONE`, `PRORATED` and `ALL`; per-item `proration_mode` also accepts `CUSTOM` under the [conditional rules below](#choosing-subscription-financial-controls). Billing actions explicitly defer adjustment, charge immediately while keeping the cycle, or charge and reset the cycle. Cancellation's separate `proration_behavior` is always explicit.
 - Scheduled ending exposes documented update fields, including `cancel_at_period_end`, `ends_at`, `duration` and `remaining_duration`. Setting a flag to false is representable; it is not a guarantee that every schedule can be reversed in every state. Permanent cancellation, outstanding invoices and application access policy remain separate concerns. There are no pause, resume or cancelled-reactivation helpers.
 - Changing `payment_source_id` is an explicit financial action: the selected contract says it immediately retries the last failed invoice. Retrieve resulting Subscription/Invoice state and handle provider rejection. HTTP retries never replay these mutations. Provider dunning and application entitlement decisions remain outside SDK scheduling.
-- Invoice and line-item reads retain exact amounts and nullable PDF/hosted links. The SDK returns a supplied expired link unchanged and performs no download or renewal. `PAID` reports provider invoice reconciliation and does not independently prove cash settlement. Buyer authorization, delivery, storage and stale-link recovery belong to the application. Invoice mutations and preview remain outside accepted coverage.
+- Invoice and line-item reads retain exact amounts and nullable PDF/hosted links. The SDK returns a supplied expired link unchanged and performs no download or renewal. `PAID` reports provider invoice reconciliation and does not independently prove cash settlement. Buyer authorization, delivery, storage and stale-link recovery belong to the application. The coupon extension adds the explicit one-off Invoice writes below; Preview and other Invoice actions remain outside this contribution.
 
-Coupon, automatic/custom tax, metered pricing and Rate Card request controls remain deferred and are rejected locally. Provider response fields concerning those features remain available for inspection. Basic customer tax-identification data and native Price tax-inclusion metadata do not add tax calculation APIs.
+Automatic/custom tax, metered pricing and Rate Card request controls remain outside this contribution and are rejected locally pending their [advanced Billing work](planning.md#advanced-billing-extension). Provider response fields concerning those features remain available for inspection. Basic customer tax-identification data and native Price tax-inclusion metadata do not add tax calculation APIs.
+
+## Coupons and one-off invoice application
+
+The additive coupon API is unreleased; install its reviewed development commit rather than assuming the current tagged SDK contains these methods. The [signup recipe](../examples/billing-coupons.php) creates a reusable template with one durable command, applies it to a Subscription with another, and retrieves `applied_discounts` to inspect the result. Stop and reconcile an uncertain earlier action before continuing; the SDK creates no command journal and never replays these mutations automatically.
+
+`FLAT` creation requires exact decimal-string `amount_off` and `currency`; `PERCENTAGE` requires decimal-string `percentage_off` in the inclusive range 0–100. `ONCE`, `CUSTOM` and `INDEFINITELY` are supported; CUSTOM requires positive integer `duration.period` and DAY/WEEK/MONTH/YEAR unit. Omit duration or supply null for ONCE/INDEFINITELY. Expiry timestamps retain their timezone and precision. Partial updates preserve omitted fields; when changing a model or duration type, supply the corresponding required values. Archive with `update($id, ['active' => false])`. Post-redemption state restrictions remain provider-enforced: the API permits non-billing field edits, while the product UI guide describes a narrower set. This SDK follows the selected API schema rather than predicting remote current state.
+
+Apply `['type' => 'COUPON', 'coupon' => ['id' => $couponId]]` in the target's `discounts` list. One coupon is supported per item and one per subtotal. Use Subscription `items[].discounts`, Checkout `line_items[].discounts` or Invoice line-item discounts independently of the resource-level list. Updates that expose a desired discount set replace it; an empty list removes that level's discounts. Item discounts precede subtotal discounts, then tax; arithmetic stays provider-owned. Flat-coupon currency compatibility, expiry, active status and redemption eligibility require provider validation, with no hidden state reads or inferred success. Invoice finalization redeems its coupons; Subscription creation redeems its coupons. Checkout/browser completion is not independent financial evidence. Promotion codes are outside this contract.
+
+One-off Invoice supporting writes are `create(array $body)`, `update(string $id, array $body)`, `addLineItems(string $id, array $body)`, `updateLineItems(string $id, array $body)` and bodyless `finalize(string $id)`, all returning arrays. Create requires `request_id`, `billing_customer_id` and currency; AUTO_CHARGE also requires an owned source. Add items with their own `request_id`, a maximum of 100 `line_items`, and exactly one `price_id` or inline `price` per new item. Updates identify each existing line item by `id`; provider state must still be DRAFT. Invoice Update also permits explicit null to clear a field, including `discounts`; Invoice Create rejects null discounts. For example:
+
+```php
+$discount = ['type' => 'COUPON', 'coupon' => ['id' => $ownedCouponId]];
+$invoice = $client->billing()->invoices()->create([
+    'request_id' => $persistedInvoiceCommand, 'billing_customer_id' => $ownedCustomerId,
+    'currency' => 'USD', 'collection_method' => 'OUT_OF_BAND', 'discounts' => [$discount],
+]);
+$client->billing()->invoices()->addLineItems($invoice['id'], [
+    'request_id' => $persistedItemCommand,
+    'line_items' => [['price_id' => $verifiedOneTimePriceId, 'quantity' => 2, 'discounts' => [$discount]]],
+]);
+// Explicitly authorize finalization after inspecting the owned draft and its financial effects.
+$invoice = $client->billing()->invoices()->finalize($invoice['id']);
+```
+
+Source review on **2026-11-12** extracted the official [Coupon API](https://www.airwallex.com/docs/api/billing/coupons) and [Invoice API](https://www.airwallex.com/docs/api/billing/invoices) page metadata: `currentVersion=2026-08-21`, specification `airwallex-openapi-2026-08-21.yaml`, advertised MD5 `6caa23f3759634e64859ff6aa8c37336`. Each new operation independently has organization resource level, API-key support, no OBO and `billing.discount:read/write` or `billing.invoice:read/write`. The Coupon snapshot retains all four operation schemas; its duration nullable annotation follows the field description. Invoice `request_updates` records the five added operations and additive `Invoice.billing_customer` response snapshot; earlier provenance remains intact. Product semantics were checked against [Coupons](https://www.airwallex.com/docs/billing/billing-components/coupons/coupons) and [Coupons via API](https://www.airwallex.com/docs/billing/billing-components/coupons/coupons-via-api). The advertised MD5 identifies page metadata, not a downloaded whole-specification hash. Deterministic fixtures establish wire/validation/paging/error behavior; no coupon or Invoice write was performed against an account.
 
 ## Choosing subscription financial controls
 
