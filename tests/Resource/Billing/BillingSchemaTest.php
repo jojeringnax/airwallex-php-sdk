@@ -16,7 +16,7 @@ final class BillingSchemaTest extends TestCase
     {
         $files = glob(dirname(__DIR__, 3) . '/resources/contracts/billing/*.json');
         self::assertNotFalse($files);
-        self::assertCount(12, $files);
+        self::assertCount(13, $files);
         $count = 0;
         foreach ($files as $file) {
             $decoded = json_decode((string) file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
@@ -25,7 +25,7 @@ final class BillingSchemaTest extends TestCase
             self::assertSame(
                 in_array(
                     basename($file),
-                    ['billing_transactions.json', 'coupons.json', 'meters.json',
+                    ['billing_transactions.json', 'coupons.json', 'credit_notes.json', 'meters.json',
                         'usage_events.json', 'rate_cards.json'],
                     true
                 )
@@ -47,7 +47,7 @@ final class BillingSchemaTest extends TestCase
                 $count++;
             }
         }
-        self::assertSame(60, $count);
+        self::assertSame(68, $count);
     }
 
     public function testFieldPathsFollowResolvedSchemaTypesRatherThanPropertyNames(): void

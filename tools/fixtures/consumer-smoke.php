@@ -43,6 +43,7 @@ $mock = new MockHandler([
     new Response(200, [], '{"id":"synthetic-subscription","status":"ACTIVE"}'),
     new Response(201, [], '{"id":"synthetic-coupon","amount_off":10.000000000001}'),
     new Response(201, [], '{"id":"synthetic-invoice","status":"DRAFT"}'),
+    new Response(201, [], '{"id":"synthetic-credit","invoice_id":"synthetic-invoice","status":"DRAFT"}'),
     new Response(202, [], ''),
     new Response(200, [], '{"rate_card_id":"synthetic-card","version":1}'),
 ]);
@@ -94,6 +95,11 @@ $invoice = $client->billing()->invoices()->create([
     'discounts' => [['type' => 'COUPON', 'coupon' => ['id' => 'synthetic-coupon']]],
 ]);
 $expectConsumer($invoice['id'] === 'synthetic-invoice', 'Installed Invoice creation failed.');
+$credit = $client->billing()->creditNotes()->create([
+    'request_id' => 'persisted-credit-action', 'invoice_id' => 'synthetic-invoice',
+    'type' => 'BEFORE_PAYMENT', 'reason' => 'BILLING_ERROR',
+]);
+$expectConsumer($credit['invoice_id'] === 'synthetic-invoice', 'Installed Credit Note schema lost its Invoice link.');
 $accepted = $client->billing()->usageEvents()->batchIngest(['events' => [[
     'billing_customer_id' => 'synthetic-billing-customer', 'event_name' => 'synthetic-usage',
     'merchant_event_id' => 'persisted-usage-event', 'properties' => ['quantity' => '1.000000000001'],
@@ -104,7 +110,7 @@ $expectConsumer($version['version'] === 1, 'Installed Rate Card version schema c
 if (!is_array($history)) {
     throw new RuntimeException('Consumer request capture is unavailable.');
 }
-$expectConsumer(count($history) === 10, 'Installed SDK did not reuse its authentication token.');
+$expectConsumer(count($history) === 11, 'Installed SDK did not reuse its authentication token.');
 $requests = [];
 foreach ($history as $entry) {
     $request = is_array($entry) ? ($entry['request'] ?? null) : null;

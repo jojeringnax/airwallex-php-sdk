@@ -37,6 +37,18 @@ final class Rules
         if (in_array($operation, ['createCoupon', 'updateCoupon'], true)) {
             self::coupon($body);
         }
+        if ($operation === 'createCreditNote') {
+            if (($body['reason'] ?? null) === 'OTHER') {
+                self::requireKeys($body, ['custom_reason']);
+            } elseif (isset($body['custom_reason'])) {
+                Validator::fail();
+            }
+        }
+        if ($operation === 'creditNotes_addLineItems') {
+            foreach (self::itemObjects($body['line_items'] ?? []) as $item) {
+                self::creditNoteItem($item);
+            }
+        }
         if ($operation === 'createMeter' && ($body['aggregation_method'] ?? null) !== 'COUNT') {
             self::requireKeys($body, ['aggregation_property']);
         }
@@ -392,6 +404,25 @@ final class Rules
                 Validator::fail();
             }
             Validator::timestamp($body['expires_at']);
+        }
+    }
+
+    /** @param array<string,mixed> $item */
+    private static function creditNoteItem(#[SensitiveParameter] array $item): void
+    {
+        if (isset($item['invoice_line_item_group_id'])) {
+            self::requireKeys($item, ['quantity']);
+            if (isset($item['invoice_line_item_id']) || isset($item['amount']) || isset($item['unit_amount'])) {
+                Validator::fail();
+            }
+            return;
+        }
+        if (isset($item['amount'])) {
+            if (isset($item['quantity']) || isset($item['unit_amount'])) {
+                Validator::fail();
+            }
+        } else {
+            self::requireKeys($item, ['invoice_line_item_id', 'quantity']);
         }
     }
 
