@@ -45,6 +45,8 @@ The [advanced Billing extension](planning.md#advanced-billing-extension) adds `b
 
 The [tax extension](billing-resources.md#tax-controls) uses existing provider-shaped arrays: exact-string manual percentages and boolean automatic-tax flags. It introduces no tax calculator or new resource accessor. Applications select their approved mode and prepare location, category and registration prerequisites.
 
+The [Meter/Usage Event extension](billing-resources.md#usage-meters-and-events) adds `billing()->meters()` with standard CRUD, bodyless archive/restore, and `listSummaries(string $id, array $query): array`. `billing()->usageEvents()` provides `ingest(array $body): array`, `batchIngest(array $body): array` and `void(array $body): array`. Selected empty 202 acknowledgements return `[]`; they report no per-event or aggregation success. Applications own durable merchant event identities and asynchronous recovery.
+
 Read the relevant [consumer example](consumer-examples.md) when implementing or reviewing a workflow:
 
 | Work | Reference |

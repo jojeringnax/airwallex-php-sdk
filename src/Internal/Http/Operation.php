@@ -11,6 +11,8 @@ final readonly class Operation
      * @param list<string> $requestDecimalPaths
      * @param list<string> $responseDecimalPaths
      * @param list<string> $responseIntegerPaths
+     * @param array<string,string> $queryStyles
+     * @param list<int> $emptyResponseStatuses
      */
     public function __construct(
         public string $method,
@@ -20,6 +22,8 @@ final readonly class Operation
         public array $responseDecimalPaths = [],
         public array $responseIntegerPaths = [],
         public ?string $pagination = null,
+        public array $queryStyles = [],
+        public array $emptyResponseStatuses = [],
     ) {
     }
 }

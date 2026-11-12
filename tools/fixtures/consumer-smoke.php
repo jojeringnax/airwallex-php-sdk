@@ -43,6 +43,7 @@ $mock = new MockHandler([
     new Response(200, [], '{"id":"synthetic-subscription","status":"ACTIVE"}'),
     new Response(201, [], '{"id":"synthetic-coupon","amount_off":10.000000000001}'),
     new Response(201, [], '{"id":"synthetic-invoice","status":"DRAFT"}'),
+    new Response(202, [], ''),
 ]);
 $handler = HandlerStack::create($mock);
 $handler->push(Middleware::history($history));
@@ -92,10 +93,15 @@ $invoice = $client->billing()->invoices()->create([
     'discounts' => [['type' => 'COUPON', 'coupon' => ['id' => 'synthetic-coupon']]],
 ]);
 $expectConsumer($invoice['id'] === 'synthetic-invoice', 'Installed Invoice creation failed.');
+$accepted = $client->billing()->usageEvents()->batchIngest(['events' => [[
+    'billing_customer_id' => 'synthetic-billing-customer', 'event_name' => 'synthetic-usage',
+    'merchant_event_id' => 'persisted-usage-event', 'properties' => ['quantity' => '1.000000000001'],
+]]]);
+$expectConsumer($accepted === [], 'Installed empty usage acknowledgement changed.');
 if (!is_array($history)) {
     throw new RuntimeException('Consumer request capture is unavailable.');
 }
-$expectConsumer(count($history) === 8, 'Installed SDK did not reuse its authentication token.');
+$expectConsumer(count($history) === 9, 'Installed SDK did not reuse its authentication token.');
 $requests = [];
 foreach ($history as $entry) {
     $request = is_array($entry) ? ($entry['request'] ?? null) : null;

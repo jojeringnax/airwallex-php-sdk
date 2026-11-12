@@ -1,0 +1,320 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/usage_events",
+  "reviewed": "2026-11-12",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+  "endpoints": {
+    "ingest": {
+      "apiPath": "/api/v1/billing/usage_events/ingest",
+      "method": "post",
+      "description": "Ingest a single usage event. The event is validated synchronously, but is processed asynchronously. For higher rate limits, please use the [Batch Ingest Usage Events API](/docs/api/billing/usage_events/batch_ingest) instead.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "billing_customer_id",
+                "event_name",
+                "merchant_event_id",
+                "properties"
+              ],
+              "type": "object",
+              "properties": {
+                "billing_customer_id": {
+                  "type": "string",
+                  "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) related to this usage event."
+                },
+                "event_name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "pattern": "^\\S*$",
+                  "type": "string",
+                  "description": "The name of the event. Corresponds with the `event_name` field on a meter."
+                },
+                "happened_at": {
+                  "type": "string",
+                  "description": "Time when this event happened. Must be within the past 35 days or up to 5 minutes in the future. Defaults to now.",
+                  "format": "date-time"
+                },
+                "merchant_event_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "A unique identifier for the event. This value must be unique within a rolling 35-day period and is limited to a maximum of 64 characters."
+                },
+                "properties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "The payload of events, which contains arbitrary key-value pairs storing properties of the event."
+                  },
+                  "description": "The payload of events, which contains arbitrary key-value pairs storing properties of the event."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageEvent"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:write",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "batchIngest": {
+      "apiPath": "/api/v1/billing/usage_events/batch_ingest",
+      "method": "post",
+      "description": "Ingest new usage events in a batch. The events are validated and processed asynchronously. If errors occur, webhook events will be published. Maximum 10 events per request.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "events"
+              ],
+              "type": "object",
+              "properties": {
+                "events": {
+                  "type": "array",
+                  "description": "List of usage events to ingest. Maximum 10 events per request.",
+                  "items": {
+                    "required": [
+                      "billing_customer_id",
+                      "event_name",
+                      "merchant_event_id",
+                      "properties"
+                    ],
+                    "type": "object",
+                    "properties": {
+                      "billing_customer_id": {
+                        "type": "string",
+                        "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) related to this usage event."
+                      },
+                      "event_name": {
+                        "maxLength": 200,
+                        "minLength": 0,
+                        "pattern": "^\\S*$",
+                        "type": "string",
+                        "description": "The name of the event. Corresponds with the `event_name` field on a meter."
+                      },
+                      "happened_at": {
+                        "type": "string",
+                        "description": "Time when this event happened. Must be within the past 35 days or up to 5 minutes in the future. Defaults to now.",
+                        "format": "date-time"
+                      },
+                      "merchant_event_id": {
+                        "maxLength": 64,
+                        "minLength": 0,
+                        "type": "string",
+                        "description": "A unique identifier for the event. This value must be unique within a rolling 35-day period and is limited to a maximum of 64 characters."
+                      },
+                      "properties": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "description": "The payload of events, which contains arbitrary key-value pairs storing properties of the event."
+                        },
+                        "description": "The payload of events, which contains arbitrary key-value pairs storing properties of the event."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "202": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "description": "Accepted"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:write",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false,
+      "sdkEmptyResponseStatuses": [
+        202
+      ]
+    },
+    "usageEvents_void": {
+      "apiPath": "/api/v1/billing/usage_events/void",
+      "method": "post",
+      "description": "Void a previous usage event ingested within 35 days.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "merchant_event_id"
+              ],
+              "type": "object",
+              "properties": {
+                "merchant_event_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique identifier of a previous event."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "202": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "description": "Accepted"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:write",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false,
+      "sdkEmptyResponseStatuses": [
+        202
+      ]
+    }
+  },
+  "schemas": {
+    "UsageEvent": {
+      "required": [
+        "billing_customer_id",
+        "event_name",
+        "happened_at",
+        "ingested_at",
+        "merchant_event_id",
+        "properties",
+        "voided"
+      ],
+      "type": "object",
+      "properties": {
+        "billing_customer_id": {
+          "type": "string",
+          "description": "ID of the [Billing Customer](/docs/api/billing/billing_customers) related to this usage event."
+        },
+        "event_name": {
+          "type": "string",
+          "description": "The name of the event. Corresponds with the `event_name` field on a meter."
+        },
+        "happened_at": {
+          "type": "string",
+          "description": "Time when this event happened.",
+          "format": "date-time"
+        },
+        "ingested_at": {
+          "type": "string",
+          "description": "Time when this usage event was ingested.",
+          "format": "date-time"
+        },
+        "merchant_event_id": {
+          "type": "string",
+          "description": "Unique identifier of this event in the merchant's system. Maximum length is 64."
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "description": "The payload of events, which contains arbitrary key-value pairs storing properties of the event."
+          },
+          "description": "The payload of events, which contains arbitrary key-value pairs storing properties of the event."
+        },
+        "voided": {
+          "type": "boolean",
+          "description": "Indicates the status of the event. If `true`, it means the event has been voided and would not be counted into meter result calculation."
+        },
+        "voided_at": {
+          "type": "string",
+          "description": "Time when this usage event was voided."
+        }
+      }
+    }
+  }
+}

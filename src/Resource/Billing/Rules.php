@@ -21,6 +21,15 @@ final class Rules
         if (in_array($operation, ['createCoupon', 'updateCoupon'], true)) {
             self::coupon($body);
         }
+        if ($operation === 'createMeter' && ($body['aggregation_method'] ?? null) !== 'COUNT') {
+            self::requireKeys($body, ['aggregation_property']);
+        }
+        if ($operation === 'batchIngest') {
+            $events = $body['events'] ?? null;
+            if (!is_array($events) || count($events) > 10) {
+                Validator::fail();
+            }
+        }
         if ($operation === 'invoices_addLineItems') {
             foreach (self::itemObjects($body['line_items'] ?? []) as $item) {
                 self::itemPrice($item, true);
@@ -308,7 +317,7 @@ final class Rules
                     }
                 }
             }
-            if ($key !== 'metadata' && is_array($child)) {
+            if (!in_array($key, ['metadata', 'properties'], true) && is_array($child)) {
                 if (array_is_list($child)) {
                     foreach ($child as $item) {
                         if (is_array($item)) {
