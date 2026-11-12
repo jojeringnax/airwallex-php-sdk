@@ -290,8 +290,7 @@ final class Rules
         foreach ($value as $key => $child) {
             if (
                 ($key === 'metered' && $child !== false)
-                || in_array($key, ['meter_id', 'rate_card_id', 'rate_card_version',
-                'enable_automatic_tax', 'default_tax_percent', 'tax_percent'], true)
+                || in_array($key, ['meter_id', 'rate_card_id', 'rate_card_version'], true)
             ) {
                 Validator::fail();
             }

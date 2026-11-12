@@ -1159,5 +1159,19 @@
       },
       "description": "The billing cycle for recurring charges."
     }
+  },
+  "tax_review": {
+    "reviewed": "2026-11-12",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "request_paths_unchanged": [
+      "createBillingCheckout/content/application/json/schema/properties/customer_data_collection/properties/tax_id",
+      "createBillingCheckout/content/application/json/schema/properties/enable_automatic_tax",
+      "createBillingCheckout/content/application/json/schema/properties/invoice_data/properties/default_tax_percent",
+      "createBillingCheckout/content/application/json/schema/properties/line_items/items/properties/price/properties/product/properties/tax_code",
+      "createBillingCheckout/content/application/json/schema/properties/line_items/items/properties/price/properties/tax_included",
+      "createBillingCheckout/content/application/json/schema/properties/line_items/items/properties/tax_percent",
+      "createBillingCheckout/content/application/json/schema/properties/subscription_data/properties/default_tax_percent"
+    ]
   }
 }
