@@ -44,6 +44,7 @@ $mock = new MockHandler([
     new Response(201, [], '{"id":"synthetic-coupon","amount_off":10.000000000001}'),
     new Response(201, [], '{"id":"synthetic-invoice","status":"DRAFT"}'),
     new Response(202, [], ''),
+    new Response(200, [], '{"rate_card_id":"synthetic-card","version":1}'),
 ]);
 $handler = HandlerStack::create($mock);
 $handler->push(Middleware::history($history));
@@ -98,10 +99,12 @@ $accepted = $client->billing()->usageEvents()->batchIngest(['events' => [[
     'merchant_event_id' => 'persisted-usage-event', 'properties' => ['quantity' => '1.000000000001'],
 ]]]);
 $expectConsumer($accepted === [], 'Installed empty usage acknowledgement changed.');
+$version = $client->billing()->rateCards()->retrieveVersion('synthetic-card', 1);
+$expectConsumer($version['version'] === 1, 'Installed Rate Card version schema changed.');
 if (!is_array($history)) {
     throw new RuntimeException('Consumer request capture is unavailable.');
 }
-$expectConsumer(count($history) === 9, 'Installed SDK did not reuse its authentication token.');
+$expectConsumer(count($history) === 10, 'Installed SDK did not reuse its authentication token.');
 $requests = [];
 foreach ($history as $entry) {
     $request = is_array($entry) ? ($entry['request'] ?? null) : null;

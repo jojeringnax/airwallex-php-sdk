@@ -14,6 +14,7 @@ use Jojeringnax\Airwallex\Resource\Billing\Meters;
 use Jojeringnax\Airwallex\Resource\Billing\PaymentSources;
 use Jojeringnax\Airwallex\Resource\Billing\Prices;
 use Jojeringnax\Airwallex\Resource\Billing\Products;
+use Jojeringnax\Airwallex\Resource\Billing\RateCards;
 use Jojeringnax\Airwallex\Resource\Billing\Subscriptions;
 use Jojeringnax\Airwallex\Resource\Billing\Transactions;
 use Jojeringnax\Airwallex\Resource\Billing\UsageEvents;
@@ -84,6 +85,11 @@ final readonly class Billing
     public function usageEvents(): UsageEvents
     {
         return new UsageEvents($this->transport);
+    }
+
+    public function rateCards(): RateCards
+    {
+        return new RateCards($this->transport);
     }
 
     /** @return array<string,never> */

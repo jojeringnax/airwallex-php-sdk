@@ -1173,5 +1173,14 @@
       "createBillingCheckout/content/application/json/schema/properties/line_items/items/properties/tax_percent",
       "createBillingCheckout/content/application/json/schema/properties/subscription_data/properties/default_tax_percent"
     ]
+  },
+  "usage_pricing_review": {
+    "reviewed": "2026-11-12",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "request_paths_unchanged": [
+      "createBillingCheckout/content/application/json/schema/properties/line_items/items/properties/rate_card_id",
+      "createBillingCheckout/content/application/json/schema/properties/line_items/items/properties/rate_card_version"
+    ]
   }
 }
