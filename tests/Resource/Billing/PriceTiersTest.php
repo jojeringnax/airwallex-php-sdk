@@ -147,8 +147,8 @@ final class PriceTiersTest extends HttpTestCase
                 'unit_amount' => '1', 'tiers' => [['unit_amount' => '1']]]];
         }
         yield 'unknown-model' => [['pricing_model' => 'FUTURE', 'tiers' => [['unit_amount' => '1']]]];
-        yield 'metered' => [['metered' => true, 'tiers' => [['unit_amount' => '1']]]];
-        yield 'meter-id' => [['meter_id' => 'meter_test', 'tiers' => [['unit_amount' => '1']]]];
+        yield 'invalid metered flag' => [['metered' => 'true', 'tiers' => [['unit_amount' => '1']]]];
+        yield 'invalid meter-id' => [['meter_id' => 123, 'tiers' => [['unit_amount' => '1']]]];
         yield 'invalid-recurrence' => [['recurring' => ['period_unit' => 'MONTH', 'period' => 0],
             'tiers' => [['unit_amount' => '1']]]];
     }

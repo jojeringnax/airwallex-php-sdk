@@ -687,5 +687,14 @@
     "request_paths_unchanged": [
       "createPrice/content/application/json/schema/properties/tax_included"
     ]
+  },
+  "usage_pricing_review": {
+    "reviewed": "2026-11-12",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "request_paths_unchanged": [
+      "createPrice/content/application/json/schema/properties/meter_id",
+      "createPrice/content/application/json/schema/properties/metered"
+    ]
   }
 }

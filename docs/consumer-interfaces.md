@@ -47,6 +47,8 @@ The [tax extension](billing-resources.md#tax-controls) uses existing provider-sh
 
 The [Meter/Usage Event extension](billing-resources.md#usage-meters-and-events) adds `billing()->meters()` with standard CRUD, bodyless archive/restore, and `listSummaries(string $id, array $query): array`. `billing()->usageEvents()` provides `ingest(array $body): array`, `batchIngest(array $body): array` and `void(array $body): array`. Selected empty 202 acknowledgements return `[]`; they report no per-event or aggregation success. Applications own durable merchant event identities and asynchronous recovery.
 
+The [Rate Card extension](billing-resources.md#versioned-rate-cards) adds `billing()->rateCards()` with standard create/retrieve/list/update and explicit-parent version/item methods. Read versions are PHP int32 integers; subscription/checkout item pins use native integer `rate_card_version`. Publishing a version is independent of an existing subscription's explicit pin change.
+
 Read the relevant [consumer example](consumer-examples.md) when implementing or reviewing a workflow:
 
 | Work | Reference |
