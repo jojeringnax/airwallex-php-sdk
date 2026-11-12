@@ -1,0 +1,1288 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/rate_cards",
+  "reviewed": "2026-11-12",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+  "endpoints": {
+    "createRateCard": {
+      "apiPath": "/api/v1/billing/rate_cards/create",
+      "method": "post",
+      "description": "Create a new Rate Card with shared billing fields, dimension keys, and a list of items. Each item entry creates a Rate Card Item object.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "currency",
+                "dimension_keys",
+                "items",
+                "meter_id",
+                "name",
+                "product_id",
+                "recurring",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "currency": {
+                  "type": "string",
+                  "description": "Currency of the items of this rate card (in 3-letter ISO-4217 format)."
+                },
+                "description": {
+                  "maxLength": 500,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Rate card description. Used for internal classification and identification."
+                },
+                "dimension_keys": {
+                  "type": "array",
+                  "description": "Subset of or equal to the Meter's `dimension_keys`. Defines which dimension keys are used in each item's `dimension_values`.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "items": {
+                  "type": "array",
+                  "description": "Ordered list of item definitions. Each entry creates a Rate Card Item object. At least one is required.",
+                  "minItems": 1,
+                  "items": {
+                    "required": [
+                      "dimension_values",
+                      "pricing_model"
+                    ],
+                    "type": "object",
+                    "properties": {
+                      "dimension_values": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "description": "A dimension value that this item applies to."
+                        },
+                        "description": "The dimension values this item applies to. Each key must be one of the `dimension_keys` (a subset is allowed). Any key omitted here acts as a wildcard, matching any value for that dimension; an empty object matches all usage (a catch-all)."
+                      },
+                      "lot": {
+                        "required": [
+                          "rounding_mode",
+                          "size"
+                        ],
+                        "type": "object",
+                        "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT`.",
+                        "properties": {
+                          "rounding_mode": {
+                            "pattern": "^UP$",
+                            "type": "string",
+                            "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+                          },
+                          "size": {
+                            "minimum": 2,
+                            "type": "integer",
+                            "description": "The amount of quantity that constitutes a single billable lot.",
+                            "format": "int32"
+                          }
+                        }
+                      },
+                      "pricing_model": {
+                        "type": "string",
+                        "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `PER_UNIT`: a fixed price per unit quantity.\n- `VOLUME`: the unit price is based on which tier the total quantity falls in.\n- `GRADUATED`: the unit price changes as the quantity increases."
+                      },
+                      "tiers": {
+                        "type": "array",
+                        "description": "List of quantity-based pricing tiers for this item. Required when the pricing model is `VOLUME` or `GRADUATED`.",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "flat_amount": {
+                              "minimum": 0,
+                              "type": "number",
+                              "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`."
+                            },
+                            "unit_amount": {
+                              "minimum": 0,
+                              "type": "number",
+                              "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`."
+                            },
+                            "unit_description": {
+                              "type": "string",
+                              "description": "Description of the billable unit for the tier."
+                            },
+                            "upper_bound": {
+                              "minimum": 0,
+                              "type": "number",
+                              "description": "The upper quantity limit of this tier. For the last tier, the upper bound must be left empty."
+                            }
+                          }
+                        }
+                      },
+                      "unit_amount": {
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "The amount to be charged per product unit. Only required when the pricing model is `PER_UNIT`."
+                      },
+                      "unit_description": {
+                        "type": "string",
+                        "description": "Description of the billable unit for this item."
+                      }
+                    }
+                  }
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                },
+                "meter_id": {
+                  "type": "string",
+                  "description": "ID of the shared [Meter](/docs/api/billing/meters) object specifying how to calculate the usage for the items of this rate card."
+                },
+                "name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Rate card name."
+                },
+                "product_id": {
+                  "type": "string",
+                  "description": "ID of the [Product](/docs/api/billing/products) object this rate card is associated with."
+                },
+                "recurring": {
+                  "required": [
+                    "period_unit"
+                  ],
+                  "type": "object",
+                  "description": "The frequency at which the items of this rate card are charged.",
+                  "properties": {
+                    "period": {
+                      "type": "integer",
+                      "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `period=2` and `period_unit=MONTH`. Defaults to `1`.",
+                      "format": "int32"
+                    },
+                    "period_unit": {
+                      "type": "string",
+                      "description": "Specifies billing frequency. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+                    }
+                  }
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                },
+                "tax_included": {
+                  "type": "boolean",
+                  "description": "Whether the item prices include tax. Defaults to `false`."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCard"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:write",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrieveRateCard": {
+      "apiPath": "/api/v1/billing/rate_cards/{id}",
+      "method": "get",
+      "description": "Retrieves the details of a Rate Card.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCard"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Rate Card object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listRateCards": {
+      "apiPath": "/api/v1/billing/rate_cards",
+      "method": "get",
+      "description": "Retrieves a list of Rate Cards, based on the query parameters.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseRateCard"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "The rate card's active status, either `true` or `false`.",
+          "in": "query",
+          "name": "active",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "description": "The currency of the Rate Card in 3-letter ISO-4217 format.",
+          "in": "query",
+          "name": "currency",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "ID of the [Product](/docs/api/billing/products) object this rate card is associated with.",
+          "in": "query",
+          "name": "product_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "ID of the shared [Meter](/docs/api/billing/meters) object specifying how to calculate the usage for the items of this rate card.",
+          "in": "query",
+          "name": "meter_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `recurring_period=2` and `recurring_period_unit=MONTH`.",
+          "in": "query",
+          "name": "recurring_period",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "description": "Specifies billing frequency. One of `DAY`, `WEEK`, `MONTH`, or `YEAR`.",
+          "in": "query",
+          "name": "recurring_period_unit",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The start time of `created_at` in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end time of `created_at` in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of results per page. Defaults to 20.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "updateRateCard": {
+      "apiPath": "/api/v1/billing/rate_cards/{id}/update",
+      "method": "post",
+      "description": "Update a Rate Card. Only `name`, `active`, `description`, and `metadata` are updatable. Other fields are immutable.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "active": {
+                  "type": "boolean",
+                  "description": "`true` if the rate card is available for new purchases, `false` otherwise."
+                },
+                "description": {
+                  "maxLength": 500,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Rate card description. Used for internal classification and identification."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Rate card name."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCard"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Rate Card object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:write",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "createRateCardVersion": {
+      "apiPath": "/api/v1/billing/rate_cards/{id}/versions/create",
+      "method": "post",
+      "description": "Publish a new Rate Card version. `items` is the complete ordered list; each entry is either the `id` of an existing Rate Card Item (carried forward by reference) or an inline definition of a new item.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "items",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "dimension_keys": {
+                  "type": "array",
+                  "description": "The dimension keys this version prices by — a subset of the Meter's `dimension_keys`. Append-only across versions — must be a superset of the previous version's. Inherits the previous version's set if omitted.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "items": {
+                  "type": "array",
+                  "description": "Ordered list of item definitions. Each entry is either an existing Rate Card Item (carried forward by specifying an `id`) or an inline definition of a new item, but not both. At least one is required.",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "dimension_values": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "description": "A dimension value that this item applies to."
+                        },
+                        "description": "The dimension values this item applies to. Each key must be one of the version's `dimension_keys` (a subset is allowed). Any key omitted here acts as a wildcard, matching any value for that dimension; an empty object matches all usage (a catch-all)."
+                      },
+                      "id": {
+                        "type": "string",
+                        "description": "ID of an existing Rate Card Item from this Rate Card to carry forward into the new version."
+                      },
+                      "lot": {
+                        "required": [
+                          "rounding_mode",
+                          "size"
+                        ],
+                        "type": "object",
+                        "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT`.",
+                        "properties": {
+                          "rounding_mode": {
+                            "pattern": "^UP$",
+                            "type": "string",
+                            "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+                          },
+                          "size": {
+                            "minimum": 2,
+                            "type": "integer",
+                            "description": "The amount of quantity that constitutes a single billable lot.",
+                            "format": "int32"
+                          }
+                        }
+                      },
+                      "pricing_model": {
+                        "type": "string",
+                        "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `PER_UNIT`: a fixed price per unit quantity.\n- `VOLUME`: the unit price is based on which tier the total quantity falls in.\n- `GRADUATED`: the unit price changes as the quantity increases."
+                      },
+                      "tiers": {
+                        "type": "array",
+                        "description": "List of quantity-based pricing tiers for this item. Required when the pricing model is `VOLUME` or `GRADUATED`.",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "flat_amount": {
+                              "minimum": 0,
+                              "type": "number",
+                              "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`."
+                            },
+                            "unit_amount": {
+                              "minimum": 0,
+                              "type": "number",
+                              "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`."
+                            },
+                            "unit_description": {
+                              "type": "string",
+                              "description": "Description of the billable unit for the tier."
+                            },
+                            "upper_bound": {
+                              "minimum": 0,
+                              "type": "number",
+                              "description": "The upper quantity limit of this tier. For the last tier, the upper bound must be left empty."
+                            }
+                          }
+                        }
+                      },
+                      "unit_amount": {
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "The amount to be charged per product unit. Only required when the pricing model is `PER_UNIT`."
+                      },
+                      "unit_description": {
+                        "type": "string",
+                        "description": "Description of the billable unit for this item."
+                      }
+                    }
+                  }
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCardVersion"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`, `duplicate_request_id`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Rate Card object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:write",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrieveRateCardVersion": {
+      "apiPath": "/api/v1/billing/rate_cards/{id}/versions/{version}",
+      "method": "get",
+      "description": "Retrieves a specific Rate Card Version of a Rate Card by its `version` number.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCardVersion"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Rate Card object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The version number within the Rate Card.",
+          "in": "path",
+          "name": "version",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listRateCardVersions": {
+      "apiPath": "/api/v1/billing/rate_cards/{id}/versions",
+      "method": "get",
+      "description": "Retrieves the list of a Rate Card's versions.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseRateCardVersion"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Rate Card object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of results per page. Defaults to 20.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "retrieveRateCardVersionItem": {
+      "apiPath": "/api/v1/billing/rate_cards/{id}/versions/{version}/items/{item_id}",
+      "method": "get",
+      "description": "Retrieves the details of a Rate Card Item within a specific version, validating that the item belongs to that version.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCardItem"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Rate Card object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The version number within the Rate Card.",
+          "in": "path",
+          "name": "version",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "description": "ID of the Rate Card Item object.",
+          "in": "path",
+          "name": "item_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listRateCardVersionItems": {
+      "apiPath": "/api/v1/billing/rate_cards/{id}/versions/{version}/items",
+      "method": "get",
+      "description": "Retrieves the Rate Card Items belonging to a specific version of a Rate Card. Items are returned in rank order, which determines first-match evaluation.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseRateCardItem"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Rate Card object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The version number within the Rate Card.",
+          "in": "path",
+          "name": "version",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "description": "Filters the items by dimension values. Each key must be one of the version's `dimension_keys`.",
+          "in": "query",
+          "name": "dimension_filters",
+          "required": false,
+          "style": "deepObject",
+          "explode": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of results per page. Defaults to 20.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.price:read",
+          "group": "Billing",
+          "resource_name": "Prices",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true,
+      "sdkQueryStyles": {
+        "dimension_filters": "deepObject"
+      }
+    }
+  },
+  "schemas": {
+    "RateCard": {
+      "required": [
+        "active",
+        "created_at",
+        "currency",
+        "id",
+        "meter_id",
+        "name",
+        "product_id",
+        "recurring",
+        "tax_included",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean",
+          "description": "`true` if the rate card is available for new purchases, `false` otherwise."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when this rate card was created."
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency of the items of this rate card (in 3-letter ISO-4217 format)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Rate card description. Used for internal classification and identification."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Rate Card object."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of string key-value pairs that you can attach to this object for storing additional information."
+        },
+        "meter_id": {
+          "type": "string",
+          "description": "ID of the [Meter](/docs/api/billing/meters) object specifying how to calculate the usage for the items of this rate card."
+        },
+        "name": {
+          "type": "string",
+          "description": "Rate card name."
+        },
+        "product_id": {
+          "type": "string",
+          "description": "ID of the [Product](/docs/api/billing/products) object this rate card is associated with."
+        },
+        "recurring": {
+          "$ref": "#/components/schemas/SubscriptionRecurring",
+          "description": "The frequency at which the items of this rate card are charged."
+        },
+        "tax_included": {
+          "type": "boolean",
+          "description": "Whether the item prices include tax."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when this rate card was last updated."
+        }
+      },
+      "description": "Represents a versioned container for multi-dimensional pricing that groups multiple Rate Card Items by dimension combinations under a shared set of billing fields."
+    },
+    "SubscriptionRecurring": {
+      "required": [
+        "period",
+        "period_unit"
+      ],
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "The number of period units between subscription billing cycles. For example, the billing cycle is bi-monthly if `period=2` and `period_unit=MONTH`.",
+          "format": "int32"
+        },
+        "period_unit": {
+          "type": "string",
+          "description": "Specifies billing frequency. One of `DAY`, `WEEK`, `MONTH` or `YEAR`."
+        }
+      },
+      "description": "The billing cycle for recurring charges."
+    },
+    "CursorPaginationClientApiResponseRateCard": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/RateCard"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    },
+    "RateCardVersion": {
+      "required": [
+        "created_at",
+        "dimension_keys",
+        "rate_card_id",
+        "version"
+      ],
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "description": "Time when this rate card version was created."
+        },
+        "dimension_keys": {
+          "type": "array",
+          "description": "Subset of or equal to the Meter's `dimension_keys`. Defines which dimension keys are used in each item's `dimension_values`. Append-only across versions — a new version's set must contain all keys from the previous version.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rate_card_id": {
+          "type": "string",
+          "description": "ID of the Rate Card this version belongs to."
+        },
+        "version": {
+          "type": "integer",
+          "description": "The version number within the Rate Card, starting from `1`.",
+          "format": "int32"
+        }
+      },
+      "description": "An immutable, numbered snapshot of a Rate Card's pricing configuration."
+    },
+    "CursorPaginationClientApiResponseRateCardVersion": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/RateCardVersion"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    },
+    "RateCardItem": {
+      "required": [
+        "created_at",
+        "dimension_values",
+        "id",
+        "pricing_model",
+        "rate_card_id"
+      ],
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "description": "Time when this rate card item was created."
+        },
+        "dimension_values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A dimension value that this item applies to."
+          },
+          "description": "The dimension values this item applies to. Each key must be one of the Rate Card Version's `dimension_keys` (a subset is allowed). Any key omitted here acts as a wildcard, matching any value for that dimension; an empty object matches all usage (a catch-all)."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Rate Card Item object."
+        },
+        "lot": {
+          "$ref": "#/components/schemas/RateCardItemLot",
+          "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT`."
+        },
+        "pricing_model": {
+          "type": "string",
+          "description": "Specify how to calculate the total billing amount when a quantity is provided. One of\n- `PER_UNIT`: a fixed price per unit quantity.\n- `VOLUME`: the unit price is based on which tier the total quantity falls in.\n- `GRADUATED`: the unit price changes as the quantity increases."
+        },
+        "rate_card_id": {
+          "type": "string",
+          "description": "ID of the Rate Card this item belongs to."
+        },
+        "tiers": {
+          "type": "array",
+          "description": "List of quantity-based pricing tiers for this item. Only present when the pricing model is `VOLUME` or `GRADUATED`.",
+          "items": {
+            "$ref": "#/components/schemas/RateCardItemTier"
+          }
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The amount to be charged per product unit. Only present when the pricing model is `PER_UNIT`."
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for this item."
+        }
+      },
+      "description": "A Rate Card Item represents the price for one dimension combination within a Rate Card version."
+    },
+    "RateCardItemLot": {
+      "required": [
+        "rounding_mode",
+        "size"
+      ],
+      "type": "object",
+      "properties": {
+        "rounding_mode": {
+          "pattern": "^UP$",
+          "type": "string",
+          "description": "Specifies how to round the calculated lots when the total quantity is not an exact multiple of the size. One of `UP`."
+        },
+        "size": {
+          "minimum": 2,
+          "type": "integer",
+          "description": "The amount of quantity that constitutes a single billable lot.",
+          "format": "int32"
+        }
+      },
+      "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. If not set, quantity is treated as the number of billable lots. Only applicable for `PER_UNIT`."
+    },
+    "RateCardItemTier": {
+      "required": [
+        "level"
+      ],
+      "type": "object",
+      "properties": {
+        "flat_amount": {
+          "type": "number",
+          "description": "The flat amount to be charged for this tier when pricing model is `GRADUATED`, or the overall flat amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "level": {
+          "type": "integer",
+          "description": "The sequential position of the tier within the item definition. Starts from 1.",
+          "format": "int32"
+        },
+        "lot": {
+          "$ref": "#/components/schemas/RateCardItemLot",
+          "description": "Defines how quantity is grouped into billable lots. The `unit_amount` is then applied per lot. Only applicable for `VOLUME` and `GRADUATED`."
+        },
+        "unit_amount": {
+          "type": "number",
+          "description": "The per-unit amount to be charged for this tier when pricing model is `GRADUATED`, or the overall per-unit amount to be charged when pricing model is `VOLUME`.",
+          "minimum": 0
+        },
+        "unit_description": {
+          "type": "string",
+          "description": "Description of the billable unit for the tier."
+        },
+        "upper_bound": {
+          "type": "number",
+          "description": "The upper quantity limit of this tier. For the last tier, the upper bound must be left empty.",
+          "minimum": 0
+        }
+      },
+      "description": "A quantity-based pricing tier for a Rate Card Item."
+    },
+    "CursorPaginationClientApiResponseRateCardItem": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/RateCardItem"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    }
+  }
+}

@@ -17,7 +17,23 @@ final class Rules
     public static function validate(string $operation, #[SensitiveParameter] array $body): void
     {
         $body = self::normalizeForConditions($body);
-        self::unsupportedControls($body);
+        self::nestedControls($body);
+        if (in_array($operation, ['createRateCard', 'createRateCardVersion'], true)) {
+            self::recurring($body);
+            foreach (self::itemObjects($body['items'] ?? []) as $item) {
+                if ($operation === 'createRateCardVersion' && isset($item['id'])) {
+                    if (count($item) !== 1) {
+                        Validator::fail();
+                    }
+                } else {
+                    self::requireKeys($item, ['dimension_values', 'pricing_model']);
+                    if (!in_array($item['pricing_model'], ['PER_UNIT', 'VOLUME', 'GRADUATED'], true)) {
+                        Validator::fail();
+                    }
+                    self::price($item, allowZeroFirstBound: true);
+                }
+            }
+        }
         if (in_array($operation, ['createCoupon', 'updateCoupon'], true)) {
             self::coupon($body);
         }
@@ -31,6 +47,15 @@ final class Rules
         if ($operation === 'creditNotes_addLineItems') {
             foreach (self::itemObjects($body['line_items'] ?? []) as $item) {
                 self::creditNoteItem($item);
+            }
+        }
+        if ($operation === 'createMeter' && ($body['aggregation_method'] ?? null) !== 'COUNT') {
+            self::requireKeys($body, ['aggregation_property']);
+        }
+        if ($operation === 'batchIngest') {
+            $events = $body['events'] ?? null;
+            if (!is_array($events) || count($events) > 10) {
+                Validator::fail();
             }
         }
         if ($operation === 'invoices_addLineItems') {
@@ -78,7 +103,7 @@ final class Rules
             }
             $items = self::itemObjects($body['line_items'] ?? []);
             foreach ($items as $item) {
-                self::itemPrice($item, $mode === 'PAYMENT');
+                self::itemPrice($item, $mode === 'PAYMENT', $mode === 'SUBSCRIPTION');
             }
         }
         if ($operation === 'createSubscription') {
@@ -90,7 +115,7 @@ final class Rules
             }
             $items = self::itemObjects($body['items'] ?? []);
             foreach ($items as $item) {
-                self::itemPrice($item, true);
+                self::itemPrice($item, true, true);
             }
         }
         if ($operation === 'updateSubscription') {
@@ -102,12 +127,15 @@ final class Rules
             $items = self::itemObjects($body['items'] ?? []);
             foreach ($items as $item) {
                 self::prorationValue($item);
+                if (array_key_exists('rate_card_version', $item)) {
+                    Validator::validate($item['rate_card_version'], ['type' => 'integer', 'format' => 'int32'], []);
+                }
                 if (isset($item['id'])) {
-                    if (array_key_exists('price_id', $item)) {
+                    if (array_key_exists('price_id', $item) || array_key_exists('rate_card_id', $item)) {
                         Validator::fail();
                     }
                 } else {
-                    self::requireKeys($item, ['price_id']);
+                    self::itemPrice($item, false, true);
                     if (($item['deleted'] ?? false) === true) {
                         Validator::fail();
                     }
@@ -187,14 +215,14 @@ final class Rules
     /**
      * @param array<string, mixed> $body
      */
-    private static function price(#[SensitiveParameter] array $body): void
+    private static function price(#[SensitiveParameter] array $body, bool $allowZeroFirstBound = false): void
     {
         $model = $body['pricing_model'] ?? 'PER_UNIT';
         if (!in_array($model, ['FLAT', 'PER_UNIT', 'VOLUME', 'GRADUATED'], true)) {
             Validator::fail();
         }
         if (in_array($model, ['VOLUME', 'GRADUATED'], true)) {
-            self::priceTiers($body);
+            self::priceTiers($body, $allowZeroFirstBound);
         } else {
             self::requireKeys($body, [$model === 'FLAT' ? 'flat_amount' : 'unit_amount']);
             if (array_key_exists('tiers', $body)) {
@@ -204,6 +232,12 @@ final class Rules
         if (isset($body['billing_type']) && !in_array($body['billing_type'], ['IN_ADVANCE', 'IN_ARREARS'], true)) {
             Validator::fail();
         }
+        self::recurring($body);
+    }
+
+    /** @param array<string,mixed> $body */
+    private static function recurring(#[SensitiveParameter] array $body): void
+    {
         if (isset($body['recurring']) && is_array($body['recurring'])) {
             if (
                 !in_array($body['recurring']['period_unit'] ?? null, ['DAY', 'WEEK', 'MONTH', 'YEAR'], true)
@@ -215,7 +249,7 @@ final class Rules
     }
 
     /** @param array<string,mixed> $body */
-    private static function priceTiers(#[SensitiveParameter] array $body): void
+    private static function priceTiers(#[SensitiveParameter] array $body, bool $allowZeroFirstBound): void
     {
         self::requireKeys($body, ['tiers']);
         $tiers = self::itemObjects($body['tiers']);
@@ -230,7 +264,11 @@ final class Rules
                 }
             } else {
                 $upper = $tier['upper_bound'] ?? null;
-                if (!is_string($upper) || Validator::compareDecimals($upper, $lower) <= 0) {
+                if (!is_string($upper)) {
+                    Validator::fail();
+                }
+                $comparison = Validator::compareDecimals($upper, $lower);
+                if ($comparison < 0 || ($comparison === 0 && (!$allowZeroFirstBound || $index !== 0))) {
                     Validator::fail();
                 }
                 $lower = $upper;
@@ -263,9 +301,21 @@ final class Rules
     /**
      * @param array<string, mixed> $item
      */
-    private static function itemPrice(#[SensitiveParameter] array $item, bool $inlineAllowed): void
-    {
-        if (isset($item['price_id']) === isset($item['price'])) {
+    private static function itemPrice(
+        #[SensitiveParameter] array $item,
+        bool $inlineAllowed,
+        bool $rateCardAllowed = false,
+    ): void {
+        $sources = (int) isset($item['price_id']) + (int) isset($item['price']) + (int) isset($item['rate_card_id']);
+        if ($sources !== 1) {
+            Validator::fail();
+        }
+        if (isset($item['rate_card_id'])) {
+            if (!$rateCardAllowed) {
+                Validator::fail();
+            }
+            self::requireKeys($item, ['rate_card_version']);
+        } elseif (array_key_exists('rate_card_version', $item)) {
             Validator::fail();
         }
         if (isset($item['price'])) {
@@ -297,16 +347,9 @@ final class Rules
     /**
      * @param array<string, mixed> $value
      */
-    private static function unsupportedControls(#[SensitiveParameter] array $value): void
+    private static function nestedControls(#[SensitiveParameter] array $value): void
     {
         foreach ($value as $key => $child) {
-            if (
-                ($key === 'metered' && $child !== false)
-                || in_array($key, ['meter_id', 'rate_card_id', 'rate_card_version',
-                'enable_automatic_tax', 'default_tax_percent', 'tax_percent'], true)
-            ) {
-                Validator::fail();
-            }
             if ($key === 'discounts' && $child !== null) {
                 if (!is_array($child) || !array_is_list($child) || count($child) > 1) {
                     Validator::fail();
@@ -321,17 +364,17 @@ final class Rules
                     }
                 }
             }
-            if ($key !== 'metadata' && is_array($child)) {
+            if (!in_array($key, ['metadata', 'properties', 'dimension_values'], true) && is_array($child)) {
                 if (array_is_list($child)) {
                     foreach ($child as $item) {
                         if (is_array($item)) {
                             /** @var array<string, mixed> $item */
-                            self::unsupportedControls($item);
+                            self::nestedControls($item);
                         }
                     }
                 } else {
                     /** @var array<string, mixed> $child */
-                    self::unsupportedControls($child);
+                    self::nestedControls($child);
                 }
             }
         }

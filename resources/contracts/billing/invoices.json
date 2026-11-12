@@ -2292,5 +2292,20 @@
       "invoices_finalize"
     ],
     "response_addition": "Invoice.billing_customer and its reachable snapshot schemas; other shared schemas unchanged."
+  },
+  "tax_review": {
+    "reviewed": "2026-11-12",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "request_paths_unchanged": [
+      "createInvoice/content/application/json/schema/properties/default_tax_percent",
+      "createInvoice/content/application/json/schema/properties/enable_automatic_tax",
+      "updateInvoice/content/application/json/schema/properties/default_tax_percent",
+      "updateInvoice/content/application/json/schema/properties/enable_automatic_tax",
+      "invoices_addLineItems/content/application/json/schema/properties/line_items/items/properties/price/properties/product/properties/tax_code",
+      "invoices_addLineItems/content/application/json/schema/properties/line_items/items/properties/price/properties/tax_included",
+      "invoices_addLineItems/content/application/json/schema/properties/line_items/items/properties/tax_percent",
+      "invoices_updateLineItems/content/application/json/schema/properties/line_items/items/properties/tax_percent"
+    ]
   }
 }

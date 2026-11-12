@@ -1,0 +1,808 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/billing/meters",
+  "reviewed": "2026-11-12",
+  "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+  "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+  "endpoints": {
+    "createMeter": {
+      "apiPath": "/api/v1/billing/meters/create",
+      "method": "post",
+      "description": "Create a new Meter object.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "required": [
+                "aggregation_method",
+                "event_name",
+                "name",
+                "request_id"
+              ],
+              "type": "object",
+              "properties": {
+                "aggregation_method": {
+                  "pattern": "^(SUM|MAX|LAST|COUNT|UNIQUE)$",
+                  "type": "string",
+                  "description": "Type of aggregation to perform, based on each event's `properties` value.",
+                  "enum": [
+                    "SUM",
+                    "MAX",
+                    "LAST",
+                    "COUNT",
+                    "UNIQUE"
+                  ],
+                  "x-enumDescriptions": {
+                    "SUM": "Sum up the value of each event.",
+                    "MAX": "Maximum of all event values.",
+                    "LAST": "The value of the last event.",
+                    "COUNT": "Count the number of events.",
+                    "UNIQUE": "Count the number of unique events."
+                  }
+                },
+                "aggregation_property": {
+                  "type": "string",
+                  "description": "The name of the property within the event to aggregate. Events will be ignored during aggregation if they are missing this property or if its value is invalid."
+                },
+                "description": {
+                  "maxLength": 500,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Meter description. Used for internal classification and identification."
+                },
+                "dimension_keys": {
+                  "type": "array",
+                  "description": "Append-only list of event property keys. New keys can be appended; existing keys cannot be modified, removed, or renamed. Used for event grouping and filtering. A usage event may include any subset of these (or none).",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "event_name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "pattern": "^\\S*$",
+                  "type": "string",
+                  "description": "The name of the Usage Event to record for. Corresponds with the `event_name` field on [Usage Events](/docs/api/billing/usage_events)."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Meter name."
+                },
+                "request_id": {
+                  "maxLength": 64,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Unique request ID specified by the merchant."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Meter"
+              }
+            }
+          },
+          "description": "Created"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:write",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "retrieveMeter": {
+      "apiPath": "/api/v1/billing/meters/{id}",
+      "method": "get",
+      "description": "Retrieves the details of a Meter.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Meter"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Meter object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:read",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listMeters": {
+      "apiPath": "/api/v1/billing/meters",
+      "method": "get",
+      "description": "Retrieves a list of Meters based on the query parameters.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseMeter"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "The meter's archived status, either `true` or `false`.",
+          "in": "query",
+          "name": "archived",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "description": "The name of the Usage Event to record for. Corresponds with the `event_name` field on Usage Events.",
+          "in": "query",
+          "name": "event_name",
+          "required": false,
+          "schema": {
+            "pattern": "^\\S*$",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Type of aggregation to perform.",
+          "in": "query",
+          "name": "aggregation_method",
+          "required": false,
+          "schema": {
+            "pattern": "^(SUM|MAX|LAST|COUNT|UNIQUE)$",
+            "type": "string"
+          }
+        },
+        {
+          "description": "Property within the event to aggregate.",
+          "in": "query",
+          "name": "aggregation_property",
+          "required": false,
+          "schema": {
+            "pattern": "^\\S*$",
+            "type": "string"
+          }
+        },
+        {
+          "description": "The start time of `created_at` in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end time of `created_at` in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_created_at",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of results per page. Defaults to 20.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:read",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true
+    },
+    "updateMeter": {
+      "apiPath": "/api/v1/billing/meters/{id}/update",
+      "method": "post",
+      "description": "Update a meter.",
+      "requestBody": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "type": "string",
+                  "description": "Meter description. Used for internal classification and identification."
+                },
+                "dimension_keys": {
+                  "type": "array",
+                  "description": "Complete list of dimension keys. Existing keys must remain unchanged and in the same order. New keys may only be appended.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                  },
+                  "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+                },
+                "name": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string",
+                  "description": "Meter name."
+                }
+              }
+            }
+          }
+        },
+        "required": true
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Meter"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Meter object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:write",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "restore": {
+      "apiPath": "/api/v1/billing/meters/{id}/restore",
+      "method": "post",
+      "description": "Restore a Meter. The meter will be available to be linked to new Prices.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Meter"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Meter object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:write",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "archive": {
+      "apiPath": "/api/v1/billing/meters/{id}/archive",
+      "method": "post",
+      "description": "Archive a Meter. The meter will no longer be available to be linked to new Prices. It can be archived only when there is no linked active price.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Meter"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Meter object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:write",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": false
+    },
+    "listSummaries": {
+      "apiPath": "/api/v1/billing/meters/{id}/summaries",
+      "method": "get",
+      "description": "Calculates the result of a Meter for a customer for a given time period.",
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CursorPaginationClientApiResponseMeterSummary"
+              }
+            }
+          },
+          "description": "OK"
+        },
+        "400": {
+          "description": "Bad Request. Possible error codes: `validation_error`"
+        },
+        "401": {
+          "description": "Unauthorized. Possible error codes: `unauthorized`"
+        },
+        "404": {
+          "description": "Not Found. Possible error codes: `resource_not_found`"
+        },
+        "500": {
+          "description": "Server Error. Possible error codes: `internal_error`"
+        }
+      },
+      "parameters": [
+        {
+          "description": "ID of the Meter object.",
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "ID of the Billing Customer object.",
+          "in": "query",
+          "name": "billing_customer_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The start date of Usage Events' `happened_at` in ISO8601 format (inclusive).",
+          "in": "query",
+          "name": "from_happened_at",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The end date of Usage Events' `happened_at` in ISO8601 format (exclusive).",
+          "in": "query",
+          "name": "to_happened_at",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "description": "The time window to group the usage summary by. If not specified, a single summary for the entire time range is returned. When specified, the response will contain a list of summaries, one for each time window in the range. Possible values are `HOUR` or `DAY`. For `HOUR` grouping, `from_happened_at` and `to_happened_at` must align with hour boundaries (e.g., 2025-03-15T14:00:00+0000). For `DAY` grouping, `from_happened_at` and `to_happened_at` must align with UTC day boundaries (e.g., 2025-03-15T00:00:00+0000). If not specified, `from_happened_at` and `to_happened_at` must align with minute boundaries e.g., 2025-03-15T14:01:00+0000). The duration must not exceed one year.",
+          "in": "query",
+          "name": "grouped_by",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The event property keys to break the usage summary down by. Each key must be one of the Meter's `dimension_keys`. If not specified, usage is not broken down by event property keys. Can be combined with `grouped_by` to break down each time window further — the response then contains one summary per (time window × dimension key combination).",
+          "in": "query",
+          "name": "grouped_by_dimensions",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Filters the usage events included in the summary calculation by event property keys. Each key must be one of the Meter's `dimension_keys`.",
+          "in": "query",
+          "name": "dimension_filters",
+          "required": false,
+          "style": "deepObject",
+          "explode": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "A bookmark for use in pagination to retrieve either the next page or the previous page of results. You can fetch the value for this identifier from the response of the previous API call. To retrieve the next page of results, pass the value of `page_after` (if not `null`) from the response to a subsequent call. To retrieve the previous page of results, pass the value of `page_before` (if not `null`) from the response to a subsequent call.",
+          "in": "query",
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Number of summaries per page. Defaults to 20.",
+          "in": "query",
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer",
+            "format": "int32",
+            "default": 20
+          }
+        }
+      ],
+      "x-resourceLevel": "org",
+      "x-oboSupported": false,
+      "x-scope": [
+        {
+          "scope": "billing.usage_metering:read",
+          "group": "Billing",
+          "resource_name": "Usage Metering",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "sdkClearable": false,
+      "sdkPagination": true,
+      "sdkQueryStyles": {
+        "grouped_by_dimensions": "repeat",
+        "dimension_filters": "deepObject"
+      }
+    }
+  },
+  "schemas": {
+    "Meter": {
+      "required": [
+        "aggregation_method",
+        "archived",
+        "created_at",
+        "event_name",
+        "id",
+        "name",
+        "updated_at"
+      ],
+      "type": "object",
+      "properties": {
+        "aggregation_method": {
+          "type": "string",
+          "description": "Type of aggregation to perform, based on each event's `properties` value. One of\n- `COUNT`: count the number of events.\n- `LAST`: the value of the last event.\n- `MAX`: maximum of all event values.\n- `SUM`: sum up the value of each event.\n- `UNIQUE`: count the number of unique events."
+        },
+        "aggregation_property": {
+          "type": "string",
+          "description": "The name of the property within the event to aggregate. Events will be ignored during aggregation if they are missing this property or if its value is invalid."
+        },
+        "archived": {
+          "type": "boolean",
+          "description": "`false` if the Meter is available to be linked to new prices, `true` otherwise."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Time when this meter was created."
+        },
+        "description": {
+          "type": "string",
+          "description": "Meter description. Used for internal classification and identification."
+        },
+        "dimension_keys": {
+          "type": "array",
+          "description": "Append-only list of event property keys. New keys can be appended; existing keys cannot be modified, removed, or renamed. Used for event grouping and filtering. A usage event may include any subset of these (or none).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "event_name": {
+          "type": "string",
+          "description": "The name of the Usage Event to record for. Corresponds with the `event_name` field on [Usage Events](/docs/api/billing/usage_events)."
+        },
+        "id": {
+          "type": "string",
+          "description": "ID of the Meter object."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+          },
+          "description": "A set of key-value pairs that you can attach to this object for storing additional information."
+        },
+        "name": {
+          "type": "string",
+          "description": "Meter name."
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Time when this meter was last updated."
+        }
+      }
+    },
+    "CursorPaginationClientApiResponseMeter": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/Meter"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    },
+    "CursorPaginationClientApiResponseMeterSummary": {
+      "required": [
+        "items"
+      ],
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Paged results.",
+          "items": {
+            "$ref": "#/components/schemas/MeterSummary"
+          }
+        },
+        "page_after": {
+          "type": "string",
+          "description": "The page cursor used for searching after page."
+        },
+        "page_before": {
+          "type": "string",
+          "description": "The page cursor used for search before page."
+        }
+      }
+    },
+    "MeterSummary": {
+      "required": [
+        "billing_customer_id",
+        "event_count",
+        "from_happened_at",
+        "meter_id",
+        "to_happened_at",
+        "value"
+      ],
+      "type": "object",
+      "properties": {
+        "billing_customer_id": {
+          "type": "string",
+          "description": "ID of the Billing Customer object."
+        },
+        "dimension_values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "description": "A dimension value that this summary is broken down by."
+          },
+          "description": "The event property keys and values this summary is broken down by. Only present when `grouped_by_dimensions` is specified in the request."
+        },
+        "event_count": {
+          "type": "integer",
+          "description": "The number of usage events that contributed to the value.",
+          "format": "int64"
+        },
+        "from_happened_at": {
+          "type": "string",
+          "description": "Start time of the summary period (inclusive)."
+        },
+        "meter_id": {
+          "type": "string",
+          "description": "ID of the Meter object."
+        },
+        "to_happened_at": {
+          "type": "string",
+          "description": "End time of the summary period (exclusive)."
+        },
+        "value": {
+          "type": "number",
+          "description": "The aggregated value based on the meter's aggregation type."
+        }
+      }
+    }
+  }
+}
