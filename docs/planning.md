@@ -44,6 +44,8 @@ For platform requests and Billing–Payments ownership, consult [connected-accou
 
 Both Billing models are included to cover platform service subscriptions and merchants’ customer billing. API-key authentication provides the initial credential path; OAuth authorization and refresh support require a separate scope decision.
 
+The subscription ownership decision for [#161](https://github.com/jojeringnax/airwallex-php-sdk/issues/161), accepted on **2026-11-12**, keeps subscription history, persisted original bounds, scheduled jobs and coordination of competing changes in consumers such as `airwallex-laravel`. The SDK exposes documented Airwallex requests and responses without storing subscription workflow state or executing future changes. Reversing a pending cancellation must continue the same Subscription. Next-cycle price changes use provider billing controls; Airwallex owns their calculations and invoicing. Arbitrary future schedules and renewal-boundary coordination are separate framework work when no native provider operation exists.
+
 For invoice documents, self-service, checkout UI modes, trials and cancellation/grace boundaries, consult [Billing capability boundaries](billing-capabilities.md).
 
 ## Adoption extension
