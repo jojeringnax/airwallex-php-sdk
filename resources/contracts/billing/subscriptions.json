@@ -2021,5 +2021,31 @@
         }
       }
     }
+  },
+  "tax_review": {
+    "reviewed": "2026-11-12",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "request_paths_unchanged": [
+      "createSubscription/content/application/json/schema/properties/default_tax_percent",
+      "createSubscription/content/application/json/schema/properties/enable_automatic_tax",
+      "createSubscription/content/application/json/schema/properties/items/items/properties/price/properties/product/properties/tax_code",
+      "createSubscription/content/application/json/schema/properties/items/items/properties/price/properties/tax_included",
+      "createSubscription/content/application/json/schema/properties/items/items/properties/tax_percent",
+      "updateSubscription/content/application/json/schema/properties/default_tax_percent",
+      "updateSubscription/content/application/json/schema/properties/enable_automatic_tax",
+      "updateSubscription/content/application/json/schema/properties/items/items/properties/tax_percent"
+    ]
+  },
+  "usage_pricing_review": {
+    "reviewed": "2026-11-12",
+    "provider_spec": "airwallex-openapi-2026-08-21.yaml",
+    "provider_md5": "6caa23f3759634e64859ff6aa8c37336",
+    "request_paths_unchanged": [
+      "createSubscription/content/application/json/schema/properties/items/items/properties/rate_card_id",
+      "createSubscription/content/application/json/schema/properties/items/items/properties/rate_card_version",
+      "updateSubscription/content/application/json/schema/properties/items/items/properties/rate_card_id",
+      "updateSubscription/content/application/json/schema/properties/items/items/properties/rate_card_version"
+    ]
   }
 }

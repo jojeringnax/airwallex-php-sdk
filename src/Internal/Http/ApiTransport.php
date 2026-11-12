@@ -71,7 +71,7 @@ final readonly class ApiTransport
         ) {
             throw new ConfigurationException('Invalid internal API operation.');
         }
-        $path = $operation->path . $this->queryString($query, $operation->pagination);
+        $path = $operation->path . $this->queryString($query, $operation->pagination, $operation->queryStyles);
         $encoded = $body === null ? null : $this->codec->encode($body, $operation->requestDecimalPaths);
         $sensitive = $body === null ? [] : $this->scalarValues($body);
         $sensitive = [...$sensitive, ...$this->scalarValues($query)];
@@ -97,6 +97,7 @@ final readonly class ApiTransport
                     $operation->responseIntegerPaths,
                     [...$sensitive, ...$this->tokens->sensitiveValues()],
                     preserveObjects: $this->preserveResponseObjects,
+                    emptyResponseStatuses: $operation->emptyResponseStatuses,
                 );
             } catch (ApiException $error) {
                 if ($error->httpStatus() === 401) {
@@ -121,8 +122,11 @@ final readonly class ApiTransport
         }
     }
 
-    /** @param array<array-key, mixed> $query */
-    private function queryString(#[SensitiveParameter] array $query, ?string $pagination): string
+    /**
+     * @param array<array-key, mixed> $query
+     * @param array<string,string> $styles
+     */
+    private function queryString(#[SensitiveParameter] array $query, ?string $pagination, array $styles): string
     {
         if ($pagination !== null && !in_array($pagination, ['billing', 'payments'], true)) {
             throw new ConfigurationException('Unsupported pagination contract.');
@@ -143,6 +147,10 @@ final readonly class ApiTransport
         }
         $parts = [];
         foreach ($query as $key => $value) {
+            if (is_string($key) && isset($styles[$key])) {
+                $parts = [...$parts, ...$this->structuredQueryParts($key, $value, $styles[$key])];
+                continue;
+            }
             if (!is_string($key) || (!is_string($value) && !is_int($value) && !is_bool($value))) {
                 throw new ValidationException('Query parameters must be named strings, integers or booleans.');
             }
@@ -150,6 +158,36 @@ final readonly class ApiTransport
             $parts[] = rawurlencode($key) . '=' . rawurlencode($encodedValue);
         }
         return $parts === [] ? '' : '?' . implode('&', $parts);
+    }
+
+    /** @return list<string> */
+    private function structuredQueryParts(string $key, #[SensitiveParameter] mixed $value, string $style): array
+    {
+        if ($value instanceof \stdClass) {
+            $value = get_object_vars($value);
+        }
+        if (!is_array($value) || !in_array($style, ['repeat', 'deepObject'], true)) {
+            throw new ValidationException('Unsupported structured query parameter.');
+        }
+        if ($style === 'repeat') {
+            if (!array_is_list($value)) {
+                throw new ValidationException('Repeated query parameters require a list.');
+            }
+            $names = array_fill(0, count($value), $key);
+        } else {
+            $names = array_map(
+                static fn (string|int $childKey): string => $key . '[' . $childKey . ']',
+                array_keys($value),
+            );
+        }
+        $parts = [];
+        foreach (array_values($value) as $index => $child) {
+            if (!is_string($child)) {
+                throw new ValidationException('Structured query values require strings.');
+            }
+            $parts[] = rawurlencode($names[$index]) . '=' . rawurlencode($child);
+        }
+        return $parts;
     }
 
     /**

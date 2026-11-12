@@ -44,6 +44,8 @@ $mock = new MockHandler([
     new Response(201, [], '{"id":"synthetic-coupon","amount_off":10.000000000001}'),
     new Response(201, [], '{"id":"synthetic-invoice","status":"DRAFT"}'),
     new Response(201, [], '{"id":"synthetic-credit","invoice_id":"synthetic-invoice","status":"DRAFT"}'),
+    new Response(202, [], ''),
+    new Response(200, [], '{"rate_card_id":"synthetic-card","version":1}'),
 ]);
 $handler = HandlerStack::create($mock);
 $handler->push(Middleware::history($history));
@@ -89,6 +91,7 @@ $expectConsumer($coupon['amount_off'] === '10.000000000001', 'Installed coupon s
 $invoice = $client->billing()->invoices()->create([
     'request_id' => 'persisted-invoice-action', 'billing_customer_id' => 'synthetic-billing-customer',
     'currency' => 'USD', 'collection_method' => 'OUT_OF_BAND',
+    'enable_automatic_tax' => false, 'default_tax_percent' => '7.125000000001',
     'discounts' => [['type' => 'COUPON', 'coupon' => ['id' => 'synthetic-coupon']]],
 ]);
 $expectConsumer($invoice['id'] === 'synthetic-invoice', 'Installed Invoice creation failed.');
@@ -97,10 +100,17 @@ $credit = $client->billing()->creditNotes()->create([
     'type' => 'BEFORE_PAYMENT', 'reason' => 'BILLING_ERROR',
 ]);
 $expectConsumer($credit['invoice_id'] === 'synthetic-invoice', 'Installed Credit Note schema lost its Invoice link.');
+$accepted = $client->billing()->usageEvents()->batchIngest(['events' => [[
+    'billing_customer_id' => 'synthetic-billing-customer', 'event_name' => 'synthetic-usage',
+    'merchant_event_id' => 'persisted-usage-event', 'properties' => ['quantity' => '1.000000000001'],
+]]]);
+$expectConsumer($accepted === [], 'Installed empty usage acknowledgement changed.');
+$version = $client->billing()->rateCards()->retrieveVersion('synthetic-card', 1);
+$expectConsumer($version['version'] === 1, 'Installed Rate Card version schema changed.');
 if (!is_array($history)) {
     throw new RuntimeException('Consumer request capture is unavailable.');
 }
-$expectConsumer(count($history) === 9, 'Installed SDK did not reuse its authentication token.');
+$expectConsumer(count($history) === 11, 'Installed SDK did not reuse its authentication token.');
 $requests = [];
 foreach ($history as $entry) {
     $request = is_array($entry) ? ($entry['request'] ?? null) : null;
@@ -125,6 +135,10 @@ $expectConsumer(
 $expectConsumer(
     str_contains((string) $requests[6]->getBody(), '"amount_off":10.000000000001'),
     'Installed coupon wire amount changed.'
+);
+$expectConsumer(
+    str_contains((string) $requests[7]->getBody(), '"default_tax_percent":7.125000000001'),
+    'Installed tax rate lost precision.'
 );
 $body = '{"name":"future.event","amount":19.9000,"nested":{},"list":[]}';
 $timestamp = '1700000000000';

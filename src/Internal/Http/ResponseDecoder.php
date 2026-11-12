@@ -21,6 +21,7 @@ final readonly class ResponseDecoder
      * @param list<string> $decimalPaths
      * @param list<string> $integerPaths
      * @param list<string> $sensitiveValues
+     * @param list<int> $emptyResponseStatuses
      * @return array<array-key, mixed>
      */
     public function decode(
@@ -29,6 +30,7 @@ final readonly class ResponseDecoder
         array $integerPaths = [],
         #[SensitiveParameter] array $sensitiveValues = [],
         bool $preserveObjects = false,
+        array $emptyResponseStatuses = [],
     ): array {
         $status = $response->getStatusCode();
         try {
@@ -59,6 +61,9 @@ final readonly class ResponseDecoder
                 'from_created_at', 'to_created_at', 'status', 'active', 'reason',
             ];
             throw new ApiException($status, $code, in_array($source, $safeRoots, true) ? $source : null);
+        }
+        if ($raw === '' && in_array($status, $emptyResponseStatuses, true)) {
+            return [];
         }
         return $this->codec->decodeObject($raw, $decimalPaths, $integerPaths, $preserveObjects);
     }

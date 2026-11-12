@@ -124,6 +124,10 @@ final class Endpoint
         }
         /** @var string $method */
         $method = $this->endpoint['method'];
+        /** @var array<string,string> $queryStyles */
+        $queryStyles = $this->endpoint['sdkQueryStyles'] ?? [];
+        /** @var list<int> $emptyResponseStatuses */
+        $emptyResponseStatuses = $this->endpoint['sdkEmptyResponseStatuses'] ?? [];
         return new Operation(
             method: strtoupper($method),
             path: $path,
@@ -132,6 +136,8 @@ final class Endpoint
             responseDecimalPaths: array_values(array_unique($responseNumbers)),
             responseIntegerPaths: array_values(array_unique($responseIntegers)),
             pagination: $pagination,
+            queryStyles: $queryStyles,
+            emptyResponseStatuses: $emptyResponseStatuses,
         );
     }
 

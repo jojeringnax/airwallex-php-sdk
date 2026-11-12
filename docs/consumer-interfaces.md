@@ -44,6 +44,11 @@ For implemented environment, token, transport, retry and diagnostic behavior, se
 The [advanced Billing extension](planning.md#advanced-billing-extension) adds `billing()->coupons()` with the standard create/retrieve/list/update signatures. Supporting `invoices()` writes use standard create/update, `addLineItems(string $id, array $body): array`, `updateLineItems(string $id, array $body): array`, and bodyless `finalize(string $id): array`. [Coupon usage](billing-resources.md#coupons-and-one-off-invoice-application) owns request conditions, examples and unreleased availability.
 
 The same extension's `billing()->creditNotes()` follows standard create/retrieve/list, explicit-parent line-item creation/reads, `finalize(string $id, array $body): array` and bodyless `void(string $id): array`. The [Credit Note contract](billing-resources.md#credit-note-adjustments) distinguishes draft creation, Invoice credit, original-method refunds and out-of-band adjustments.
+The [tax extension](billing-resources.md#tax-controls) uses existing provider-shaped arrays: exact-string manual percentages and boolean automatic-tax flags. It introduces no tax calculator or new resource accessor. Applications select their approved mode and prepare location, category and registration prerequisites.
+
+The [Meter/Usage Event extension](billing-resources.md#usage-meters-and-events) adds `billing()->meters()` with standard CRUD, bodyless archive/restore, and `listSummaries(string $id, array $query): array`. `billing()->usageEvents()` provides `ingest(array $body): array`, `batchIngest(array $body): array` and `void(array $body): array`. Selected empty 202 acknowledgements return `[]`; they report no per-event or aggregation success. Applications own durable merchant event identities and asynchronous recovery.
+
+The [Rate Card extension](billing-resources.md#versioned-rate-cards) adds `billing()->rateCards()` with standard create/retrieve/list/update and explicit-parent version/item methods. Read versions are PHP int32 integers; subscription/checkout item pins use native integer `rate_card_version`. Publishing a version is independent of an existing subscription's explicit pin change.
 
 Read the relevant [consumer example](consumer-examples.md) when implementing or reviewing a workflow:
 
