@@ -1,0 +1,641 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/core_resources/deposits",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "47304684f743eed0b3f6c6c568b11319"
+  },
+  "annotations": [
+    "listDeposits.page_num uses a zero-based page number.",
+    "listDeposits.page_size enforces the selected page size bounds."
+  ],
+  "endpoints": {
+    "retrieveDeposit": {
+      "apiPath": "/api/v1/deposits/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositDtoV2"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "429": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "deposit:read",
+          "group": "Core Resources",
+          "resource_name": "Deposits",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true
+    },
+    "listDeposits": {
+      "apiPath": "/api/v1/deposits",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "from_created_at",
+          "in": "query",
+          "required": false,
+          "allowEmptyValue": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page_num",
+          "in": "query",
+          "required": false,
+          "allowEmptyValue": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "required": false,
+          "allowEmptyValue": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1
+          }
+        },
+        {
+          "name": "to_created_at",
+          "in": "query",
+          "required": false,
+          "allowEmptyValue": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/DepositDtoV2"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "429": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "deposit:read",
+          "group": "Core Resources",
+          "resource_name": "Deposits",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": "schema"
+    }
+  },
+  "schemas": {
+    "BankAccountAUBsb": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bsb": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountAUPayid": {
+      "type": "object",
+      "properties": {
+        "account_identifier_type": {
+          "type": "string"
+        },
+        "account_number": {
+          "type": "string"
+        },
+        "bsb": {
+          "type": "string"
+        },
+        "payid": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountBRBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        },
+        "branch_code": {
+          "type": "string"
+        },
+        "ispb": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountCAInstitutionNumber": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "institution_number": {
+          "type": "string"
+        },
+        "transit_number": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountCNCnapsCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "cnaps_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountDKBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountGBSortCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "sort_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountHKBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        },
+        "branch_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountIban": {
+      "type": "object",
+      "properties": {
+        "iban": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountInstitution": {
+      "type": "object",
+      "properties": {
+        "country_code": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "swift_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountJPBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        },
+        "branch_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountKRBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        },
+        "branch_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountMXBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        },
+        "branch_office_code": {
+          "type": "string"
+        },
+        "control_digit": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountNZBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        },
+        "branch_code": {
+          "type": "string"
+        },
+        "suffix": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountPHBankCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountPartial": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "account_routing_type1": {
+          "type": "string"
+        },
+        "account_routing_type2": {
+          "type": "string"
+        },
+        "account_routing_value1": {
+          "type": "string"
+        },
+        "account_routing_value2": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountSwiftCode": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "swift_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountUSAch": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "ach": {
+          "type": "string"
+        }
+      }
+    },
+    "BankAccountUSWire": {
+      "type": "object",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "wire": {
+          "type": "string"
+        }
+      }
+    },
+    "Core_Resources_FailureDetails": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "iso_code": {
+          "type": "string"
+        },
+        "provider_failure_details": {
+          "$ref": "#/components/schemas/ProviderFailureDetails"
+        }
+      }
+    },
+    "DepositDtoV2": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "estimated_settled_at": {
+          "type": "string"
+        },
+        "failure_details": {
+          "$ref": "#/components/schemas/Core_Resources_FailureDetails"
+        },
+        "fee": {
+          "$ref": "#/components/schemas/DepositFee"
+        },
+        "funding_source_id": {
+          "type": "string"
+        },
+        "global_account_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "payer": {
+          "$ref": "#/components/schemas/DepositPayer"
+        },
+        "provider_transaction_id": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "settled_at": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "SETTLED",
+            "REJECTED",
+            "REVERSED"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "BANK_TRANSFER",
+            "DIRECT_DEBIT",
+            "DIGITAL_WALLET_TRANSFER",
+            "AGGREGATE_FUNDS",
+            "STABLECOIN_TRANSFER"
+          ]
+        }
+      }
+    },
+    "DepositFee": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        }
+      }
+    },
+    "DepositPayer": {
+      "type": "object",
+      "properties": {
+        "bank_account": {
+          "$ref": "#/components/schemas/DepositPayerBankAccount"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "digital_wallet": {
+          "$ref": "#/components/schemas/DepositPayerDigitalWallet"
+        },
+        "name": {
+          "type": "string"
+        },
+        "stablecoin_wallet": {
+          "$ref": "#/components/schemas/DepositStablecoinWallet"
+        }
+      }
+    },
+    "DepositPayerBankAccount": {
+      "type": "object",
+      "properties": {
+        "au_bsb": {
+          "$ref": "#/components/schemas/BankAccountAUBsb"
+        },
+        "au_payid": {
+          "$ref": "#/components/schemas/BankAccountAUPayid"
+        },
+        "br_bank_code": {
+          "$ref": "#/components/schemas/BankAccountBRBankCode"
+        },
+        "ca_institution_number": {
+          "$ref": "#/components/schemas/BankAccountCAInstitutionNumber"
+        },
+        "cn_cnaps_code": {
+          "$ref": "#/components/schemas/BankAccountCNCnapsCode"
+        },
+        "dk_bank_code": {
+          "$ref": "#/components/schemas/BankAccountDKBankCode"
+        },
+        "gb_sort_code": {
+          "$ref": "#/components/schemas/BankAccountGBSortCode"
+        },
+        "hk_bank_code": {
+          "$ref": "#/components/schemas/BankAccountHKBankCode"
+        },
+        "iban": {
+          "$ref": "#/components/schemas/BankAccountIban"
+        },
+        "institution": {
+          "$ref": "#/components/schemas/BankAccountInstitution"
+        },
+        "jp_bank_code": {
+          "$ref": "#/components/schemas/BankAccountJPBankCode"
+        },
+        "kr_bank_code": {
+          "$ref": "#/components/schemas/BankAccountKRBankCode"
+        },
+        "mx_bank_code": {
+          "$ref": "#/components/schemas/BankAccountMXBankCode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nz_bank_code": {
+          "$ref": "#/components/schemas/BankAccountNZBankCode"
+        },
+        "partial": {
+          "$ref": "#/components/schemas/BankAccountPartial"
+        },
+        "ph_bank_code": {
+          "$ref": "#/components/schemas/BankAccountPHBankCode"
+        },
+        "swift_code": {
+          "$ref": "#/components/schemas/BankAccountSwiftCode"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "AU_BSB",
+            "AU_PAYID",
+            "BR_BANK_CODE",
+            "CA_INSTITUTION_NUMBER",
+            "GB_SORT_CODE",
+            "HK_BANK_CODE",
+            "JP_BANK_CODE",
+            "NZ_BANK_CODE",
+            "US_ACH",
+            "US_WIRE",
+            "CN_CNAPS_CODE",
+            "PARTIAL",
+            "IBAN",
+            "MX_BANK_CODE",
+            "SWIFT_CODE",
+            "KR_BANK_CODE",
+            "DK_BANK_CODE",
+            "PH_BANK_CODE"
+          ]
+        },
+        "us_ach": {
+          "$ref": "#/components/schemas/BankAccountUSAch"
+        },
+        "us_wire": {
+          "$ref": "#/components/schemas/BankAccountUSWire"
+        }
+      }
+    },
+    "DepositPayerDigitalWallet": {
+      "type": "object",
+      "required": [
+        "account_name",
+        "provider"
+      ],
+      "properties": {
+        "account_name": {
+          "type": "string"
+        },
+        "id_type": {
+          "type": "string"
+        },
+        "id_value": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      }
+    },
+    "DepositStablecoinWallet": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "asset": {
+          "type": "string"
+        },
+        "network": {
+          "type": "string"
+        }
+      }
+    },
+    "ProviderFailureDetails": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "local_clearing_system": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

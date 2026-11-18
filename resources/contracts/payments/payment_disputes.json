@@ -1,0 +1,844 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/payments/payment_disputes",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "47304684f743eed0b3f6c6c568b11319"
+  },
+  "annotations": [
+    "listPaymentDisputes.from_created_at uses a timezone-bearing ISO 8601 timestamp.",
+    "listPaymentDisputes.from_due_at uses a timezone-bearing ISO 8601 timestamp.",
+    "listPaymentDisputes.from_updated_at uses a timezone-bearing ISO 8601 timestamp.",
+    "listPaymentDisputes.page requires nonempty text.",
+    "listPaymentDisputes.payment_intent_id requires nonempty text.",
+    "listPaymentDisputes.size enforces the selected page size bounds.",
+    "listPaymentDisputes.to_created_at uses a timezone-bearing ISO 8601 timestamp.",
+    "listPaymentDisputes.to_due_at uses a timezone-bearing ISO 8601 timestamp.",
+    "listPaymentDisputes.to_updated_at uses a timezone-bearing ISO 8601 timestamp."
+  ],
+  "endpoints": {
+    "retrievePaymentDispute": {
+      "apiPath": "/api/v1/pa/payment_disputes/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentDispute"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_dispute:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Disputes",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true
+    },
+    "listPaymentDisputes": {
+      "apiPath": "/api/v1/pa/payment_disputes",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "connected_account_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "customer_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "customer_name",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "from_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "name": "from_due_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "name": "from_updated_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "name": "merchant_order_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        {
+          "name": "payment_intent_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        {
+          "name": "payment_method_type",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "reason_code",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "size",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        {
+          "name": "stage",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "status",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "to_created_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "name": "to_due_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "name": "to_updated_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        {
+          "name": "transaction_type",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PageResponseDTOOfPaymentAcceptancePaymentDispute"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "payment_dispute:read",
+          "group": "Payment Acceptance",
+          "resource_name": "Payment Disputes",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": "schema"
+    }
+  },
+  "schemas": {
+    "AcceptDetails": {
+      "type": "object",
+      "properties": {
+        "accepted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "accepted_by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "refund": {
+          "$ref": "#/components/schemas/RefundRequest"
+        },
+        "stage": {
+          "type": "string"
+        }
+      }
+    },
+    "AiDisputeAutomation": {
+      "type": "object",
+      "properties": {
+        "recommendation": {
+          "$ref": "#/components/schemas/AiDisputeRecommendation"
+        },
+        "status": {
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "type": "string"
+        }
+      }
+    },
+    "AiDisputeEvidence": {
+      "type": "object",
+      "properties": {
+        "access_activity_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "authenticity_proof_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "customer_communication_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "duplicate_acquirer_reference_number": {
+          "type": "string"
+        },
+        "duplicate_explanation": {
+          "type": "string"
+        },
+        "duplicate_payment_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "duplicate_transaction_amount_currency": {
+          "type": "string"
+        },
+        "duplicate_transaction_created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "merchant_business_model_description": {
+          "type": "string"
+        },
+        "order_fulfilled_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "order_fulfillment_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "order_snapshot_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "previous_dispute_won_on_same_card_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "previous_purchase_similar_product_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "product_consumption_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "product_description": {
+          "type": "string"
+        },
+        "product_snapshot_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "refund_policy_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "refund_policy_url": {
+          "type": "string"
+        },
+        "user_agreement_file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "AiDisputeRecommendation": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "evidence_to_submit": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ChallengeDetails": {
+      "type": "object",
+      "properties": {
+        "challenge_method": {
+          "type": "string"
+        },
+        "challenged_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "challenged_by": {
+          "type": "string"
+        },
+        "customer_info": {
+          "$ref": "#/components/schemas/CustomerInformation"
+        },
+        "delivery_info": {
+          "$ref": "#/components/schemas/DeliveryInformation"
+        },
+        "evidence": {
+          "$ref": "#/components/schemas/AiDisputeEvidence"
+        },
+        "order_info": {
+          "$ref": "#/components/schemas/OrderInformation"
+        },
+        "product_description": {
+          "type": "string"
+        },
+        "product_type": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "refund_refusal_reason": {
+          "type": "string"
+        },
+        "seller_info": {
+          "$ref": "#/components/schemas/SellerInformation"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "supporting_documents": {
+          "$ref": "#/components/schemas/SupportingDocuments"
+        }
+      }
+    },
+    "CustomerInformation": {
+      "type": "object",
+      "properties": {
+        "billing_address": {
+          "type": "string"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "ip": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "phone_number": {
+          "type": "string"
+        }
+      }
+    },
+    "DeliveryInformation": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "delivered_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "fee_amount": {
+          "type": "number"
+        },
+        "fee_currency": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "phone_number": {
+          "type": "string"
+        },
+        "shipped_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "shipping_company": {
+          "type": "string"
+        },
+        "shipping_method": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tracking_number": {
+          "type": "string"
+        }
+      }
+    },
+    "DisputeDocument": {
+      "type": "object",
+      "properties": {
+        "file_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "OrderInformation": {
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "id": {
+          "type": "string"
+        },
+        "invoice_number": {
+          "type": "string"
+        },
+        "products": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/Product"
+          }
+        },
+        "total_amount": {
+          "type": "number"
+        },
+        "total_currency": {
+          "type": "string"
+        }
+      }
+    },
+    "PageResponseDTOOfPaymentAcceptancePaymentDispute": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/PaymentDispute"
+          }
+        },
+        "page_after": {
+          "type": "string"
+        },
+        "page_before": {
+          "type": "string"
+        }
+      }
+    },
+    "PaymentDispute": {
+      "type": "object",
+      "properties": {
+        "accept_details": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AcceptDetails"
+          }
+        },
+        "acquirer_reference_number": {
+          "type": "string"
+        },
+        "ai_dispute_automation": {
+          "$ref": "#/components/schemas/AiDisputeAutomation"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "card_brand": {
+          "type": "string"
+        },
+        "challenge_details": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ChallengeDetails"
+          }
+        },
+        "connected_account_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "customer_name": {
+          "type": "string"
+        },
+        "due_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "id": {
+          "type": "string"
+        },
+        "issuer_comment": {
+          "type": "string"
+        },
+        "issuer_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "merchant_order_id": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string"
+        },
+        "payment_attempt_id": {
+          "type": "string"
+        },
+        "payment_intent_id": {
+          "type": "string"
+        },
+        "payment_method_type": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/components/schemas/ReasonDetails"
+        },
+        "refunds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/RefundDetails"
+          }
+        },
+        "stage": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "transaction_type": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Product": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "desc": {
+          "type": "string"
+        },
+        "effective_end_at": {
+          "type": "string"
+        },
+        "effective_start_at": {
+          "type": "string"
+        },
+        "image_url": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "seller": {
+          "$ref": "#/components/schemas/ProductSeller"
+        },
+        "sku": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "unit_price": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "ProductSeller": {
+      "type": "object",
+      "properties": {
+        "identifier": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "ReasonDetails": {
+      "type": "object",
+      "properties": {
+        "original_code": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "RefundDetails": {
+      "type": "object",
+      "properties": {
+        "acquirer_reference_number": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "RefundRequest": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "SellerInformation": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "store_name": {
+          "type": "string"
+        },
+        "store_physical_address": {
+          "type": "string"
+        },
+        "store_url": {
+          "type": "string"
+        }
+      }
+    },
+    "SupportingDocuments": {
+      "type": "object",
+      "properties": {
+        "customer_communication_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "customer_signature_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/DisputeDocument"
+          }
+        },
+        "duplicate_charge_defense_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generated_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "other_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "proof_of_delivery_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "receipt_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "refund_policy_documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/finance/settlements/report",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "47304684f743eed0b3f6c6c568b11319"
+  },
+  "annotations": [
+    "listSettlement.page_num uses a zero-based page number.",
+    "listSettlement.page_size enforces the selected page size bounds."
+  ],
+  "endpoints": {
+    "retrieveSettlement": {
+      "apiPath": "/api/v1/pa/financial/settlements/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentAcceptanceFinancialSettlement"
+              }
+            }
+          }
+        },
+        "401": {},
+        "403": {},
+        "404": {}
+      },
+      "x-resourceLevel": "account",
+      "x-oboSupported": true
+    },
+    "listSettlement": {
+      "apiPath": "/api/v1/pa/financial/settlements",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "currency",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "from_settled_at",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page_num",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        {
+          "name": "status",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SETTLED"
+            ]
+          }
+        },
+        {
+          "name": "to_settled_at",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PaymentAcceptanceFinancialSettlement"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "401": {},
+        "403": {},
+        "404": {}
+      },
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": "schema"
+    }
+  },
+  "schemas": {
+    "PaymentAcceptanceFinancialSettlement": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "estimated_settled_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "fee": {
+          "type": "number"
+        },
+        "settlement_id": {
+          "type": "string"
+        },
+        "settled_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

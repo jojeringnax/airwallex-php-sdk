@@ -137,3 +137,20 @@ Endpoint fixtures and public representations are SDK implementation requirements
 | Runtime evidence | Capture sanitized versioned payloads and validate permissions/account isolation using explicit sandbox configuration | [#17](https://github.com/jojeringnax/airwallex-php-sdk/issues/17), [#42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42) |
 
 This review establishes a source-backed inventory and representative contract checks. The selected version establishes the SDK target; this review does not establish sandbox compatibility, complete per-endpoint schemas or production account eligibility.
+
+## Account reconciliation reads
+
+The 2026-11-18 inspection of the official resource pages below selected API version `2026-08-21`. Each advertised specification filename `airwallex-openapi-2026-08-21.yaml` and MD5 identifier `47304684f743eed0b3f6c6c568b11319`. Bundled contracts retain selected operations and numeric response paths. The checksum is page metadata.
+
+| Resource | Selected reads | Account authorization and pagination |
+| --- | --- | --- |
+| [Payment Disputes](https://www.airwallex.com/docs/api/payments/payment_disputes) | Get by dispute ID and List | `payment_dispute:read`. Pass `page_after` as `page`; query limit is `size`, up to 1000. |
+| [Deposits](https://www.airwallex.com/docs/api/core_resources/deposits) | Get by deposit ID and List | `deposit:read`. Increment the zero-based `page_num` while `has_more`. Supply explicit creation time bounds for recovery. |
+| [Settlements](https://www.airwallex.com/docs/api/finance/settlements/report) | Get by settlement ID and List | Account resource. The selected List schema requires currency, status and both settlement-date bounds. Increment `page_num` while `has_more`. |
+| [Settlement Records](https://www.airwallex.com/docs/api/payments/settlement_records) | List by settlement ID, intent ID, or both | Account resource. Pass `page_after` as `page` while `has_more`; max 50 rows. Settlement and fee details use separate exact amount fields. |
+| [Balance History](https://www.airwallex.com/docs/api/core_resources/balances/history) | List wallet movements | `balance:read`. Cursor pagination begins with `page=0`. Offset pagination is limited to seven-day windows. Page size is 10–2000. |
+| [Transfers](https://www.airwallex.com/docs/api/payouts/transfers/retrieve) | Get by transfer ID | `transfer:read`. This resource exposes payout status, payer and beneficiary amounts, and any underlying FX rate. |
+
+These GETs use the account token. The selected operations advertise delegation support. SDK login account selection and connected-account delegation remain mutually exclusive. Use account-specific permissions and enforce ownership of returned identifiers before turning observations into application state. Settlement IDs group payment records into wallet credits. Explicit wallet movement sources identify payouts when supplied. Wallet balances combine multiple activities, and the provider contracts expose no general settlement-batch-to-bank-payout allocation.
+
+In the tested Sandbox account, Deposits List returned a paged object with both pagination keys supplied. With neither key it returned a bare array, and with only one key it returned HTTP 400. The SDK supplies both keys, defaulting to page 0 and size 100. Sizes 10, 20, 100 and 500 were accepted in that account.

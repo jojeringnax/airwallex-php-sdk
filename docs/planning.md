@@ -52,6 +52,10 @@ For invoice documents, self-service, checkout UI modes, trials and cancellation/
 
 [Read-only Billing Transactions #159](https://github.com/jojeringnax/airwallex-php-sdk/issues/159), available in SDK v0.1.2, extends invoice inspection with retrieve/list observations under API `2026-08-21`. It does not activate Credit Note writes or a payment ledger. [Transaction contracts](billing-resources.md#billing-transactions) define the accounting evidence limits. Downstream qualification selects the released feature version and retains its exact source/dist provenance.
 
+## Merchant reconciliation extension
+
+The read-only extension for [merchant disputes](https://github.com/jojeringnax/airwallex-laravel/issues/126), [inbound deposits](https://github.com/jojeringnax/airwallex-laravel/issues/127) and [settlement reconciliation](https://github.com/jojeringnax/airwallex-laravel/issues/128) selects account-scoped dispute, deposit, settlement, settlement-record, wallet-history and transfer reads. The SDK owns the requests and exact response decoding. Consumers own durable observations, recovery cursors, ownership checks and accounting allocation. The [API inventory](api-contracts.md#account-reconciliation-reads) defines the selected version, authorization and pagination.
+
 ## Advanced Billing extension
 
 The follow-on implementation scope includes the previously deferred [Credit Notes #37](https://github.com/jojeringnax/airwallex-php-sdk/issues/37), [coupons #38](https://github.com/jojeringnax/airwallex-php-sdk/issues/38), [tax controls #39](https://github.com/jojeringnax/airwallex-php-sdk/issues/39), [usage meters/events #40](https://github.com/jojeringnax/airwallex-php-sdk/issues/40) and [rate cards #41](https://github.com/jojeringnax/airwallex-php-sdk/issues/41). The initial-release boundary above remains historical scope; these additions require their own verified selected-version contracts, examples and deterministic checks before delivery. Applications retain commercial policy, tax registration and ledgers. Account-specific evidence remains distinct from SDK behavior.

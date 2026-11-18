@@ -64,7 +64,7 @@ final class AlipayConsentDisableCleanupCommand
             };
             $started = $caseClock();
             if (
-                !is_finite($started) || ini_get('allow_url_fopen') !== '1'
+                ini_get('allow_url_fopen') !== '1'
                 || !in_array('https', stream_get_wrappers(), true)
             ) {
                 throw new RuntimeException('The original cleanup clock or native HTTPS runtime is unavailable.');
