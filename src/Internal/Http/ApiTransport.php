@@ -49,7 +49,7 @@ final readonly class ApiTransport
         #[SensitiveParameter] ?array $body = null,
         #[SensitiveParameter] array $query = [],
     ): array {
-        if (!in_array($operation->family, ['billing', 'payments'], true)) {
+        if (!in_array($operation->family, ['billing', 'payments', 'finance'], true)) {
             throw new ConfigurationException('Unsupported API family.');
         }
         if (
@@ -128,6 +128,27 @@ final readonly class ApiTransport
      */
     private function queryString(#[SensitiveParameter] array $query, ?string $pagination, array $styles): string
     {
+        if ($pagination !== 'schema') {
+            $this->validateLegacyPagination($query, $pagination);
+        }
+        $parts = [];
+        foreach ($query as $key => $value) {
+            if (is_string($key) && isset($styles[$key])) {
+                $parts = [...$parts, ...$this->structuredQueryParts($key, $value, $styles[$key])];
+                continue;
+            }
+            if (!is_string($key) || (!is_string($value) && !is_int($value) && !is_bool($value))) {
+                throw new ValidationException('Query parameters must be named strings, integers or booleans.');
+            }
+            $encodedValue = is_bool($value) ? ($value ? 'true' : 'false') : (string) $value;
+            $parts[] = rawurlencode($key) . '=' . rawurlencode($encodedValue);
+        }
+        return $parts === [] ? '' : '?' . implode('&', $parts);
+    }
+
+    /** @param array<array-key, mixed> $query */
+    private function validateLegacyPagination(#[SensitiveParameter] array $query, ?string $pagination): void
+    {
         if ($pagination !== null && !in_array($pagination, ['billing', 'payments'], true)) {
             throw new ConfigurationException('Unsupported pagination contract.');
         }
@@ -145,19 +166,6 @@ final readonly class ApiTransport
         if (array_key_exists('page', $query) && ($pagination !== 'billing' || !is_string($query['page']))) {
             throw new ValidationException('page must be a Billing bookmark string.');
         }
-        $parts = [];
-        foreach ($query as $key => $value) {
-            if (is_string($key) && isset($styles[$key])) {
-                $parts = [...$parts, ...$this->structuredQueryParts($key, $value, $styles[$key])];
-                continue;
-            }
-            if (!is_string($key) || (!is_string($value) && !is_int($value) && !is_bool($value))) {
-                throw new ValidationException('Query parameters must be named strings, integers or booleans.');
-            }
-            $encodedValue = is_bool($value) ? ($value ? 'true' : 'false') : (string) $value;
-            $parts[] = rawurlencode($key) . '=' . rawurlencode($encodedValue);
-        }
-        return $parts === [] ? '' : '?' . implode('&', $parts);
     }
 
     /** @return list<string> */

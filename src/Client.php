@@ -11,6 +11,7 @@ use Jojeringnax\Airwallex\Internal\Http\ApiTransport;
 use Jojeringnax\Airwallex\Internal\Http\HttpExchange;
 use Jojeringnax\Airwallex\Internal\Http\ResponseDecoder;
 use Jojeringnax\Airwallex\Resource\Billing;
+use Jojeringnax\Airwallex\Resource\Finance;
 use Jojeringnax\Airwallex\Resource\Payments;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
@@ -71,6 +72,16 @@ final class Client
     public function payments(): Payments
     {
         return new Payments($this->transport);
+    }
+
+    public function deposits(): Finance\Deposits
+    {
+        return new Finance\Deposits($this->transport);
+    }
+
+    public function finance(): Finance
+    {
+        return new Finance($this->transport);
     }
 
     private function createTransport(): ApiTransport

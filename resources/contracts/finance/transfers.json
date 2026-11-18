@@ -1,0 +1,719 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/payouts/transfers/retrieve",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "47304684f743eed0b3f6c6c568b11319"
+  },
+  "annotations": [],
+  "endpoints": {
+    "retrieveTransfer": {
+      "apiPath": "/api/v1/transfers/{id}",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Transfer"
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "429": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "transfer:read",
+          "group": "Authentication",
+          "resource_name": "Embedded Components - Transfers",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true
+    }
+  },
+  "schemas": {
+    "ApplicationFee": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "CONVERSION",
+            "TRANSFER"
+          ]
+        }
+      }
+    },
+    "ApplicationFeeOption": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "percentage": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "CONVERSION",
+            "TRANSFER"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "FIXED",
+            "PERCENTAGE"
+          ]
+        }
+      }
+    },
+    "BankDetails": {
+      "type": "object",
+      "required": [
+        "account_currency",
+        "account_name",
+        "bank_country_code"
+      ],
+      "properties": {
+        "account_currency": {
+          "type": "string"
+        },
+        "account_name": {
+          "type": "string"
+        },
+        "account_name_alias": {
+          "type": "string"
+        },
+        "account_number": {
+          "type": "string"
+        },
+        "account_routing_type1": {
+          "type": "string"
+        },
+        "account_routing_type2": {
+          "type": "string"
+        },
+        "account_routing_value1": {
+          "type": "string"
+        },
+        "account_routing_value2": {
+          "type": "string"
+        },
+        "bank_account_category": {
+          "type": "string"
+        },
+        "bank_branch": {
+          "type": "string"
+        },
+        "bank_country_code": {
+          "type": "string"
+        },
+        "bank_name": {
+          "type": "string"
+        },
+        "bank_state": {
+          "type": "string"
+        },
+        "bank_street_address": {
+          "type": "string"
+        },
+        "binding_mobile_number": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "iban": {
+          "type": "string"
+        },
+        "intermediary_bank_name": {
+          "type": "string"
+        },
+        "intermediary_bank_swift_code": {
+          "type": "string"
+        },
+        "local_clearing_system": {
+          "type": "string"
+        },
+        "swift_code": {
+          "type": "string"
+        }
+      }
+    },
+    "BeneficiaryAdditionalInfo": {
+      "type": "object",
+      "properties": {
+        "business_area": {
+          "type": "string"
+        },
+        "business_phone_number": {
+          "type": "string"
+        },
+        "business_registration_number": {
+          "type": "string"
+        },
+        "external_identifier": {
+          "type": "string"
+        },
+        "legal_rep_bank_account_number": {
+          "type": "string"
+        },
+        "legal_rep_first_name_in_chinese": {
+          "type": "string"
+        },
+        "legal_rep_id_number": {
+          "type": "string"
+        },
+        "legal_rep_last_name_in_chinese": {
+          "type": "string"
+        },
+        "legal_rep_mobile_number": {
+          "type": "string"
+        },
+        "personal_email": {
+          "type": "string"
+        },
+        "personal_first_name_in_chinese": {
+          "type": "string"
+        },
+        "personal_id_number": {
+          "type": "string"
+        },
+        "personal_id_type": {
+          "type": "string"
+        },
+        "personal_last_name_in_chinese": {
+          "type": "string"
+        },
+        "personal_mobile_number": {
+          "type": "string"
+        },
+        "recipient_account_id": {
+          "type": "string"
+        },
+        "security_question": {
+          "type": "string"
+        },
+        "security_question_answer": {
+          "type": "string"
+        }
+      }
+    },
+    "BeneficiaryAddress": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "street_address": {
+          "type": "string"
+        }
+      }
+    },
+    "DigitalWallet": {
+      "type": "object",
+      "required": [
+        "account_name",
+        "id_type",
+        "id_value",
+        "provider"
+      ],
+      "properties": {
+        "account_name": {
+          "type": "string"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "id_type": {
+          "type": "string"
+        },
+        "id_value": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      }
+    },
+    "DispatchInfo": {
+      "type": "object",
+      "properties": {
+        "external_reference": {
+          "type": "string"
+        },
+        "external_reference_type": {
+          "type": "string"
+        }
+      }
+    },
+    "Failure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "reason_codes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "PayerAdditionalInfo": {
+      "type": "object",
+      "properties": {
+        "business_registration_number": {
+          "type": "string"
+        },
+        "business_registration_type": {
+          "type": "string"
+        },
+        "external_id": {
+          "type": "string"
+        },
+        "personal_email": {
+          "type": "string"
+        },
+        "personal_id_number": {
+          "type": "string"
+        }
+      }
+    },
+    "PayerAddress": {
+      "type": "object",
+      "required": [
+        "country_code"
+      ],
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country_code": {
+          "type": "string"
+        },
+        "postcode": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "street_address": {
+          "type": "string"
+        }
+      }
+    },
+    "Payouts_Beneficiary": {
+      "type": "object",
+      "properties": {
+        "additional_info": {
+          "$ref": "#/components/schemas/BeneficiaryAdditionalInfo"
+        },
+        "address": {
+          "$ref": "#/components/schemas/BeneficiaryAddress"
+        },
+        "bank_details": {
+          "$ref": "#/components/schemas/BankDetails"
+        },
+        "card": {
+          "$ref": "#/components/schemas/Payouts_Card",
+          "x-stage": "early_access"
+        },
+        "company_name": {
+          "type": "string"
+        },
+        "date_of_birth": {
+          "type": "string"
+        },
+        "digital_wallet": {
+          "$ref": "#/components/schemas/DigitalWallet"
+        },
+        "entity_type": {
+          "type": "string"
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "last_name": {
+          "type": "string"
+        },
+        "stablecoin_wallet": {
+          "$ref": "#/components/schemas/StablecoinWallet"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "Payouts_Card": {
+      "type": "object",
+      "required": [
+        "cardholder_name",
+        "token"
+      ],
+      "properties": {
+        "brand": {
+          "type": "string",
+          "readOnly": true
+        },
+        "cardholder_name": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string",
+          "readOnly": true
+        },
+        "expiry_month": {
+          "type": "string"
+        },
+        "expiry_year": {
+          "type": "string"
+        },
+        "number": {
+          "type": "string",
+          "readOnly": true
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "x-stage": "early_access"
+    },
+    "Payouts_FailureDetails": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "iso_code": {
+          "type": "string"
+        },
+        "provider_failure_details": {
+          "$ref": "#/components/schemas/ProviderFailureDetails"
+        }
+      }
+    },
+    "Payouts_Funding": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "deposit_type": {
+          "type": "string"
+        },
+        "failure_details": {
+          "$ref": "#/components/schemas/Payouts_FailureDetails"
+        },
+        "failure_reason": {
+          "type": "string"
+        },
+        "funding_source_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "Payouts_Payer": {
+      "type": "object",
+      "required": [
+        "address",
+        "entity_type"
+      ],
+      "properties": {
+        "additional_info": {
+          "$ref": "#/components/schemas/PayerAdditionalInfo"
+        },
+        "address": {
+          "$ref": "#/components/schemas/PayerAddress"
+        },
+        "company_name": {
+          "type": "string"
+        },
+        "date_of_birth": {
+          "type": "string"
+        },
+        "entity_type": {
+          "type": "string"
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "last_name": {
+          "type": "string"
+        }
+      }
+    },
+    "Prepayment": {
+      "type": "object",
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        }
+      }
+    },
+    "ProviderFailureDetails": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "local_clearing_system": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "StablecoinWallet": {
+      "type": "object",
+      "required": [
+        "address",
+        "asset",
+        "network"
+      ],
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "asset": {
+          "type": "string"
+        },
+        "network": {
+          "type": "string"
+        }
+      }
+    },
+    "Transfer": {
+      "type": "object",
+      "required": [
+        "amount_beneficiary_receives",
+        "amount_payer_pays",
+        "beneficiary",
+        "created_at",
+        "fee_amount",
+        "fee_currency",
+        "fee_paid_by",
+        "funding",
+        "id",
+        "payer",
+        "reason",
+        "reference",
+        "request_id",
+        "short_reference_id",
+        "source_amount",
+        "source_currency",
+        "status",
+        "transfer_amount",
+        "transfer_currency",
+        "transfer_date",
+        "transfer_method",
+        "updated_at"
+      ],
+      "properties": {
+        "amount_beneficiary_receives": {
+          "type": "number"
+        },
+        "amount_payer_pays": {
+          "type": "number"
+        },
+        "application_fee_options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ApplicationFeeOption"
+          }
+        },
+        "application_fees": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ApplicationFee"
+          }
+        },
+        "batch_transfer_id": {
+          "type": "string"
+        },
+        "beneficiary": {
+          "$ref": "#/components/schemas/Payouts_Beneficiary"
+        },
+        "beneficiary_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "conversion": {
+          "$ref": "#/components/schemas/UnderlyingConversion"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "dispatch_date": {
+          "type": "string"
+        },
+        "dispatch_info": {
+          "$ref": "#/components/schemas/DispatchInfo"
+        },
+        "failure": {
+          "$ref": "#/components/schemas/Failure"
+        },
+        "fee_amount": {
+          "type": "number"
+        },
+        "fee_currency": {
+          "type": "string"
+        },
+        "fee_paid_by": {
+          "type": "string"
+        },
+        "funding": {
+          "$ref": "#/components/schemas/Payouts_Funding"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "lock_rate_on_create": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "payer": {
+          "$ref": "#/components/schemas/Payouts_Payer"
+        },
+        "payer_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "prepayment": {
+          "$ref": "#/components/schemas/Prepayment"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "remarks": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "short_reference_id": {
+          "type": "string"
+        },
+        "source_amount": {
+          "type": "number"
+        },
+        "source_currency": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "swift_charge_option": {
+          "type": "string"
+        },
+        "transfer_amount": {
+          "type": "number"
+        },
+        "transfer_currency": {
+          "type": "string"
+        },
+        "transfer_date": {
+          "type": "string"
+        },
+        "transfer_method": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      }
+    },
+    "UnderlyingConversion": {
+      "type": "object",
+      "required": [
+        "currency_pair",
+        "rate"
+      ],
+      "properties": {
+        "currency_pair": {
+          "type": "string"
+        },
+        "rate": {
+          "type": "number"
+        }
+      }
+    }
+  }
+}

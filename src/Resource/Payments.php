@@ -38,6 +38,16 @@ final readonly class Payments
         return new Payments\PaymentAttempts($this->transport);
     }
 
+    public function paymentDisputes(): Payments\PaymentDisputes
+    {
+        return new Payments\PaymentDisputes($this->transport);
+    }
+
+    public function settlementRecords(): Payments\SettlementRecords
+    {
+        return new Payments\SettlementRecords($this->transport);
+    }
+
     public function refunds(): Payments\Refunds
     {
         return new Payments\Refunds($this->transport);

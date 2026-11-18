@@ -111,7 +111,11 @@ final class Endpoint
         $requestNumbers = $this->paths($request['content']['application/json']['schema'] ?? [], 'number');
         $responseNumbers = [];
         $responseIntegers = [];
-        $pagination = ($this->endpoint['sdkPagination'] ?? false) === true ? $this->family : null;
+        $pagination = match ($this->endpoint['sdkPagination'] ?? false) {
+            true => $this->family,
+            'schema' => 'schema',
+            default => null,
+        };
         /** @var array<int|string,array{content?:array<string,array{schema?:array<string,mixed>}>}> $responses */
         $responses = $this->endpoint['responses'];
         foreach ($responses as $status => $response) {

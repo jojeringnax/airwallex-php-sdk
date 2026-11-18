@@ -68,3 +68,19 @@ Read the relevant [consumer example](consumer-examples.md) when implementing or 
 The example fields and actions were reviewed on 2026-11-08 against official selected-version metadata for [Customers](https://www.airwallex.com/docs/api/billing/billing_customers), [Subscriptions](https://www.airwallex.com/docs/api/billing/subscriptions), [Checkouts](https://www.airwallex.com/docs/api/billing/billing_checkouts), [Consents](https://www.airwallex.com/docs/api/payments/payment_consents), [Intents](https://www.airwallex.com/docs/api/payments/payment_intents) and [Refunds](https://www.airwallex.com/docs/api/payments/refunds), each reporting `currentVersion=2026-08-21`.
 
 Billing and Payments implementations, sanitized contract fixtures and runnable recipes follow these interfaces; see [Billing resources](billing-resources.md), [Payments contracts](payments-contracts.md) and [usage](usage.md) for coverage. Remaining provider observations belong to [supplemental Sandbox validation #42](https://github.com/jojeringnax/airwallex-php-sdk/issues/42). The [Billing capability reference](billing-capabilities.md#delivery-and-evidence-gates) separates documented SDK behavior from invoice-link-refresh, schedule-reversal and account-specific observations under the [completion rule](release-policy.md#documentation-based-completion).
+
+## Account reconciliation reads
+
+Use the client configured for the owning merchant account. All methods return provider-shaped arrays via the same exact-decimal decoder and request validation. Lists return one provider page. The [account reads inventory](api-contracts.md#account-reconciliation-reads) describes filters, cursor formats and permissions.
+
+```php
+$dispute = $client->payments()->paymentDisputes()->retrieve($disputeId);
+$deposits = $client->deposits()->list(['page_num' => 0, 'page_size' => 100]);
+
+$settlement = $client->finance()->settlements()->retrieve($settlementId);
+$records = $client->payments()->settlementRecords()->list(['settlement_id' => $settlementId]);
+$wallet = $client->finance()->balanceHistory()->list(['account_type' => 'cash', 'currency' => 'EUR', 'page' => '0']);
+$bankTransfer = $client->finance()->transfers()->retrieve($payoutSourceId);
+```
+
+Use dispute `list($query = [])` with an updated-time overlap to recover missed observations. Use deposit `retrieve($id)` to refresh known deposits whose original creation window has passed. Keep settlement and bank transfer IDs independently. When a wallet row has source type `PAYOUT` and a source ID, use that ID to look up the transfer. Preserve missing links, exact currencies and provider lifecycle values when ingesting the records.

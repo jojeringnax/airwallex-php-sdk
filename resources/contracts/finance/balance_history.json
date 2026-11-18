@@ -1,0 +1,186 @@
+{
+  "version": "2026-08-21",
+  "source": "https://www.airwallex.com/docs/api/core_resources/balances/history",
+  "specification": {
+    "version": "2026-08-21",
+    "path": "airwallex-openapi-2026-08-21.yaml",
+    "md5": "47304684f743eed0b3f6c6c568b11319"
+  },
+  "annotations": [
+    "listHistory.page requires nonempty text.",
+    "listHistory.page_num uses a zero-based page number.",
+    "listHistory.page_size enforces the selected page size bounds."
+  ],
+  "endpoints": {
+    "listHistory": {
+      "apiPath": "/api/v1/balances/history",
+      "method": "get",
+      "parameters": [
+        {
+          "name": "account_type",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "currency",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "from_post_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        {
+          "name": "page_num",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 10,
+            "maximum": 2000
+          }
+        },
+        {
+          "name": "request_id",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "to_post_at",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "x-on-behalf-of",
+          "in": "header",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "has_more": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CoreBankingBalanceHistory"
+                    }
+                  },
+                  "page_after": {
+                    "type": "string"
+                  },
+                  "page_before": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {},
+        "401": {},
+        "403": {},
+        "404": {},
+        "500": {}
+      },
+      "x-scope": [
+        {
+          "scope": "balance:read",
+          "group": "Core Resources",
+          "resource_name": "Balances",
+          "oauthSupported": true,
+          "apiKeySupported": true
+        }
+      ],
+      "x-resourceLevel": "account",
+      "x-oboSupported": true,
+      "sdkPagination": "schema"
+    }
+  },
+  "schemas": {
+    "CoreBankingBalanceHistory": {
+      "type": "object",
+      "properties": {
+        "account_type": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "balance": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "fee": {
+          "type": "number"
+        },
+        "id": {
+          "type": "string"
+        },
+        "posted_at": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "transaction_type": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
